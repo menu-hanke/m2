@@ -8,10 +8,10 @@ XLDFLAGS =
 
 EXEC_LANG = 
 
-LUAJIT_INCLUDE = -I/usr/include/luajit-2.0
+LUAJIT_INCLUDE = -isystem /usr/include/luajit-2.0
 LUAJIT_LIB = -lluajit-5.1
 
-R_INCLUDE = -I/usr/include/R
+R_INCLUDE = -isystem /usr/include/R
 R_LIB = -L/usr/lib/R/lib -lR
 
 M2_EXECUTABLE = m2
