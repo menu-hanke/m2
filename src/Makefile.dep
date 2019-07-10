@@ -1,0 +1,15 @@
+main.o: main.c def.h /usr/include/luajit-2.0/lua.h \
+ /usr/include/luajit-2.0/luaconf.h /usr/include/luajit-2.0/lualib.h \
+ /usr/include/luajit-2.0/lua.h /usr/include/luajit-2.0/lauxlib.h
+bitmap.o: bitmap.c bitmap.h def.h
+fhk_graph.o: fhk_graph.c bitmap.h def.h fhk.h lex.h
+fhk_solve.o: fhk_solve.c def.h fhk.h lex.h
+lex.o: lex.c def.h lex.h
+exec_R.o: exec_R.c lex.h exec.h def.h /usr/include/R/Rinterface.h \
+ /usr/include/R/R_ext/Boolean.h /usr/include/R/Rinternals.h \
+ /usr/include/R/R_ext/Arith.h /usr/include/R/R_ext/libextern.h \
+ /usr/include/R/R_ext/Complex.h /usr/include/R/R_ext/Error.h \
+ /usr/include/R/R_ext/Memory.h /usr/include/R/R_ext/Utils.h \
+ /usr/include/R/R_ext/Print.h /usr/include/R/R_ext/Rdynload.h \
+ /usr/include/R/Rconfig.h /usr/include/R/Rembedded.h
+lua/m2_cdef.lua: lua_exports.h lex.h fhk.h fhk_call.h exec.h
