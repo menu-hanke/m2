@@ -1,4 +1,5 @@
 require "m2_cdef"
+require "glob_util"
 
 local function parse_args(args)
 	local idx = 2
@@ -15,7 +16,9 @@ local function parse_args(args)
 			ret.input = args[idx]
 		elseif args[idx] == "-f" then
 			idx = idx+1
-			ret.fill_vars = args[idx]
+			local obj,fields = args[idx]:match("^([^:]+):(.+)$")
+			fields = map(split(fields), trim)
+			ret.fill = { obj=obj, fields=fields }
 		elseif args[idx] == "-o" then
 			idx = idx+1
 			ret.output = args[idx]
@@ -32,7 +35,8 @@ end
 function main(args)
 	local args = parse_args(args)
 
-	if args.mode == "fill" then
+	--if args.mode == "fill" then
+	if args.fill then
 		(require "fill").main(args)
 	end
 

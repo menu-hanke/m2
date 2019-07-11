@@ -1,32 +1,6 @@
 local ffi = require "ffi"
 local conf = require "conf"
-
-local function trim(str)
-	-- ignore second return val
-	str = str:gsub("^%s*(.*)%s*$", "%1")
-	return str
-end
-
-local function split_map(str, map)
-	local ret = {}
-	for s in str:gmatch("[^,]+") do
-		table.insert(ret, map(s))
-	end
-	return ret
-end
-
-local function read_input(input)
-	local f = io.open(input)
-	local cols = split_map(f:read(), trim)
-	local data = {}
-
-	for l in f:lines() do
-		table.insert(data, split_map(l, tonumber))
-	end
-
-	f:close()
-	return cols, data
-end
+local hier = require "hier"
 
 local function init_fhk(g, given_vars, fill_vars)
 	local G = ffi.gc(ffi.new("struct fhk_graph"), ffi.C.fhk_graph_destroy)
@@ -82,6 +56,8 @@ end
 local function copyvalue(v, val)
 	local vdef = ffi.cast("struct var_def *", v.udata)
 	local ptype = ffi.C.get_ptype(vdef.type)
+
+	--print(string.format("copyvalue %s <- %f", ffi.string(vdef.name), val))
 
 	if ptype == ffi.C.T_REAL then
 		v.mark.value.r = val
@@ -151,29 +127,60 @@ local function getchain(G, solve)
 	return table.concat(chain, "\t")
 end
 
+local function get_given(obj)
+	local givens = {}
+
+	while obj do
+		for _,f in ipairs(obj.fields) do
+			table.insert(givens, f)
+		end
+
+		obj = obj.owner
+	end
+
+	return givens
+end
+
+local function copygiven(dest, obj, d)
+	local ret = {}
+
+	while obj do
+		for j,v in ipairs(d) do
+			print(string.format("* %s:%s = %f", obj.name, obj.fields[j], v))
+			table.insert(ret, v)
+		end
+
+		obj = obj.owner
+		d = d.owner
+	end
+
+	return ret
+end
+
 local function main(args)
 	local env, data = conf.newconf()
 	env.read(args.config)
 
 	local vars, nv = conf.get_vars(data)
 	local g = conf.get_fhk_graph(data, vars, nv)
-	local given_vars, in_data = read_input(args.input)
-	local fill_vars = split_map(args.fill_vars, trim)
-
-	local G, given, solve = init_fhk(g, given_vars, fill_vars)
+	local data = hier.parse_file(args.input)
+	local dobj = data.objs[args.fill.obj]
+	local given_vars = get_given(dobj)
+	local solve_vars = args.fill.fields
+	local G, given, solve = init_fhk(g, given_vars, solve_vars)
 
 	local out = io.open(args.output, "w")
-	out:write(string.format("%s\t-> %s \t; selected chain\n",
+	out:write(string.format("$\t%s\t-> %s \t; selected chain\n",
 		table.concat(given_vars, "\t"),
-		table.concat(fill_vars, "\t")
+		table.concat(solve_vars, "\t")
 	))
 
-	for _,values in ipairs(in_data) do
+	for id,d in pairs(dobj.data) do
 		print("")
+		local values = copygiven(given, dobj, d)
 
-		for i,v in ipairs(given_vars) do
-			copyvalue(given[i], values[i])
-			print(string.format("* %s = %f", v, values[i]))
+		for i,v in ipairs(values) do
+			copyvalue(given[i], v)
 		end
 
 		print("--------------")
@@ -182,7 +189,7 @@ local function main(args)
 		for i,v in ipairs(solve) do
 			local res = ffi.C.fhk_solve(G, v)
 			if res ~= 0 then
-				print("Solver failed on " .. fill_vars[i].name)
+				print("Solver failed on " .. solve_vars[i])
 				out:write("(Solver failed)\n")
 				goto continue
 			end
@@ -194,7 +201,8 @@ local function main(args)
 			table.insert(solved, valuestr(v))
 		end
 
-		out:write(string.format("%s\t-> %s \t; %s\n",
+		out:write(string.format("%s\t%s\t-> %s \t; %s\n",
+			id,
 			table.concat(values, "\t"),
 			table.concat(solved, "\t"),
 			getchain(G, solve)

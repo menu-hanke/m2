@@ -80,6 +80,13 @@ struct var_def {
 	};
 };
 
+struct obj_def {
+	const char *name;
+	size_t n_var;
+	struct var_def **vars;
+	struct obj_def *owner;
+};
+
 /* struct invariant {...} goes here */
 
 const struct type_def *get_typedef(enum type type);

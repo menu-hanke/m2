@@ -57,16 +57,6 @@ local function newconf()
 	return env, data
 end
 
-local function collect(tab)
-	local ret = {}
-
-	for k,v in pairs(tab) do
-		table.insert(ret, v)
-	end
-
-	return ret
-end
-
 local function copystring(s)
 	local ret = C.malloc(#s+1)
 	ffi.copy(ret, s)

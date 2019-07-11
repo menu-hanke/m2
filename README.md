@@ -13,7 +13,9 @@ Running
 -------
 For all command line switches see `src/lua/m2.lua`.
 
-Example: solve `y` from given data in `examples/basic_xc.csv` and save results to `out.txt`
+Example: solve `y` and `x` of `sublevel` from given data in `examples/hierarchic.csv`
+and save results to `out.txt`
+
 ```
-m2 -F -c examples/config.lua -i examples/basic_xc.csv -f y -o out.txt
+m2 -c examples/config.lua -i examples/basic_xc.csv -f sublevel:y,x -o out.txt
 ```
