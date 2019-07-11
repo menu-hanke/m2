@@ -17,5 +17,5 @@ Example: solve `y` and `x` of `sublevel` from given data in `examples/hierarchic
 and save results to `out.txt`
 
 ```
-m2 -c examples/config.lua -i examples/basic_xc.csv -f sublevel:y,x -o out.txt
+m2 -c examples/config.lua -i examples/hierarchic.csv -f sublevel:y,x -o out.txt
 ```
