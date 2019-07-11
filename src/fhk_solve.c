@@ -61,7 +61,7 @@ int fhk_solve(struct fhk_graph *G, struct fhk_var *y){
 }
 
 static void mm_bound_cost_v(struct state *s, struct fhk_var *y, double beta){
-	struct fhk_vbmap *bm = &VBMAP(s, y);
+	fhk_vbmap *bm = &VBMAP(s, y);
 
 	if(VM_HASBOUND(bm))
 		return;
@@ -166,7 +166,7 @@ betabound:
 }
 
 static void mm_solve_chain_v(struct state *s, struct fhk_var *y, double beta){
-	struct fhk_vbmap *bm = &VBMAP(s, y);
+	fhk_vbmap *bm = &VBMAP(s, y);
 
 	assert(VM_HASBOUND(bm));
 
@@ -243,7 +243,7 @@ out:
 }
 
 static void mm_solve_chain_m(struct state *s, struct fhk_model *m, double beta){
-	struct fhk_mbmap *bm = &MBMAP(s, m);
+	fhk_mbmap *bm = &MBMAP(s, m);
 	assert(bm->has_bound);
 
 	if(bm->chain_selected){
@@ -332,7 +332,7 @@ betabound:
 }
 
 static void mm_solve_value(struct state *s, struct fhk_var *y){
-	struct fhk_vbmap *bm = &VBMAP(s, y);
+	fhk_vbmap *bm = &VBMAP(s, y);
 
 	if(bm->has_value || UNSOLVABLE(y))
 		return;
@@ -354,7 +354,7 @@ static void mm_solve_value(struct state *s, struct fhk_var *y){
 }
 
 static void exec_chain(struct state *s, struct fhk_var *y, struct fhk_model *m){
-	struct fhk_vbmap *bm = &VBMAP(s, y);
+	fhk_vbmap *bm = &VBMAP(s, y);
 
 	if(bm->has_value)
 		return;
@@ -450,7 +450,7 @@ static void constraint_bounds(double *Sc_min, double *Sc_max, struct state *s, s
 }
 
 static void resolve_given(struct state *s, struct fhk_var *x){
-	struct fhk_vbmap *bm = &VBMAP(s, x);
+	fhk_vbmap *bm = &VBMAP(s, x);
 
 	if(bm->given && !bm->has_value){
 		bm->has_value = 1;

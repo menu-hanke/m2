@@ -1,7 +1,8 @@
 main.o: main.c def.h
 bitmap.o: bitmap.c bitmap.h def.h
 fhk_graph.o: fhk_graph.c bitmap.h def.h fhk.h lex.h
-fhk_solve.o: fhk_solve.c def.h fhk.h lex.h
+fhk_solve.o: fhk_solve.c def.h fhk.h bitmap.h lex.h
 lex.o: lex.c def.h lex.h
-exec_R.o: exec_R.c lex.h exec.h def.h
-lua/m2_cdef.lua: lua_exports.h lex.h fhk.h fhk_call.h exec.h
+exec_R.o: exec_R.c lex.h def.h exec.h
+lua/m2_cdef.lua: lua_exports.h lex.h def.h fhk.h bitmap.h fhk_call.h \
+ exec.h

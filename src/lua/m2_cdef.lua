@@ -2,6 +2,7 @@
 local ffi = require 'ffi'
 ffi.cdef [[
        
+       
 enum type {
  T_F32 = 1,
  T_F64 = 2,
@@ -25,6 +26,7 @@ union pvalue {
  uint64_t b;
  void *p;
 };
+
 struct type_def {
  const char *name;
  size_t size;
@@ -41,6 +43,12 @@ struct var_def {
   struct bitenum_def *bitenum_def;
  };
 };
+struct obj_def {
+ const char *name;
+ size_t n_var;
+ struct var_def **vars;
+ struct obj_def *owner;
+};
 const struct type_def *get_typedef(enum type type);
 size_t get_enum_size(uint64_t bit_mask);
 enum type get_enum_type(struct bitenum_def *ed);
@@ -48,6 +56,14 @@ enum ptype get_ptype(enum type type);
 int get_enum_bit(uint64_t bit);
 uint64_t get_bit_enum(int bit);
        
+       
+typedef uint8_t bm8 __attribute__((aligned(16)));
+bm8 *bm_alloc(size_t n);
+void bm_free(bm8 *bm);
+void bm_zero(bm8 *bm, size_t n);
+void bm_and(bm8 *bm, size_t n, uint8_t mask);
+void bm_and2(bm8 *restrict a, bm8 *restrict b, size_t n);
+void bm_or2(bm8 *restrict a, bm8 *restrict b, size_t n);
 enum fhk_ctype {
  FHK_RIVAL,
  FHK_IIVAL,
@@ -117,19 +133,8 @@ struct fhk_var {
  struct fhk_vmark mark;
  void *udata;
 };
-struct fhk_mbmap {
- unsigned skip : 1;
- unsigned has_bound : 1;
- unsigned chain_selected : 1;
-} __attribute__((packed));
-struct fhk_vbmap {
- unsigned given : 1;
- unsigned solve : 1;
- unsigned solving : 1;
- unsigned chain_selected : 1;
- unsigned has_value : 1;
- unsigned has_bound : 1;
-} __attribute__((packed));
+typedef union fhk_mbmap { uint8_t u8; struct { unsigned skip : 1; unsigned has_bound : 1; unsigned chain_selected : 1; } __attribute__((packed));  } fhk_mbmap;
+typedef union fhk_vbmap { uint8_t u8; struct { unsigned given : 1; unsigned solve : 1; unsigned solving : 1; unsigned chain_selected : 1; unsigned has_value : 1; unsigned has_bound : 1; } __attribute__((packed));  } fhk_vbmap;
 enum {
  FHK_RESET_GIVEN = 0x1,
  FHK_RESET_SOLVE = 0x2,
@@ -158,8 +163,8 @@ struct fhk_graph {
  fhk_desc debug_desc_model;
  size_t n_var;
  size_t n_mod;
- struct fhk_vbmap *v_bitmaps;
- struct fhk_mbmap *m_bitmaps;
+ fhk_vbmap *v_bitmaps;
+ fhk_mbmap *m_bitmaps;
  struct fhk_einfo last_error;
  void *udata;
 };

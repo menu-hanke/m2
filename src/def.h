@@ -20,16 +20,10 @@
 
 #ifndef M2_VECTOR_SIZE
 
-// avx512 -> 64
-// avx -> 32
-// sse -> 16
-// otherwise -> 8
-
-#if defined(__AVX__)
-#define M2_VECTOR_SIZE 32
-#else
+/* TODO there should be some smarter logic to detect this
+ * (or just set it when running make.)
+ * Setting the largest possible isn't always a good idea */
 #define M2_VECTOR_SIZE 16
-#endif
 
 #endif // ifndef M2_VECTOR_SIZE
 
@@ -45,9 +39,6 @@
 #endif
 
 #ifdef EXPORT_LUA_CDEF
-#define EXPORT_LUA
-#define EXL @@export@@
-#else
-#define EXPORT_LUA
-#define EXL
+// luajit doesn't parse these so remove them when exporting cdefs
+#define static_assert(...) @@remove@@
 #endif

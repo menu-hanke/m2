@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <assert.h>
 
+#include "def.h"
+
 enum type {
 	/* reals */
 	T_F32      = 1,

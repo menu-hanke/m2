@@ -1,5 +1,6 @@
 #pragma once
 
+#include "bitmap.h"
 #include "lex.h" /* for pvalue */
 
 #include <stdint.h>
@@ -114,23 +115,20 @@ struct fhk_var {
 	void *udata;
 };
 
-struct fhk_mbmap {
+typedef union fhk_mbmap BMU8({
 	unsigned skip : 1;            // 1
 	unsigned has_bound : 1;       // 2
 	unsigned chain_selected : 1;  // 3
-} __attribute__((packed));
+}) fhk_mbmap;
 
-struct fhk_vbmap {
-	unsigned given : 1;          // 1
-	unsigned solve : 1;          // 2
-	unsigned solving : 1;        // 3
-	unsigned chain_selected : 1; // 4
-	unsigned has_value : 1;      // 5
-	unsigned has_bound : 1;      // 6
-} __attribute__((packed));
-
-static_assert(sizeof(struct fhk_mbmap) == sizeof(uint8_t), "bitmap fhk_mbmap has wrong size");
-static_assert(sizeof(struct fhk_vbmap) == sizeof(uint8_t), "bitmap fhk_vbmap has wrong size");
+typedef union fhk_vbmap BMU8({
+	unsigned given : 1;           // 1
+	unsigned solve : 1;           // 2
+	unsigned solving : 1;         // 3
+	unsigned chain_selected : 1;  // 4
+	unsigned has_value : 1;       // 5
+	unsigned has_bound : 1;       // 6
+}) fhk_vbmap;
 
 enum {
 	FHK_RESET_GIVEN = 0x1,
@@ -166,19 +164,25 @@ struct fhk_graph {
 
 	size_t n_var;
 	size_t n_mod;
-	struct fhk_vbmap *v_bitmaps;
-	struct fhk_mbmap *m_bitmaps;
+	fhk_vbmap *v_bitmaps;
+	fhk_mbmap *m_bitmaps;
 
 	struct fhk_einfo last_error;
 	void *udata;
 };
 
-/* graph.c */
+/* fhk_graph.c */
 void fhk_graph_init(struct fhk_graph *G);
 void fhk_graph_destroy(struct fhk_graph *G);
 void fhk_set_given(struct fhk_graph *G, struct fhk_var *x);
 void fhk_set_solve(struct fhk_graph *G, struct fhk_var *y);
 void fhk_reset(struct fhk_graph *G, int what);
 
-/* solve.c */
+/* fhk_solve.c */
 int fhk_solve(struct fhk_graph *G, struct fhk_var *y);
+
+/* fhk_inspect.c */
+// TODO!
+//void fhk_supp(struct fhk_graph *G, bm8 *bm, struct fhk_var *y);
+//void fhk_inv_supp(struct fhk_graph *G, bm8 *bm, struct fhk_var *y);
+//some function that lists selectable models under var space
