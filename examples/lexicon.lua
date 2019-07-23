@@ -34,6 +34,13 @@ var "z"
 unit "m"
 dtype "f64"
 
+obj "toplevel"
+fields ("c")
+
+obj "sublevel"
+uprefs ("toplevel")
+fields ("x'")
+
 -- XXX: tässä pitäis varmaan tukea myös jotain tyyliin
 --     dtype(vector("real", "real"))
 -- tjsp

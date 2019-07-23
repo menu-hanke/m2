@@ -8,6 +8,8 @@ local function parse_args(args)
 	while idx <= #args do
 		if args[idx] == "-F" then
 			ret.mode = "fill"
+		elseif args[idx] == "-S" then
+			ret.simulate = true
 		elseif args[idx] == "-c" then
 			idx = idx+1
 			ret.config = args[idx]
@@ -38,6 +40,8 @@ function main(args)
 	--if args.mode == "fill" then
 	if args.fill then
 		(require "fill").main(args)
+	elseif args.simulate then
+		(require "simulate").main(args)
 	end
 
 	collectgarbage() --debug

@@ -63,6 +63,12 @@ local function copystring(s)
 	return ret
 end
 
+local function arena_copystring(a, s)
+	local ret = C.arena_malloc(a, #s+1)
+	ffi.copy(ret, s)
+	return ret
+end
+
 local function get_vars(data)
 	local vars = collect(data.vars)
 	local n = #vars
@@ -83,6 +89,58 @@ local function get_vars(data)
 	end
 
 	return c_vars, #vars
+end
+
+-- TODO: fhk graph should use this lexicon
+local function get_lexicon(data)
+	local types = {} -- TODO
+	local vars = collect(data.vars)
+	local objs = collect(data.objs)
+
+	local lex = ffi.gc(C.lex_create(#types, #vars, #objs), C.lex_destroy)
+	local arena = ffi.gc(C.arena_create(1024), C.arena_destroy)
+
+	for i,v in ipairs(vars) do
+		v._lexid = i-1
+		v._ptr = lex.vars.data + v._lexid
+
+		local cv = v._ptr
+		cv.name = arena_copystring(arena, v.name)
+		if not builtin_types[v.type] then
+			error(string.format("No definition for type '%s' of variable '%s'",
+				v.type, v.name))
+		end
+		cv.type = builtin_types[v.type]
+	end
+
+	for i,o in ipairs(objs) do
+		o._lexid = i-1
+		o._ptr = lex.objs.data + o._lexid
+	end
+
+	for i,o in ipairs(objs) do
+		o._ptr.name = arena_copystring(arena, o.name)
+
+		if o.fields then
+			local fs = ffi.new("lexid[?]", #o.fields)
+			for j,f in ipairs(o.fields) do
+				fs[j-1] = data.vars[f]._lexid
+			end
+			C.lex_set_vars(lex, o._lexid, #o.fields, fs)
+		end
+
+		if o.uprefs then
+			local us = ffi.new("lexid[?]", #o.uprefs)
+			for j,u in ipairs(o.uprefs) do
+				us[j-1] = data.objs[u]._lexid
+			end
+			C.lex_set_uprefs(lex, o._lexid, #o.uprefs, us)
+		end
+	end
+
+	C.lex_compute_refs(lex)
+
+	return lex, arena
 end
 
 local function make_lookup(xs, n, ret)
@@ -291,5 +349,6 @@ end
 return {
 	newconf=newconf,
 	get_vars=get_vars,
-	get_fhk_graph=get_fhk_graph
+	get_fhk_graph=get_fhk_graph,
+	get_lexicon=get_lexicon
 }

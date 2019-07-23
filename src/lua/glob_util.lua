@@ -1,3 +1,13 @@
+local nogc_ref = {}
+
+function nogc(r)
+	nogc_ref[r] = true
+end
+
+function yesgc(r)
+	nogc_ref[r] = nil
+end
+
 function trim(str)
 	-- ignore second return val
 	str = str:gsub("^%s*(.*)%s*$", "%1")
@@ -33,4 +43,3 @@ function collect(tab)
 
 	return ret
 end
-

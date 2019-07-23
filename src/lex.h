@@ -5,6 +5,7 @@
 #include <assert.h>
 
 #include "def.h"
+#include "list.h"
 
 typedef enum type {
 	/* reals */
@@ -43,6 +44,8 @@ typedef union pvalue {
 /* don't put anything dumb there so it fits in a register */
 static_assert(sizeof(pvalue) == sizeof(uint64_t));
 
+typedef unsigned lexid;
+
 struct type_def {
 	const char *name;
 	size_t size;
@@ -57,6 +60,7 @@ struct bitenum_def {
 /* TODO. hash num def if needed */
 
 struct var_def {
+	lexid id;
 	const char *name;
 	type type;
 
@@ -68,14 +72,48 @@ struct var_def {
 	};
 };
 
+/* back_idx is the index of the corresponding backreference on the other obj_def:
+ * if
+ *     u = x->uprefs[i]
+ *     d = x->downrefs[j]
+ * then
+ *     u->ref->downrefs[u->back_idx] == x
+ *     d->ref->uprefs[d->back_idx] == x
+ * 
+ * back_idx is stored as index rather than pointer because some arrays (vector uprefs)
+ * in the simulator are in the same order
+ */
+struct obj_ref {
+	struct obj_def *ref;
+	int back_idx;
+};
+
 struct obj_def {
+	lexid id;
 	const char *name;
-	size_t n_var;
-	struct var_def **vars;
-	struct obj_def *owner;
+	SVEC(struct var_def *) vars;
+	SVEC(struct obj_ref) uprefs;
+	SVEC(struct obj_ref) downrefs;
+};
+
+struct lex {
+	SVEC(struct type_def) types;
+	SVEC(struct var_def) vars;
+	SVEC(struct obj_def) objs;
+	// models go here? struct model_def?
 };
 
 /* struct invariant {...} goes here */
+
+struct lex *lex_create(size_t n_types, size_t n_vars, size_t n_objs);
+void lex_destroy(struct lex *lex);
+
+void lex_set_vars(struct lex *lex, lexid objid, size_t n, lexid *varids);
+void lex_set_uprefs(struct lex *lex, lexid objid, size_t n, lexid *objids);
+void lex_compute_refs(struct lex *lex);
+size_t lex_get_roots(struct lex *lex, struct obj_def **objs);
+
+#define IS_ROOT(obj) (!((obj)->uprefs.n))
 
 const struct type_def *get_typedef(type t);
 size_t get_enum_size(uint64_t bit_mask);
@@ -87,3 +125,5 @@ uint64_t packenum(int b);
 ptype tpromote(type t);
 pvalue promote(void *x, type t);
 void demote(void *x, type t, pvalue p);
+
+// TODO void compute_backrefs(struct obj_def *objs, size_t n);

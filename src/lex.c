@@ -1,6 +1,72 @@
 #include "lex.h"
+#include "list.h"
 
 #include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+
+static void init_vardefs(struct lex *lex);
+static void init_objdefs(struct lex *lex);
+static void destroy_objdefs(struct lex *lex);
+static void compute_downrefs(struct lex *lex);
+static void compute_backrefs(struct lex *lex);
+
+struct lex *lex_create(size_t n_types, size_t n_vars, size_t n_objs){
+	struct lex *lex = calloc(1, sizeof *lex);
+
+	SVEC_RESIZE(lex->types, n_types);
+	SVEC_RESIZE(lex->vars, n_vars);
+	SVEC_RESIZE(lex->objs, n_objs);
+
+	memset(lex->types.data, 0, SVECSZ(lex->types));
+	memset(lex->vars.data, 0, SVECSZ(lex->vars));
+	memset(lex->objs.data, 0, SVECSZ(lex->objs));
+
+	init_vardefs(lex);
+	init_objdefs(lex);
+
+	return lex;
+}
+
+void lex_destroy(struct lex *lex){
+	destroy_objdefs(lex);
+	free(lex->types.data);
+	free(lex->vars.data);
+	free(lex->objs.data);
+	free(lex);
+}
+
+void lex_set_vars(struct lex *lex, lexid objid, size_t n, lexid *varids){
+	struct obj_def *obj = &SVECE(lex->objs, objid);
+	SVEC_RESIZE(obj->vars, n);
+	for(size_t i=0;i<n;i++)
+		obj->vars.data[i] = &SVECE(lex->vars, varids[i]);
+}
+
+void lex_set_uprefs(struct lex *lex, lexid objid, size_t n, lexid *objids){
+	struct obj_def *obj = &SVECE(lex->objs, objid);
+	SVEC_RESIZE(obj->uprefs, n);
+	for(size_t i=0;i<n;i++)
+		obj->uprefs.data[i].ref = &SVECE(lex->objs, objids[i]);
+}
+
+void lex_compute_refs(struct lex *lex){
+	compute_downrefs(lex);
+	compute_backrefs(lex);
+}
+
+size_t lex_get_roots(struct lex *lex, struct obj_def **objs){
+	size_t n = 0;
+
+	for(size_t i=0;i<lex->objs.n;i++){
+		struct obj_def *obj = &lex->objs.data[i];
+
+		if(IS_ROOT(obj))
+			objs[n++] = obj;
+	}
+
+	return n;
+}
 
 const struct type_def *get_typedef(type idx){
 #define TD(t,n,s) [t]={.name=(n), .size=(s)}
@@ -109,4 +175,92 @@ void demote(void *x, type t, pvalue p){
 		default: UNREACHABLE();
 	}
 }
+
+static void init_vardefs(struct lex *lex){
+	for(lexid i=0;i<lex->vars.n;i++)
+		lex->vars.data[i].id = i;
+}
+
+static void init_objdefs(struct lex *lex){
+	for(lexid i=0;i<lex->objs.n;i++)
+		lex->objs.data[i].id = i;
+}
+
+static void destroy_objdefs(struct lex *lex){
+	for(size_t i=0;i<lex->objs.n;i++){
+		struct obj_def *obj = &lex->objs.data[i];
+
+		if(obj->vars.data)
+			free(obj->vars.data);
+
+		if(obj->uprefs.data)
+			free(obj->uprefs.data);
+
+		if(obj->downrefs.data)
+			free(obj->downrefs.data);
+	}
+}
+
+static void compute_downrefs(struct lex *lex){
+	size_t n = lex->objs.n;
+	int n_ref[n];
+	struct obj_ref downrefs[n][n];
+
+	memset(n_ref, 0, n * sizeof(int));
+
+	for(lexid i=0;i<n;i++){
+		struct obj_def *obj = &lex->objs.data[i];
+
+		for(size_t j=0;j<obj->uprefs.n;j++){
+			lexid id = obj->uprefs.data[j].ref->id;
+			downrefs[id][n_ref[id]++].ref = obj;
+		}
+	}
+
+	for(lexid i=0;i<n;i++){
+		struct obj_def *obj = &lex->objs.data[i];
+		SVEC_RESIZE(obj->downrefs, n_ref[i]);
+		memcpy(obj->downrefs.data, downrefs[i], SVECSZ(obj->downrefs));
+	}
+}
+
+static void compute_backrefs(struct lex *lex){
+	size_t n = lex->objs.n;
+	int upref_idx[n][n];
+	int downref_idx[n][n];
+
+#ifdef DEBUG
+	memset(upref_idx, -1, sizeof(upref_idx));
+	memset(downref_idx, -1, sizeof(downref_idx));
+#endif
+
+	for(lexid i=0;i<n;i++){
+		struct obj_def *obj = &lex->objs.data[i];
+
+		for(size_t j=0;j<obj->uprefs.n;j++)
+			upref_idx[i][obj->uprefs.data[j].ref->id] = (int) j;
+
+		for(size_t j=0;j<obj->downrefs.n;j++)
+			downref_idx[i][obj->downrefs.data[j].ref->id] = (int) j;
+	}
+
+	for(lexid i=0;i<n;i++){
+		struct obj_def *obj = &lex->objs.data[i];
+
+		for(size_t j=0;j<obj->uprefs.n;j++){
+			struct obj_ref *upref = &obj->uprefs.data[j];
+			upref->back_idx = downref_idx[upref->ref->id][i];
+
+			assert(upref->back_idx >= 0);
+			assert(upref->ref->downrefs.data[upref->back_idx].ref == obj);
+		}
+
+		for(size_t j=0;j<obj->downrefs.n;j++){
+			struct obj_ref *downref = &obj->downrefs.data[j];
+			downref->back_idx = upref_idx[downref->ref->id][i];
+
+			assert(downref->back_idx >= 0);
+			assert(downref->ref->uprefs.data[downref->back_idx].ref == obj);
+		}
+	}
 }

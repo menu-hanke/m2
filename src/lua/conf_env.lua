@@ -6,6 +6,7 @@ env.inf = math.huge
 -- types are used to create vars and vars are used to compose objects
 local types = {}
 local vars = {}
+local objs = {}
 
 -- These only affect the fhk graph:
 -- virtual variables are usually aggregates etc. expensive to compute values that
@@ -119,6 +120,28 @@ function env.desc(name)
 end
 
 -----------------------
+-- objects
+-----------------------
+
+function env.obj(name)
+	if objs[name] then
+		error(string.format("Duplicate object '%s'", name), 2)
+	end
+
+	active = { name=name }
+	active_kind = "obj"
+	objs[name] = active
+end
+
+function env.fields(...)
+	ac("obj").fields = {...}
+end
+
+function env.uprefs(...)
+	ac("obj").uprefs = {...}
+end
+
+-----------------------
 -- models
 -----------------------
 
@@ -204,6 +227,7 @@ end
 return env, {
 	types=types,
 	vars=vars,
+	objs=objs,
 	fhk_models=fhk_models,
 	fhk_virtuals=fhk_virtuals
 }

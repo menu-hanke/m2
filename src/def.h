@@ -27,11 +27,11 @@
 
 #endif // ifndef M2_VECTOR_SIZE
 
-// vector size for n bytes
-#define VS(n) (((n) + M2_VECTOR_SIZE - 1) & ~(M2_VECTOR_SIZE - 1))
+// round n to next multiple of m where m=2^k
+#define ALIGN(n, m) (((n) + (m) - 1) & ~((m) - 1))
 
-// vector elements for n bytes
-#define VN(n) (VS(n) / M2_VECTOR_SIZE)
+// vector size for n bytes
+#define VS(n) ALIGN((n), M2_VECTOR_SIZE)
 
 // when building a release set this to /usr/lib/something etc (from makefile).
 #ifndef M2_LUAPATH
@@ -41,4 +41,17 @@
 #ifdef EXPORT_LUA_CDEF
 // luajit doesn't parse these so remove them when exporting cdefs
 #define static_assert(...) @@remove@@
+#endif
+
+// *** simulator config ***
+
+// max branching depth for the simulator
+#ifndef SIM_MAX_DEPTH
+#define SIM_MAX_DEPTH 8
+#endif
+
+// size for the initial chunk for the sims memory arena
+// (these are allocated per stack level)
+#ifndef SIM_ARENA_SIZE
+#define SIM_ARENA_SIZE 8096
 #endif

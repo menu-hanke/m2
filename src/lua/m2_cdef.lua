@@ -3,30 +3,31 @@ local ffi = require 'ffi'
 ffi.cdef [[
        
        
-enum type {
- T_F32 = 1,
- T_F64 = 2,
- T_I8 = 3,
- T_I16 = 4,
- T_I32 = 5,
- T_I64 = 6,
- T_B8 = 7,
- T_B16 = 8,
- T_B32 = 9,
- T_B64 = 10,
-};
-enum ptype {
- T_REAL = 1,
- T_INT = 2,
- T_BIT = 3
-};
-union pvalue {
+       
+typedef enum type {
+ T_F32 = 0,
+ T_F64 = 1,
+ T_I8 = 2,
+ T_I16 = 3,
+ T_I32 = 4,
+ T_I64 = 5,
+ T_B8 = 6,
+ T_B16 = 7,
+ T_B32 = 8,
+ T_B64 = 9
+} type;
+typedef enum ptype {
+ PT_REAL = 1,
+ PT_INT = 2,
+ PT_BIT = 3
+} ptype;
+typedef union pvalue {
  double r;
  int64_t i;
  uint64_t b;
- void *p;
-};
+} pvalue;
 
+typedef unsigned lexid;
 struct type_def {
  const char *name;
  size_t size;
@@ -37,24 +38,80 @@ struct bitenum_def {
  const char **value_names;
 };
 struct var_def {
+ lexid id;
  const char *name;
- enum type type;
+ type type;
  union {
   struct bitenum_def *bitenum_def;
  };
 };
-struct obj_def {
- const char *name;
- size_t n_var;
- struct var_def **vars;
- struct obj_def *owner;
+struct obj_ref {
+ struct obj_def *ref;
+ int back_idx;
 };
-const struct type_def *get_typedef(enum type type);
+struct obj_def {
+ lexid id;
+ const char *name;
+ struct { size_t n; struct var_def * *data; } vars;
+ struct { size_t n; struct obj_ref *data; } uprefs;
+ struct { size_t n; struct obj_ref *data; } downrefs;
+};
+struct lex {
+ struct { size_t n; struct type_def *data; } types;
+ struct { size_t n; struct var_def *data; } vars;
+ struct { size_t n; struct obj_def *data; } objs;
+};
+struct lex *lex_create(size_t n_types, size_t n_vars, size_t n_objs);
+void lex_destroy(struct lex *lex);
+void lex_set_vars(struct lex *lex, lexid objid, size_t n, lexid *varids);
+void lex_set_uprefs(struct lex *lex, lexid objid, size_t n, lexid *objids);
+void lex_compute_refs(struct lex *lex);
+size_t lex_get_roots(struct lex *lex, struct obj_def **objs);
+const struct type_def *get_typedef(type t);
 size_t get_enum_size(uint64_t bit_mask);
-enum type get_enum_type(struct bitenum_def *ed);
-enum ptype get_ptype(enum type type);
-int get_enum_bit(uint64_t bit);
-uint64_t get_bit_enum(int bit);
+type get_enum_type(struct bitenum_def *ed);
+int unpackenum(uint64_t b);
+uint64_t packenum(int b);
+ptype tpromote(type t);
+pvalue promote(void *x, type t);
+void demote(void *x, type t, pvalue p);
+       
+typedef struct sim sim;
+typedef struct sim_vec sim_vec;
+enum {
+ SIM_ITER_END = 0,
+ SIM_ITER_NEXT = -1
+};
+enum {
+ SIM_OK = 0,
+ SIM_EOOM = 1,
+ SIM_EDEPTH_LIMIT = 2,
+ SIM_EINVALID_FRAME = 3
+};
+typedef struct sim_objref {
+ sim_vec *vec;
+ size_t idx;
+} sim_objref;
+typedef struct sim_slice {
+ sim_vec *vec;
+ size_t from;
+ size_t to;
+} sim_slice;
+typedef struct sim_iter {
+ sim_objref ref;
+ int upref;
+} sim_iter;
+sim *sim_create(struct lex *lex);
+void sim_destroy(sim *sim);
+void sim_allocv(sim *sim, sim_slice *pos, lexid objid, sim_objref *uprefs, size_t n);
+int sim_first(sim *sim, sim_iter *it, lexid objid, sim_objref *upref, int uprefidx);
+int sim_next(sim_iter *it);
+void *sim_varp(sim *sim, sim_objref *ref, lexid objid, lexid varid);
+pvalue sim_read1p(sim *sim, sim_objref *ref, lexid objid, lexid varid);
+void sim_write1p(sim *sim, sim_objref *ref, lexid objid, lexid varid, pvalue value);
+int sim_enter(sim *sim);
+void sim_rollback(sim *sim);
+int sim_exit(sim *sim);
        
        
 typedef uint8_t bm8 __attribute__((aligned(16)));
@@ -103,7 +160,7 @@ struct fhk_mmark {
 struct fhk_vmark {
  union {
   struct {
-   union pvalue value;
+   pvalue value;
    struct fhk_model *model;
    double min_cost, max_cost;
   };
@@ -153,8 +210,8 @@ struct fhk_einfo {
  struct fhk_var *var;
 };
 typedef struct fhk_graph fhk_graph;
-typedef int (*fhk_model_exec)(fhk_graph *G, void *udata, union pvalue *ret, union pvalue *args);
-typedef int (*fhk_var_resolve)(fhk_graph *G, void *udata, union pvalue *value);
+typedef int (*fhk_model_exec)(fhk_graph *G, void *udata, pvalue *ret, pvalue *args);
+typedef int (*fhk_var_resolve)(fhk_graph *G, void *udata, pvalue *value);
 typedef const char *(*fhk_desc)(void *udata);
 struct fhk_graph {
  fhk_model_exec model_exec;
@@ -176,17 +233,24 @@ void fhk_reset(struct fhk_graph *G, int what);
 int fhk_solve(struct fhk_graph *G, struct fhk_var *y);
        
        
-typedef int (*ex_exec_f)(void *, union pvalue *ret, union pvalue *argv);
+typedef int (*ex_exec_f)(void *, pvalue *ret, pvalue *argv);
 typedef struct ex_info {
  ex_exec_f exec;
 } ex_info;
 typedef struct ex_R_info ex_R_info;
-ex_R_info *ex_R_create(const char *fname, const char *func,
-  int narg, enum ptype *argt, int nret, enum ptype *rett);
-int ex_R_exec(ex_R_info *X, union pvalue *ret, union pvalue *argv);
+ex_R_info *ex_R_create(const char *fname, const char *func, int narg, ptype *argt, int nret,
+  ptype *rett);
+int ex_R_exec(ex_R_info *X, pvalue *ret, pvalue *argv);
 void ex_R_destroy(ex_R_info *X);
 struct fhk_model_meta {
  const char *name;
  ex_info *ei;
 };
+       
+typedef struct arena arena;
+arena *arena_create(size_t size);
+void arena_destroy(arena *arena);
+void arena_reset(arena *arena);
+void *arena_alloc(arena *arena, size_t size, size_t align);
+void *arena_malloc(arena *arena, size_t size);
 ]]
