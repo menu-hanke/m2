@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-typedef int (*ex_exec_f)(void *, union pvalue *ret, union pvalue *argv);
+typedef int (*ex_exec_f)(void *, pvalue *ret, pvalue *argv);
 
 typedef struct ex_info {
 	ex_exec_f exec;
@@ -13,9 +13,9 @@ typedef struct ex_info {
 
 #ifdef M2_EXEC_R
 typedef struct ex_R_info ex_R_info;
-ex_R_info *ex_R_create(const char *fname, const char *func,
-		int narg, enum ptype *argt, int nret, enum ptype *rett);
-int ex_R_exec(ex_R_info *X, union pvalue *ret, union pvalue *argv);
+ex_R_info *ex_R_create(const char *fname, const char *func, int narg, ptype *argt, int nret,
+		ptype *rett);
+int ex_R_exec(ex_R_info *X, pvalue *ret, pvalue *argv);
 void ex_R_destroy(ex_R_info *X);
 #endif
 

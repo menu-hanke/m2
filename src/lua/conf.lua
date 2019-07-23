@@ -141,11 +141,11 @@ local function create_einfo(model, params, ret, impl)
 
 	local argt = ffi.new("enum ptype[?]", #params)
 	for i,p in ipairs(params) do
-		argt[i-1] = C.get_ptype(params[i].base.type)
+		argt[i-1] = C.tpromote(params[i].base.type)
 	end
 
 	local rett = ffi.new("enum ptype[1]")
-	rett[0] = C.get_ptype(ret.base.type)
+	rett[0] = C.tpromote(ret.base.type)
 
 	local ret = C.ex_R_create(
 		impl.file, impl.func,
@@ -156,13 +156,13 @@ local function create_einfo(model, params, ret, impl)
 end
 
 local function copy_ival_cst(check, vdef, a, b)
-	local ptype = C.get_ptype(vdef.type)
+	local ptype = C.tpromote(vdef.type)
 
-	if ptype == C.T_REAL then
+	if ptype == C.PT_REAL then
 		check.cst.type = C.FHK_RIVAL
 		check.cst.rival.min = a
 		check.cst.rival.max = b
-	elseif ptype == C.T_INT then
+	elseif ptype == C.PT_INT then
 		check.cst.type = C.FHK_IIVAL
 		check.cst.iival.min = a
 		check.cst.iival.max = b
@@ -181,7 +181,7 @@ local function copy_set_cst(check, vdef, values)
 
 		-- XXX: not sure if lua actually has 64-bit integers,
 		-- maybe this should be done in C
-		mask = bit.bor(mask, tonumber(C.get_bit_enum(v)))
+		mask = bit.bor(mask, tonumber(C.packenum(v)))
 	end
 
 	check.cst.type = C.FHK_BITSET

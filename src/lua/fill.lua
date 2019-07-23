@@ -55,16 +55,16 @@ end
 
 local function copyvalue(v, val)
 	local vdef = ffi.cast("struct var_def *", v.udata)
-	local ptype = ffi.C.get_ptype(vdef.type)
+	local ptype = ffi.C.tpromote(vdef.type)
 
 	--print(string.format("copyvalue %s <- %f", ffi.string(vdef.name), val))
 
-	if ptype == ffi.C.T_REAL then
+	if ptype == ffi.C.PT_REAL then
 		v.mark.value.r = val
-	elseif ptype == ffi.C.T_INT then
+	elseif ptype == ffi.C.PT_INT then
 		v.mark.value.i = val
-	elseif ptype == ffi.C.T_BIT then
-		v.mark.value.b = ffi.C.get_bit_enum(val)
+	elseif ptype == ffi.C.PT_BIT then
+		v.mark.value.b = ffi.C.packenum(val)
 	else
 		error(string.format("unexpected ptype=%d", tonumber(ptype)))
 	end
@@ -72,14 +72,14 @@ end
 
 local function valuestr(v)
 	local vdef = ffi.cast("struct var_def *", v.udata)
-	local ptype = ffi.C.get_ptype(vdef.type)
+	local ptype = ffi.C.tpromote(vdef.type)
 
-	if ptype == ffi.C.T_REAL then
+	if ptype == ffi.C.PT_REAL then
 		return tonumber(v.mark.value.r)
-	elseif ptype == ffi.C.T_INT then
+	elseif ptype == ffi.C.PT_INT then
 		return tonumber(v.mark.value.i)
-	elseif ptype == ffi.C.T_BIT then
-		return ffi.C.get_enum_bit(v.mark.value.b)
+	elseif ptype == ffi.C.PT_BIT then
+		return ffi.C.unpackenum(v.mark.value.b)
 	else
 		error(string.format("unexpected ptype=%d", tonumber(ptype)))
 	end

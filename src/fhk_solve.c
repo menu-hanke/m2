@@ -26,7 +26,7 @@ static void exec_model(struct state *s, struct fhk_var *y, struct fhk_model *m);
 
 static double costf(struct fhk_model *m, double S);
 static double costf_inverse_S(struct fhk_model *m, double cost);
-static int check_cst(struct fhk_cst *cst, union pvalue v);
+static int check_cst(struct fhk_cst *cst, pvalue v);
 static void constraint_bounds(double *Sc_min, double *Sc_max, struct state *s, struct fhk_model *m);
 static void resolve_given(struct state *s, struct fhk_var *x);
 static void param_bounds(double *Sp_min, double *Sp_max, struct fhk_model *m);
@@ -379,7 +379,7 @@ static void exec_chain(struct state *s, struct fhk_var *y, struct fhk_model *m){
 }
 
 static void exec_model(struct state *s, struct fhk_var *y, struct fhk_model *m){
-	union pvalue args[m->n_param];
+	pvalue args[m->n_param];
 	for(size_t i=0;i<m->n_param;i++)
 		args[i] = m->params[i]->mark.value;
 
@@ -403,7 +403,7 @@ static double costf_inverse_S(struct fhk_model *m, double cost){
 	return (cost - m->k) / m->c;
 }
 
-static int check_cst(struct fhk_cst *cst, union pvalue v){
+static int check_cst(struct fhk_cst *cst, pvalue v){
 	switch(cst->type){
 
 		case FHK_RIVAL:

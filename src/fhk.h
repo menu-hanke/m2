@@ -56,7 +56,7 @@ struct fhk_vmark {
 	union {
 		/* regular solver */
 		struct {
-			union pvalue value;
+			pvalue value;
 			//int model; //?
 			struct fhk_model *model;
 			double min_cost, max_cost;
@@ -152,8 +152,8 @@ struct fhk_einfo {
 
 typedef struct fhk_graph fhk_graph;
 
-typedef int (*fhk_model_exec)(fhk_graph *G, void *udata, union pvalue *ret, union pvalue *args);
-typedef int (*fhk_var_resolve)(fhk_graph *G, void *udata, union pvalue *value);
+typedef int (*fhk_model_exec)(fhk_graph *G, void *udata, pvalue *ret, pvalue *args);
+typedef int (*fhk_var_resolve)(fhk_graph *G, void *udata, pvalue *value);
 typedef const char *(*fhk_desc)(void *udata);
 
 struct fhk_graph {

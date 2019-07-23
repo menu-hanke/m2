@@ -6,54 +6,42 @@
 
 #include "def.h"
 
-enum type {
+typedef enum type {
 	/* reals */
-	T_F32      = 1,
-	T_F64      = 2,
+	T_F32      = 0,
+	T_F64      = 1,
 
 	/* integers */
-	T_I8       = 3,
-	T_I16      = 4,
-	T_I32      = 5,
-	T_I64      = 6,
-
-	// TODO: is a complex type needed?
+	T_I8       = 2,
+	T_I16      = 3,
+	T_I32      = 4,
+	T_I64      = 5,
 
 	/* bit-enums, implemented as a mask */
-	T_B8       = 7,
-	T_B16      = 8,
-	T_B32      = 9,
-	T_B64      = 10,
+	T_B8       = 6,
+	T_B16      = 7,
+	T_B32      = 8,
+	T_B64      = 9
 
-	// TODO: simd bit vector types
-	/*
-	T_B128     = 11,
-	T_B256     = 12,
-	*/
-
-	/* TODO: hash enum, implemented as a hash set */
-	/*
-	T_HENUM    = 13
-	*/
-};
+	// TODO: is a complex type needed?
+} type;
 
 /* promoted types, mostly used with fhk */
-enum ptype {
-	T_REAL    = 1, // F*
-	T_INT     = 2, // I*
-	T_BIT     = 3  // B*
-};
+typedef enum ptype {
+	PT_REAL    = 1, // F*
+	PT_INT     = 2, // I*
+	PT_BIT     = 3  // B*
+} ptype;
 
 /* promoted values */
-union pvalue {
+typedef union pvalue {
 	double r;   // F*
 	int64_t i;  // I*
 	uint64_t b; // B*
-	void *p;    // other stuff
-};
+} pvalue;
 
 /* don't put anything dumb there so it fits in a register */
-static_assert(sizeof(union pvalue) == sizeof(uint64_t));
+static_assert(sizeof(pvalue) == sizeof(uint64_t));
 
 struct type_def {
 	const char *name;
@@ -70,7 +58,7 @@ struct bitenum_def {
 
 struct var_def {
 	const char *name;
-	enum type type;
+	type type;
 
 	/* if type is T_B* then this has the details of the enum */
 	union {
@@ -89,9 +77,13 @@ struct obj_def {
 
 /* struct invariant {...} goes here */
 
-const struct type_def *get_typedef(enum type type);
+const struct type_def *get_typedef(type t);
 size_t get_enum_size(uint64_t bit_mask);
-enum type get_enum_type(struct bitenum_def *ed);
-enum ptype get_ptype(enum type type);
-int get_enum_bit(uint64_t bit);
-uint64_t get_bit_enum(int bit);
+type get_enum_type(struct bitenum_def *ed);
+
+int unpackenum(uint64_t b);
+uint64_t packenum(int b);
+
+ptype tpromote(type t);
+pvalue promote(void *x, type t);
+void demote(void *x, type t, pvalue p);

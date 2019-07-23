@@ -22,9 +22,9 @@ struct ex_R_info {
 	// TODO preallocate SEXP for all these, should be faster
 	SEXP call;
 	int narg;
-	enum ptype *argt;
+	ptype *argt;
 	int nret;
-	enum ptype *rett;
+	ptype *rett;
 };
 
 /* global state goes here - R is full of global state anyway so it doesn't make
@@ -43,16 +43,16 @@ static void init_R_embedded();
 static int source(const char *fname);
 static int sourcef(const char *fname);
 static SEXP eval(SEXP call, int *err);
-static SEXPTYPE get_sexp_type(enum ptype t);
+static SEXPTYPE get_sexp_type(ptype t);
 static SEXP make_call(struct ex_R_info *X, const char *func);
-static void copy_args(struct ex_R_info *X, union pvalue *argv);
-static void copy_sexp(union pvalue *v, enum ptype type, SEXP s);
-static void copy_ret(struct ex_R_info *X, union pvalue *ret, SEXP s);
+static void copy_args(struct ex_R_info *X, pvalue *argv);
+static void copy_sexp(pvalue *v, ptype type, SEXP s);
+static void copy_ret(struct ex_R_info *X, pvalue *ret, SEXP s);
 static void add_call(SEXP call);
 static void remove_call(SEXP call);
 
-struct ex_R_info *ex_R_create(const char *fname, const char *func,
-		int narg, enum ptype *argt, int nret, enum ptype *rett){
+struct ex_R_info *ex_R_create(const char *fname, const char *func, int narg, ptype *argt,
+		int nret, ptype *rett){
 
 	init_R_embedded();
 	source(fname);
@@ -61,12 +61,12 @@ struct ex_R_info *ex_R_create(const char *fname, const char *func,
 	X->ei.exec = (ex_exec_f) ex_R_exec;
 
 	X->narg = narg;
-	X->argt = malloc(narg * sizeof(enum ptype));
-	memcpy(X->argt, argt, narg * sizeof(enum ptype));
+	X->argt = malloc(narg * sizeof(ptype));
+	memcpy(X->argt, argt, narg * sizeof(ptype));
 
 	X->nret = nret;
-	X->rett = malloc(nret * sizeof(enum ptype));
-	memcpy(X->rett, rett, nret * sizeof(enum ptype));
+	X->rett = malloc(nret * sizeof(ptype));
+	memcpy(X->rett, rett, nret * sizeof(ptype));
 
 	SEXP call = make_call(X, func);
 	X->call = call;
@@ -75,7 +75,7 @@ struct ex_R_info *ex_R_create(const char *fname, const char *func,
 	return X;
 }
 
-int ex_R_exec(struct ex_R_info *X, union pvalue *ret, union pvalue *argv){
+int ex_R_exec(struct ex_R_info *X, pvalue *ret, pvalue *argv){
 	copy_args(X, argv);
 	int err;
 	SEXP r = eval(X->call, &err);
@@ -169,13 +169,13 @@ static SEXP eval(SEXP call, int *err){
 	// XXX: you can get the error string using R_curErrorBuf()
 }
 
-static SEXPTYPE get_sexp_type(enum ptype t){
+static SEXPTYPE get_sexp_type(ptype t){
 	switch(t){
-		case T_REAL:
+		case PT_REAL:
 			return REALSXP;
 
-		case T_INT: /* XXX: R doesn't have 64-bit integers so this may cause problems */
-		case T_BIT:
+		case PT_INT: /* XXX: R doesn't have 64-bit integers so this may cause problems */
+		case PT_BIT:
 			return INTSXP;
 	}
 
@@ -204,10 +204,10 @@ static SEXP make_call(struct ex_R_info *X, const char *func){
 	return ret;
 }
 
-static void copy_args(struct ex_R_info *X, union pvalue *argv){
+static void copy_args(struct ex_R_info *X, pvalue *argv){
 	// first is the function name, then a linked list of 1-length vectors
 	// representing the args
-	enum ptype *argt = X->argt;
+	ptype *argt = X->argt;
 	int arg = 0;
 
 	for(SEXP s=CDR(X->call); s != R_NilValue; s=CDR(s), arg++, argt++, argv++){
@@ -216,20 +216,20 @@ static void copy_args(struct ex_R_info *X, union pvalue *argv){
 		SEXP v = CAR(s);
 
 		switch(*argt){
-			case T_REAL:
+			case PT_REAL:
 				//dv("R: copy arg[%d] (r=%f)\n", arg, argv->r);
 				*REAL(v) = argv->r;
 				break;
 
-			case T_INT:
+			case PT_INT:
 				*INTEGER(v) = argv->i;
 				break;
 
-			case T_BIT:
+			case PT_BIT:
 				/* XXX: could also have separately bit enum types that are passed
 				 * as bit masks, and bit enum types that are passed as integer values,
 				 * and let the caller convert the integer enums */
-				*INTEGER(v) = get_enum_bit(argv->b);
+				*INTEGER(v) = unpackenum(argv->b);
 				break;
 
 			default:
@@ -239,18 +239,18 @@ static void copy_args(struct ex_R_info *X, union pvalue *argv){
 	}
 }
 
-static void copy_sexp(union pvalue *v, enum ptype type, SEXP s){
+static void copy_sexp(pvalue *v, ptype type, SEXP s){
 	switch(type){
-		case T_REAL:
+		case PT_REAL:
 			v->r = *REAL(s);
 			break;
 
-		case T_INT:
+		case PT_INT:
 			v->i = *INTEGER(s);
 			break;
 
-		case T_BIT:
-			v->b = get_bit_enum(*INTEGER(s));
+		case PT_BIT:
+			v->b = packenum(*INTEGER(s));
 			break;
 
 		default:
@@ -259,7 +259,7 @@ static void copy_sexp(union pvalue *v, enum ptype type, SEXP s){
 	}
 }
 
-static void copy_ret(struct ex_R_info *X, union pvalue *ret, SEXP s){
+static void copy_ret(struct ex_R_info *X, pvalue *ret, SEXP s){
 	// TODO multi-return, need to handle vector and pairlist cases...
 	// dv("R: copy ret (r=%f)\n", *REAL(s));
 	copy_sexp(ret, X->rett[0], s);
