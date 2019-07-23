@@ -13,7 +13,7 @@
 
 #define dd(...) ((void)0)
 #define dv(...) ((void)0)
-#define DD(x) ((void)0)
+#define DD(x)
 #define UNREACHABLE() __builtin_unreachable()
 
 #endif // ifdef DEBUG
