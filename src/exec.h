@@ -6,17 +6,21 @@
 #include <stdint.h>
 
 typedef int (*ex_exec_f)(void *, pvalue *ret, pvalue *argv);
+typedef void (*ex_destroy_f)(void *);
 
-typedef struct ex_info {
+struct ex_impl {
 	ex_exec_f exec;
-} ex_info;
+	ex_destroy_f destroy;
+};
+
+typedef struct ex_func {
+	const struct ex_impl *impl;
+} ex_func;
 
 #ifdef M2_EXEC_R
-typedef struct ex_R_info ex_R_info;
-ex_R_info *ex_R_create(const char *fname, const char *func, int narg, ptype *argt, int nret,
+ex_func *ex_R_create(const char *fname, const char *func, int narg, ptype *argt, int nret,
 		ptype *rett);
-int ex_R_exec(ex_R_info *X, pvalue *ret, pvalue *argv);
-void ex_R_destroy(ex_R_info *X);
 #endif
 
-#define ex_exec(ei, ret, argv) ((ex_info *) (ei))->exec((ei), (ret), (argv))
+#define ex_exec(f, ret, argv) (f)->impl->exec((f), (ret), (argv))
+#define ex_destroy(f) (f)->impl->destroy(f)

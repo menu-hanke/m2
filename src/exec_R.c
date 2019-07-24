@@ -16,8 +16,9 @@
 #define M2_R_HOME "/usr/lib/R"
 #endif
 
-struct ex_R_info {
-	ex_info ei;
+struct ex_R_func {
+	// must be first
+	ex_func ex;
 
 	// TODO preallocate SEXP for all these, should be faster
 	SEXP call;
@@ -28,7 +29,7 @@ struct ex_R_info {
 };
 
 /* global state goes here - R is full of global state anyway so it doesn't make
- * sense to tie this to ex_R_info or some other non-global object */
+ * sense to tie this to ex_R_func or some other non-global object */
 struct GS {
 	// I'm using an R list to store the already sourced files because I'm lazy
 	SEXP sourced;
@@ -39,26 +40,34 @@ struct GS {
 
 static struct GS *GS = NULL;
 
+static int ex_R_exec(struct ex_R_func *X, pvalue *ret, pvalue *argv);
+static void ex_R_destroy(struct ex_R_func *X);
+
+static const struct ex_impl EX_R = {
+	.exec = (ex_exec_f) ex_R_exec,
+	.destroy = (ex_destroy_f) ex_R_destroy
+};
+
 static void init_R_embedded();
 static int source(const char *fname);
 static int sourcef(const char *fname);
 static SEXP eval(SEXP call, int *err);
 static SEXPTYPE get_sexp_type(ptype t);
-static SEXP make_call(struct ex_R_info *X, const char *func);
-static void copy_args(struct ex_R_info *X, pvalue *argv);
+static SEXP make_call(struct ex_R_func *X, const char *func);
+static void copy_args(struct ex_R_func *X, pvalue *argv);
 static void copy_sexp(pvalue *v, ptype type, SEXP s);
-static void copy_ret(struct ex_R_info *X, pvalue *ret, SEXP s);
+static void copy_ret(struct ex_R_func *X, pvalue *ret, SEXP s);
 static void add_call(SEXP call);
 static void remove_call(SEXP call);
 
-struct ex_R_info *ex_R_create(const char *fname, const char *func, int narg, ptype *argt,
-		int nret, ptype *rett){
+ex_func *ex_R_create(const char *fname, const char *func, int narg, ptype *argt, int nret,
+		ptype *rett){
 
 	init_R_embedded();
 	source(fname);
 
-	struct ex_R_info *X = malloc(sizeof *X);
-	X->ei.exec = (ex_exec_f) ex_R_exec;
+	struct ex_R_func *X = malloc(sizeof *X);
+	X->ex.impl = &EX_R;
 
 	X->narg = narg;
 	X->argt = malloc(narg * sizeof(ptype));
@@ -72,10 +81,10 @@ struct ex_R_info *ex_R_create(const char *fname, const char *func, int narg, pty
 	X->call = call;
 	add_call(call);
 
-	return X;
+	return (ex_func *) X;
 }
 
-int ex_R_exec(struct ex_R_info *X, pvalue *ret, pvalue *argv){
+static int ex_R_exec(struct ex_R_func *X, pvalue *ret, pvalue *argv){
 	copy_args(X, argv);
 	int err;
 	SEXP r = eval(X->call, &err);
@@ -83,7 +92,7 @@ int ex_R_exec(struct ex_R_info *X, pvalue *ret, pvalue *argv){
 	return err;
 }
 
-void ex_R_destroy(struct ex_R_info *X){
+static void ex_R_destroy(struct ex_R_func *X){
 	remove_call(X->call);
 	free(X->argt);
 	free(X->rett);
@@ -182,7 +191,7 @@ static SEXPTYPE get_sexp_type(ptype t){
 	UNREACHABLE();
 }
 
-static SEXP make_call(struct ex_R_info *X, const char *func){
+static SEXP make_call(struct ex_R_func *X, const char *func){
 	SEXP fsym = Rf_install(func);
 	SEXP ret = Rf_lang1(fsym);
 
@@ -204,7 +213,7 @@ static SEXP make_call(struct ex_R_info *X, const char *func){
 	return ret;
 }
 
-static void copy_args(struct ex_R_info *X, pvalue *argv){
+static void copy_args(struct ex_R_func *X, pvalue *argv){
 	// first is the function name, then a linked list of 1-length vectors
 	// representing the args
 	ptype *argt = X->argt;
@@ -259,7 +268,7 @@ static void copy_sexp(pvalue *v, ptype type, SEXP s){
 	}
 }
 
-static void copy_ret(struct ex_R_info *X, pvalue *ret, SEXP s){
+static void copy_ret(struct ex_R_func *X, pvalue *ret, SEXP s){
 	// TODO multi-return, need to handle vector and pairlist cases...
 	// dv("R: copy ret (r=%f)\n", *REAL(s));
 	copy_sexp(ret, X->rett[0], s);

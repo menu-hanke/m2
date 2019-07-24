@@ -1,41 +1,6 @@
 local ffi = require "ffi"
 local C = ffi.C
 
-ffi.cdef [[
-	void *malloc(size_t);
-	void free(const void *);
-
-	struct _conf_fhk_graph {
-		int n_models;
-		int n_vars;
-		struct fhk_model *models;
-		struct fhk_model_meta *models_meta;
-		struct fhk_var *vars;
-	};
-]]
-
-ffi.metatype("struct _conf_fhk_graph", {
-	__gc = function(g)
-		for i=0, g.n_models-1 do
-			C.free(g.models[i].params)
-			C.free(g.models_meta[i].name)
-			-- free exec info
-
-			if g.models[i].n_check > 0 then
-				C.free(g.models[i].checks)
-			end
-		end
-
-		for i=0, g.n_vars-1 do
-			C.free(g.vars[i].models)
-		end
-
-		C.free(g.models)
-		C.free(g.models_meta)
-		C.free(g.vars)
-	end
-})
-
 local builtin_types = {
 	f32 = C.T_F32,
 	f64 = C.T_F64,
@@ -57,38 +22,10 @@ local function newconf()
 	return env, data
 end
 
-local function copystring(s)
-	local ret = C.malloc(#s+1)
-	ffi.copy(ret, s)
-	return ret
-end
-
 local function arena_copystring(a, s)
 	local ret = C.arena_malloc(a, #s+1)
 	ffi.copy(ret, s)
 	return ret
-end
-
-local function get_vars(data)
-	local vars = collect(data.vars)
-	local n = #vars
-	local c_vars = ffi.gc(ffi.new("struct var_def[?]", n), function(p)
-		for i=0, n-1 do
-			C.free(p[i].name)
-		end
-	end)
-
-	for i,v in ipairs(vars) do
-		local cv = c_vars+i-1
-		cv.name = copystring(v.name)
-		if not builtin_types[v.type] then
-			error(string.format("No definition for type '%s' of variable '%s'",
-				v.type, v.name))
-		end
-		cv.type = builtin_types[v.type]
-	end
-
-	return c_vars, #vars
 end
 
 -- TODO: fhk graph should use this lexicon
@@ -97,8 +34,11 @@ local function get_lexicon(data)
 	local vars = collect(data.vars)
 	local objs = collect(data.objs)
 
-	local lex = ffi.gc(C.lex_create(#types, #vars, #objs), C.lex_destroy)
-	local arena = ffi.gc(C.arena_create(1024), C.arena_destroy)
+	local arena = C.arena_create(1024)
+	local lex = ffi.gc(C.lex_create(#types, #vars, #objs), function(lex)
+		C.lex_destroy(lex)
+		C.arena_destroy(arena)
+	end)
 
 	for i,v in ipairs(vars) do
 		v._lexid = i-1
@@ -140,7 +80,7 @@ local function get_lexicon(data)
 
 	C.lex_compute_refs(lex)
 
-	return lex, arena
+	return lex
 end
 
 local function make_lookup(xs, n, ret)
@@ -155,14 +95,14 @@ local function make_lookup(xs, n, ret)
 	return ret
 end
 
-local function link_graph(fhk_models, vars_lookup)
+local function link_graph(fhk_models, var_defs)
 	local vars = setmetatable({}, {__index=function(t,k)
-		local p = vars_lookup[k]
+		local p = var_defs[k]
 		if not p then
 			error(string.format("No variable definition for var '%s'", k))
 		end
 
-		t[k] = { base=p, models={} }
+		t[k] = { def=p, models={} }
 		return t[k]
 	end})
 
@@ -199,18 +139,16 @@ local function create_einfo(model, params, ret, impl)
 
 	local argt = ffi.new("enum ptype[?]", #params)
 	for i,p in ipairs(params) do
-		argt[i-1] = C.tpromote(params[i].base.type)
+		argt[i-1] = C.tpromote(params[i].def.type)
 	end
 
 	local rett = ffi.new("enum ptype[1]")
-	rett[0] = C.tpromote(ret.base.type)
+	rett[0] = C.tpromote(ret.def.type)
 
-	local ret = C.ex_R_create(
+	return C.ex_R_create(
 		impl.file, impl.func,
 		#params, argt, 1, rett
 	)
-
-	return ffi.cast("ex_info *", ret)
 end
 
 local function copy_ival_cst(check, vdef, a, b)
@@ -256,14 +194,14 @@ local function copy_cst(check, vdef, cst)
 	end
 end
 
-local function create_checks(model, checks)
+local function create_checks(model, checks, arena)
 	model.n_check = #checks
 
 	if #checks == 0 then
 		return
 	end
 
-	model.checks = C.malloc(ffi.sizeof("struct fhk_check[?]", model.n_check))
+	model.checks = C.arena_malloc(arena, ffi.sizeof("struct fhk_check[?]", model.n_check))
 
 	for i=0, #checks-1 do
 		local c = model.checks+i
@@ -271,32 +209,35 @@ local function create_checks(model, checks)
 		local src = checks[i+1].check
 		c.costs[C.FHK_COST_IN] = src.cost_in
 		c.costs[C.FHK_COST_OUT] = src.cost_out
-		copy_cst(c, checks[i+1].var.base, src.cst)
+		copy_cst(c, checks[i+1].var.def, src.cst)
 	end
 end
 
-local function alloc_graph(models, vars)
+local function create_graph(models, vars)
 	models = collect(models)
 	vars = collect(vars)
 
-	local g = ffi.new("struct _conf_fhk_graph");
+	local arena = C.arena_create(1024)
+
 	local n_models = #models
 	local n_vars = #vars
-	g.n_models = n_models
-	g.n_vars = n_vars
-	g.models = C.malloc(ffi.sizeof("struct fhk_model[?]", n_models))
-	g.models_meta = C.malloc(ffi.sizeof("struct fhk_model_meta[?]", n_models))
-	g.vars = C.malloc(ffi.sizeof("struct fhk_var[?]", n_vars))
+
+	local c_models = ffi.cast("struct fhk_model *", C.arena_malloc(arena,
+		ffi.sizeof("struct fhk_model[?]", n_models)))
+	local c_models_meta = ffi.cast("struct fhk_model_meta *", C.arena_malloc(arena,
+		ffi.sizeof("struct fhk_model_meta[?]", n_models)))
+	local c_vars = ffi.cast("struct fhk_var *", C.arena_malloc(arena,
+		ffi.sizeof("struct fhk_var[?]", n_vars)))
 
 	for i=0, n_models-1 do
-		models[i+1].ptr = g.models+i
-		models[i+1].metaptr = g.models_meta+i
-		g.models[i].idx = i
+		models[i+1].ptr = c_models+i
+		models[i+1].metaptr = c_models_meta+i
+		c_models[i].idx = i
 	end
 
 	for i=0, n_vars-1 do
-		vars[i+1].ptr = g.vars+i
-		g.vars[i].idx = i
+		vars[i+1].ptr = c_vars+i
+		c_vars[i].idx = i
 	end
 
 	for _,src in ipairs(models) do
@@ -306,20 +247,20 @@ local function alloc_graph(models, vars)
 		m.k = src.model.k
 		m.c = src.model.c
 
-		create_checks(m, src.checks)
+		create_checks(m, src.checks, arena)
 
 		-- TODO
 		m.may_fail = 1
 
 		m.n_param = #src.params
-		m.params = C.malloc(ffi.sizeof("struct fhk_var *[?]", m.n_param))
+		m.params = C.arena_malloc(arena, ffi.sizeof("struct fhk_var *[?]", m.n_param))
 		for i,p in ipairs(src.params) do
 			m.params[i-1] = p.ptr
 		end
 
 		m.udata = meta
-		meta.name = copystring(src.model.name)
-		meta.ei = create_einfo(m, src.params, src.returns, src.model.impl)
+		meta.name = arena_copystring(arena, src.model.name)
+		meta.ex = create_einfo(m, src.params, src.returns, src.model.impl)
 	end
 
 	for _,src in ipairs(vars) do
@@ -327,28 +268,49 @@ local function alloc_graph(models, vars)
 		-- TODO: type
 
 		v.n_mod = #src.models
-		v.models = C.malloc(ffi.sizeof("struct fhk_model *[?]", v.n_mod))
+		v.models = C.arena_malloc(arena, ffi.sizeof("struct fhk_model *[?]", v.n_mod))
 		for i,m in ipairs(src.models) do
 			v.models[i-1] = m.ptr
 		end
 
-		v.udata = src.base
+		v.udata = src.def
 	end
 
-	return g
+	local G = ffi.gc(C.arena_malloc(arena, ffi.sizeof("struct fhk_graph")), function()
+		for i=0, n_models-1 do
+			local ex = c_models_meta[i].ex
+			ex.impl.destroy(ex)
+		end
+		C.arena_destroy(arena)
+	end)
+
+	G = ffi.cast("struct fhk_graph *", G)
+	G.n_var = n_vars
+	G.n_mod = n_models
+
+	C.fhk_graph_init(G)
+
+	return {
+		G=G,
+		models=c_models,
+		vars=c_vars
+	}
 end
 
--- TODO: this should also take virtuals etc.
-local function get_fhk_graph(data, basevars, nbasevars)
-	local vars_lookup = make_lookup(basevars, nbasevars)
-	local models, vars = link_graph(data.fhk_models, vars_lookup)
-	local g = alloc_graph(models, vars)
-	return g
+local function get_fhk_graph(data, lex)
+	local var_defs = {}
+
+	for i=0, tonumber(lex.vars.n)-1 do
+		local var = lex.vars.data+i
+		var_defs[ffi.string(var.name)] = var
+	end
+
+	local models, vars = link_graph(data.fhk_models, var_defs)
+	return create_graph(models, vars)
 end
 
 return {
 	newconf=newconf,
-	get_vars=get_vars,
 	get_fhk_graph=get_fhk_graph,
 	get_lexicon=get_lexicon
 }

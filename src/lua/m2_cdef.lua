@@ -234,17 +234,19 @@ int fhk_solve(struct fhk_graph *G, struct fhk_var *y);
        
        
 typedef int (*ex_exec_f)(void *, pvalue *ret, pvalue *argv);
-typedef struct ex_info {
+typedef void (*ex_destroy_f)(void *);
+struct ex_impl {
  ex_exec_f exec;
-} ex_info;
-typedef struct ex_R_info ex_R_info;
-ex_R_info *ex_R_create(const char *fname, const char *func, int narg, ptype *argt, int nret,
+ ex_destroy_f destroy;
+};
+typedef struct ex_func {
+ const struct ex_impl *impl;
+} ex_func;
+ex_func *ex_R_create(const char *fname, const char *func, int narg, ptype *argt, int nret,
   ptype *rett);
-int ex_R_exec(ex_R_info *X, pvalue *ret, pvalue *argv);
-void ex_R_destroy(ex_R_info *X);
 struct fhk_model_meta {
  const char *name;
- ex_info *ei;
+ ex_func *ex;
 };
        
 typedef struct arena arena;

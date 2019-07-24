@@ -1,13 +1,10 @@
 local ffi = require "ffi"
 local conf = require "conf"
 local hier = require "hier"
+local lex = require "lex"
 
 local function init_fhk(g, given_vars, fill_vars)
-	local G = ffi.gc(ffi.new("struct fhk_graph"), ffi.C.fhk_graph_destroy)
-
-	G.n_mod = g.n_models
-	G.n_var = g.n_vars
-
+	local G = g.G
 	-- XXX: these callbacks probably should go in fhk_call.c
 
 	G.resolve_virtual = function(G, udata, value)
@@ -17,7 +14,7 @@ local function init_fhk(g, given_vars, fill_vars)
 
 	G.model_exec = function(G, udata, ret, arg)
 		local m = ffi.cast("struct fhk_model_meta *", udata)
-		return m.ei.exec(m.ei, ret, arg)
+		return m.ex.impl.exec(m.ex, ret, arg)
 	end
 
 	G.debug_desc_var = function(v)
@@ -28,12 +25,10 @@ local function init_fhk(g, given_vars, fill_vars)
 		return ffi.cast("struct fhk_model_meta *", m).name
 	end
 
-	ffi.C.fhk_graph_init(G)
-
 	local gv_lookup = {}
 	local given, solve = {}, {}
 
-	for i=0, g.n_vars-1 do
+	for i=0, tonumber(G.n_var)-1 do
 		local vdef = ffi.cast("struct var_def *", g.vars[i].udata)
 		gv_lookup[ffi.string(vdef.name)] = g.vars[i]
 	end
@@ -50,39 +45,23 @@ local function init_fhk(g, given_vars, fill_vars)
 		table.insert(solve, y)
 	end
 
-	return G, given, solve
+	return given, solve
 end
 
 local function copyvalue(v, val)
 	local vdef = ffi.cast("struct var_def *", v.udata)
 	local ptype = ffi.C.tpromote(vdef.type)
 
-	--print(string.format("copyvalue %s <- %f", ffi.string(vdef.name), val))
-
-	if ptype == ffi.C.PT_REAL then
-		v.mark.value.r = val
-	elseif ptype == ffi.C.PT_INT then
-		v.mark.value.i = val
-	elseif ptype == ffi.C.PT_BIT then
-		v.mark.value.b = ffi.C.packenum(val)
-	else
-		error(string.format("unexpected ptype=%d", tonumber(ptype)))
+	if ptype == ffi.C.PT_BIT then
+		val = ffi.C.packenum(val)
 	end
+
+	v.mark.value = lex.topvalue(val, ptype)
 end
 
-local function valuestr(v)
+local function luavalue(v)
 	local vdef = ffi.cast("struct var_def *", v.udata)
-	local ptype = ffi.C.tpromote(vdef.type)
-
-	if ptype == ffi.C.PT_REAL then
-		return tonumber(v.mark.value.r)
-	elseif ptype == ffi.C.PT_INT then
-		return tonumber(v.mark.value.i)
-	elseif ptype == ffi.C.PT_BIT then
-		return ffi.C.unpackenum(v.mark.value.b)
-	else
-		error(string.format("unexpected ptype=%d", tonumber(ptype)))
-	end
+	return lex.frompvalue(v.mark.value, ffi.C.tpromote(vdef.type))
 end
 
 local function addchain(G, chain, visited, v)
@@ -161,13 +140,14 @@ local function main(args)
 	local env, data = conf.newconf()
 	env.read(args.config)
 
-	local vars, nv = conf.get_vars(data)
-	local g = conf.get_fhk_graph(data, vars, nv)
+	local lexicon = conf.get_lexicon(data)
+	local g = conf.get_fhk_graph(data, lexicon)
+	local G = g.G
 	local data = hier.parse_file(args.input)
 	local dobj = data.objs[args.fill.obj]
 	local given_vars = get_given(dobj)
 	local solve_vars = args.fill.fields
-	local G, given, solve = init_fhk(g, given_vars, solve_vars)
+	local given, solve = init_fhk(g, given_vars, solve_vars)
 
 	local out = io.open(args.output, "w")
 	out:write(string.format("$\t%s\t-> %s \t; selected chain\n",
@@ -198,7 +178,7 @@ local function main(args)
 			local mmeta = ffi.cast("struct fhk_model_meta *", model.udata)
 			local cost = v.mark.min_cost
 
-			table.insert(solved, valuestr(v))
+			table.insert(solved, tostring(luavalue(v)))
 		end
 
 		out:write(string.format("%s\t%s\t-> %s \t; %s\n",
