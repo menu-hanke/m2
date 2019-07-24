@@ -15,28 +15,64 @@ local fhk_models = {}
 local fhk_virtuals = {}
 
 -- config file state
-local active, active_kind
-local active_param
+local active_stack = {}
 
-local function ac(t)
-	if not active then
-		error("Invalid position for direvtive", 3)
+local function verify_stack(stack, elvl)
+	elvl = elvl and (elvl+1) or 1
+
+	for i,v in ipairs(stack) do
+		if not active_stack[i] then
+			error(string.format("Expected inside '%s'", v), elvl)
+		end
+		if active_stack[i].kind ~= v then
+			error(string.format("Expected inside '%s' but found '%s'", v, active_stack[i].kind),
+				elvl)
+		end
 	end
-
-	if t and active_kind ~= t then
-		error(string.format("This directive is valid inside '%s', not '%s'",
-			t, active_kind), 3)
-	end
-
-	return active
 end
 
-local function newtype(name, def)
-	if types[name] then
-		error(string.format("Duplicate definition of type '%s'", name), 2)
+local function setactive(def, elvl, ...)
+	local stack = {...}
+	local idx = #stack
+	local kind = stack[idx]
+	stack[idx] = nil
+
+	verify_stack(stack, elvl+1)
+
+	active_stack[idx] = { def=def, kind=kind }
+	for i=idx+1, #active_stack do
+		active_stack[i] = nil
 	end
 
-	types[name] = def
+	return def
+end
+
+local function getactive(elvl, ...)
+	local stack = {...}
+	verify_stack(stack, elvl+1)
+	return active_stack[#stack].def
+end
+
+local function ac(...)
+	return getactive(2, ...)
+end
+
+local function new(tab, name, obj, tabname, elvl)
+	elvl = elvl or 3
+
+	if tab[name] then
+		error(string.format("Duplicate definition of %s '%s'", tabname or "", name), elvl)
+	end
+
+	local ret = obj or {}
+	tab[name] = ret
+	return ret
+end
+
+local function newactive(tab, name, obj, ...)
+	local kind = select(-1, ...)
+	local ret = new(tab, name, obj, kind, 4)
+	return setactive(ret, 2, ...)
 end
 
 -- This is global, use it to read config files
@@ -88,9 +124,12 @@ end
 -------------------
 -- types
 -------------------
-
 function env.enum(name, def)
-	newtype(name, {type="enum", name=name, def=def})
+	new(types, name, {
+		type = "enum",
+		name = name,
+		def = def
+	}, "type")
 end
 
 -------------------
@@ -98,13 +137,9 @@ end
 -------------------
 
 function env.var(name)
-	if vars[name] then
-		error(string.format("Duplicate var '%s'", name), 2)
-	end
-
-	active = { name=name }
-	active_kind = "var"
-	vars[name] = active
+	newactive(vars, name, {
+		name = name
+	}, "var")
 end
 
 function env.dtype(type)
@@ -124,13 +159,9 @@ end
 -----------------------
 
 function env.obj(name)
-	if objs[name] then
-		error(string.format("Duplicate object '%s'", name), 2)
-	end
-
-	active = { name=name }
-	active_kind = "obj"
-	objs[name] = active
+	newactive(objs, name, {
+		name = name
+	}, "obj")
 end
 
 function env.fields(...)
@@ -146,30 +177,22 @@ end
 -----------------------
 
 function env.model(name)
-	if fhk_models[name] then
-		error(string.format("Duplicate model '%s'", name), 2)
-	end
-
-	active = { name=name, checks={}, params={} }
-	active_kind = "model"
-	active_param = nil
-	fhk_models[name] = active
+	newactive(fhk_models, name, {
+		name = name,
+		checks = {},
+		params = {}
+	}, "model")
 end
 
 function env.param(name)
-	if ac("model").params[name] then
-		error(string.format("Duplicate parameter '%s' in model '%s'",
-			name, active.name), 2)
-	end
-
-	active.params[name] = true
+	local model = ac("model")
+	newactive(model.params, name, name, "model", "parameter")
 	-- Note: parameter order matters, use the integer indices
-	table.insert(active.params, name)
-	active_param = name
+	table.insert(model.params, name)
 end
 
 function env.check(cst, cost_in, cost_out, var)
-	var = var or active_param
+	var = var or ac("model", "parameter")
 
 	if not var then
 		error("No parameter specified for check", 2)
@@ -223,6 +246,8 @@ end
 function env.ival(a, b)
 	return {type="ival", a=a, b=b}
 end
+
+---------------------
 
 return env, {
 	types=types,
