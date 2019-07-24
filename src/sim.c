@@ -79,8 +79,9 @@ static int same_ref(sim_objref *a, sim_objref *b);
 static size_t nextvsize(size_t n);
 
 struct sim *sim_create(struct lex *lex){
-	struct sim *sim = malloc(sizeof(*sim));
-	sim->static_arena = arena_create(1024);
+	arena *static_arena = arena_create(1024);
+	struct sim *sim = arena_malloc(static_arena, sizeof(*sim));
+	sim->static_arena = static_arena;
 	sim->lex = lex;
 	init_stack(sim);
 	init_objs(sim);
@@ -90,7 +91,6 @@ struct sim *sim_create(struct lex *lex){
 void sim_destroy(struct sim *sim){
 	destroy_stack(sim);
 	arena_destroy(sim->static_arena);
-	free(sim);
 }
 
 void *sim_alloc(struct sim *sim, size_t size, size_t align){
