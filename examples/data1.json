@@ -1,0 +1,39 @@
+{
+	"toplevel": {
+		"1": {
+			"vars": { "x": 2.7, "c": 0 }
+		},
+		"2": {
+			"vars": { "x": 3.14, "c": 1 }
+		},
+		"3": {
+			"vars": { "x": 72.7, "c": 4 }
+		}
+	},
+	"sublevel": {
+		"1": {
+			"uprefs": { "toplevel": "1" },
+			"vars": { "w": 1.0 }
+		},
+		"2": {
+			"uprefs": { "toplevel": "1" },
+			"vars": { "w": 2.0 }
+		},
+		"3": {
+			"uprefs": { "toplevel": "2" },
+			"vars": { "w": 3.0 }
+		},
+		"4": {
+			"uprefs": { "toplevel": "2" },
+			"vars": { "w": 4.0 }
+		},
+		"5": {
+			"uprefs": { "toplevel": "3" },
+			"vars": { "w": 5.0 }
+		},
+		"6": {
+			"uprefs": { "toplevel": "3" },
+			"vars": { "w": 6.0 }
+		}
+	}
+}

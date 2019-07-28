@@ -21,6 +21,11 @@
 		"c": 1
 	},
 
+	"Mb_4": {
+		"k": 1,
+		"c": 1
+	},
+
 	// but prefer estimating x from x' ovver Mb_2*
 
 	"Mc_1": {

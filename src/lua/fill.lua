@@ -1,198 +1,188 @@
 local ffi = require "ffi"
-local conf = require "conf"
-local hier = require "hier"
 local lex = require "lex"
+local sim = require "sim"
+local conf = require "conf"
+local exec = require "exec"
+local objparse = require "objparse"
 
-local function init_fhk(g, given_vars, fill_vars)
-	local G = g.G
-	-- XXX: these callbacks probably should go in fhk_call.c
+-- TODO: since this filling program is for filling data and testing models/chains, these
+-- structs could contain more debug info such as:
+-- * number of calls
+-- * execution times
+-- * different values / distribution of values
+-- etc. (this could even be expanded into a model chain "debugger")
+ffi.cdef [[
+	typedef struct fvar_info {
+		void *udata;
+		const char *desc;
+		int graph_idx;
+	} fvar_info;
+
+	typedef struct fmodel_info {
+		void *udata;
+		const char *desc;
+		int graph_idx;
+	} fmodel_info;
+]]
+
+local function hook(graph)
+	local arena = ffi.C.arena_create(1024)
+	local fvars = ffi.cast("fvar_info *", ffi.C.arena_malloc(arena,
+		ffi.sizeof("fvar_info[?]", #graph.vars)))
+	local fmods = ffi.cast("fmodel_info*", ffi.C.arena_malloc(arena,
+		ffi.sizeof("fmodel_info[?]", #graph.models)))
+
+	for i=0, #graph.vars-1 do
+		local fv = fvars+i
+		local cv = graph.c_vars+i
+		fv.udata = cv.udata
+		fv.graph_idx = i+1
+		fv.desc = arena_copystring(arena, graph.vars[i+1].name)
+		cv.udata = fv
+	end
+
+	for i=0, #graph.models-1 do
+		local fm = fmods+i
+		local cm = graph.c_models+i
+		fm.udata = cm.udata
+		fm.graph_idx = i+1
+		fm.desc = arena_copystring(arena, graph.models[i+1].name)
+		cm.udata = fm
+	end
+
+	local G = graph.G
+	local resolve_virtual = G.resolve_virtual
+	local model_exec = G.model_exec
+	local ddv = G.debug_desc_var
+	local ddm = G.debug_desc_model
 
 	G.resolve_virtual = function(G, udata, value)
-		error("resolve_virtual called, this shouldn't happen")
-		return 1
+		local fv = ffi.cast("fvar_info *", udata)
+		return resolve_virtual(G, fv.udata, value)
 	end
 
 	G.model_exec = function(G, udata, ret, arg)
-		local m = ffi.cast("struct fhk_model_meta *", udata)
-		return m.ex.impl.exec(m.ex, ret, arg)
+		local fm = ffi.cast("fmodel_info *", udata)
+		return model_exec(G, fm.udata, ret, arg)
 	end
 
-	G.debug_desc_var = function(v)
-		return ffi.cast("struct var_def *", v).name
+	G.debug_desc_var = function(udata)
+		local fv = ffi.cast("fvar_info *", udata)
+		return fv.desc
+		--return ddv(fv.udata)
 	end
 
-	G.debug_desc_model = function(m)
-		return ffi.cast("struct fhk_model_meta *", m).name
+	G.debug_desc_model = function(udata)
+		local fm = ffi.cast("fmodel_info *", udata)
+		return fm.desc
+		--return ddm(fm.udata)
 	end
 
-	local gv_lookup = {}
-	local given, solve = {}, {}
-
-	for i=0, tonumber(G.n_var)-1 do
-		local vdef = ffi.cast("struct var_def *", g.vars[i].udata)
-		gv_lookup[ffi.string(vdef.name)] = g.vars[i]
-	end
-
-	for _,v in ipairs(given_vars) do
-		local x = gv_lookup[v]
-		ffi.C.fhk_set_given(G, x)
-		table.insert(given, x)
-	end
-
-	for _,v in ipairs(fill_vars) do
-		local y = gv_lookup[v]
-		ffi.C.fhk_set_solve(G, y)
-		table.insert(solve, y)
-	end
-
-	return given, solve
+	return {
+		arena=arena,
+		fvars=fvars,
+		fmods=fmods
+	}
 end
 
-local function copyvalue(v, val)
-	local vdef = ffi.cast("struct var_def *", v.udata)
-	local ptype = ffi.C.tpromote(vdef.type)
+local function getchain(ret, graph, c_var, vtype)
+	local fv = ffi.cast("fvar_info *", c_var.udata)
+	local var = graph.vars[fv.graph_idx]
 
-	if ptype == ffi.C.PT_BIT then
-		val = ffi.C.packenum(val)
-	end
-
-	v.mark.value = lex.topvalue(val, ptype)
-end
-
-local function luavalue(v)
-	local vdef = ffi.cast("struct var_def *", v.udata)
-	return lex.frompvalue(v.mark.value, ffi.C.tpromote(vdef.type))
-end
-
-local function addchain(G, chain, visited, v)
-	if visited[v.idx] then
+	if ret[var] then
 		return
 	end
 
-	if G.v_bitmaps[v.idx].given == 1 then
-		return
+	ret[var] = true
+
+	local bitmap = graph.G.v_bitmaps[c_var.idx]
+	local model, c_model, fm
+
+	if bitmap.given == 1 then
+		model = ""
+	else
+		c_model = c_var.mark.model
+		fm = ffi.cast("fmodel_info *", c_model.udata)
+		model = graph.models[fm.graph_idx].name
 	end
 
-	visited[v.idx] = true
+	local cost = c_var.mark.min_cost
 
-	local vdef = ffi.cast("struct var_def *", v.udata)
-	local model = v.mark.model
-	local meta = ffi.cast("struct fhk_model_meta *", model.udata)
-
-	table.insert(chain, string.format("%s:%s (cost: %f)",
-		ffi.string(vdef.name),
-		ffi.string(meta.name),
-		tonumber(v.mark.min_cost)
+	table.insert(ret, string.format("%-20s = %-10s %-20s %-16f %s %s",
+		var.name,
+		lex.frompvalue_s(c_var.mark.value, ffi.C.tpromote(var.type)),
+		model,
+		cost,
+		(bitmap.solve == 1) and "solved"
+			or (bitmap.given == 1) and "given"
+			or "computed",
+		vtype
 	))
 
-	for i=0, tonumber(model.n_check)-1 do
-		local check = model.checks+i
-		addchain(G, chain, visited, check.var)
+	if bitmap.given == 1 then
+		return
 	end
 
-	for i=0, tonumber(model.n_param)-1 do
-		addchain(G, chain, visited, model.params[i])
+	for i=0, tonumber(c_model.n_param)-1 do
+		getchain(ret, graph, c_model.params[i], "param")
+	end
+
+	for i=0, tonumber(c_model.n_check)-1 do
+		getchain(ret, graph, c_model.checks[i].var, "constraint")
 	end
 end
 
-local function getchain(G, solve)
+local function print_chain(graph, c_vars)
 	local chain = {}
-	local visited = {}
-
-	for i,v in ipairs(solve) do
-		addchain(G, chain, visited, v)
+	for _,cv in ipairs(c_vars) do
+		getchain(chain, graph, cv, "root")
 	end
 
-	return table.concat(chain, "\t")
+	print(string.format("%-20s   %-10s %-20s %-16s %s",
+		"Variable",
+		"Value",
+		"Model",
+		"Cost",
+		"Status"
+	))
+	print(table.concat(chain, "\n"))
 end
 
-local function get_given(obj)
-	local givens = {}
-
-	while obj do
-		for _,f in ipairs(obj.fields) do
-			table.insert(givens, f)
-		end
-
-		obj = obj.owner
+local function getcvars(graph, names)
+	local vars = {}
+	for i,v in ipairs(graph.vars) do
+		vars[v.name] = graph.c_vars+i-1
 	end
 
-	return givens
-end
-
-local function copygiven(dest, obj, d)
 	local ret = {}
-
-	while obj do
-		for j,v in ipairs(d) do
-			print(string.format("* %s:%s = %f", obj.name, obj.fields[j], v))
-			table.insert(ret, v)
-		end
-
-		obj = obj.owner
-		d = d.owner
+	for i,n in ipairs(names) do
+		ret[i] = vars[n]
 	end
 
 	return ret
 end
 
 local function main(args)
-	local env, data = conf.newconf()
-	env.read(args.config)
-
-	local lexicon = conf.get_lexicon(data)
-	local g = conf.get_fhk_graph(data, lexicon)
-	local G = g.G
-	local data = hier.parse_file(args.input)
-	local dobj = data.objs[args.fill.obj]
-	local given_vars = get_given(dobj)
-	local solve_vars = args.fill.fields
-	local given, solve = init_fhk(g, given_vars, solve_vars)
-
-	local out = io.open(args.output, "w")
-	out:write(string.format("$\t%s\t-> %s \t; selected chain\n",
-		table.concat(given_vars, "\t"),
-		table.concat(solve_vars, "\t")
-	))
-
-	for id,d in pairs(dobj.data) do
-		print("")
-		local values = copygiven(given, dobj, d)
-
-		for i,v in ipairs(values) do
-			copyvalue(given[i], v)
+	local data = conf.read(args.config)
+	local l = conf.get_lexicon(data)
+	local graph = conf.get_fhk_graph(data)
+	local S = sim.create(l)
+	local upd = S:create_fhk_update(graph, l)
+	local h = hook(graph)
+	objparse.read_vecs(S, data, args.input)
+	local uset = upd:create_uset(args.fill.obj, unpack(args.fill.fields))
+	local solve_cvars = getcvars(graph, args.fill.fields)
+	
+	if args.batch then
+		upd:update(uset)
+	else
+		for o in S:iter(args.fill.obj) do
+			local slice = sim.slice1(o)
+			upd:update_slice(slice, uset)
+			print_chain(graph, solve_cvars)
+			print()
 		end
-
-		print("--------------")
-		local solved = {}
-
-		for i,v in ipairs(solve) do
-			local res = ffi.C.fhk_solve(G, v)
-			if res ~= 0 then
-				print("Solver failed on " .. solve_vars[i])
-				out:write("(Solver failed)\n")
-				goto continue
-			end
-
-			local model = v.mark.model
-			local mmeta = ffi.cast("struct fhk_model_meta *", model.udata)
-			local cost = v.mark.min_cost
-
-			table.insert(solved, tostring(luavalue(v)))
-		end
-
-		out:write(string.format("%s\t%s\t-> %s \t; %s\n",
-			id,
-			table.concat(values, "\t"),
-			table.concat(solved, "\t"),
-			getchain(G, solve)
-		))
-
-		::continue::
-		ffi.C.fhk_reset(G, 0)
 	end
-
-	out:close()
 end
 
 return {

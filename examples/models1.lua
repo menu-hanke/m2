@@ -25,6 +25,11 @@ param "z" check(ival(0, inf))
 returns "y"
 impl "R::examples/models1.r::Mb_3"
 
+model "Mb_4"
+param "z" check(ival(-inf, 0))
+returns "w"
+impl "R::examples/models1.r::Mb_4"
+
 -- cyclic models - x and x' are "equivalent" in the sense that they can be estimated
 -- from each other but one MUST be given
 

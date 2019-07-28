@@ -106,9 +106,14 @@ void sim_destroy(sim *sim);
 void sim_allocv(sim *sim, sim_slice *pos, lexid objid, sim_objref *uprefs, size_t n);
 int sim_first(sim *sim, sim_iter *it, lexid objid, sim_objref *upref, int uprefidx);
 int sim_next(sim_iter *it);
+sim_vec *sim_first_rv(sim *sim, lexid objid);
+sim_vec *sim_next_rv(sim_vec *prev);
+void sim_used(sim_vec *vec, sim_slice *slice);
 void *sim_varp(sim *sim, sim_objref *ref, lexid objid, lexid varid);
+void *sim_varp_base(sim_vec *vec, lexid varid);
 pvalue sim_read1p(sim *sim, sim_objref *ref, lexid objid, lexid varid);
 void sim_write1p(sim *sim, sim_objref *ref, lexid objid, lexid varid, pvalue value);
+sim_objref *sim_get_upref(sim_vec *vec, int uprefidx);
 int sim_enter(sim *sim);
 void sim_rollback(sim *sim);
 int sim_exit(sim *sim);
@@ -118,9 +123,14 @@ typedef uint8_t bm8 __attribute__((aligned(16)));
 bm8 *bm_alloc(size_t n);
 void bm_free(bm8 *bm);
 void bm_zero(bm8 *bm, size_t n);
+void bm_copy(bm8 *restrict a, const bm8 *restrict b, size_t n);
 void bm_and(bm8 *bm, size_t n, uint8_t mask);
-void bm_and2(bm8 *restrict a, bm8 *restrict b, size_t n);
-void bm_or2(bm8 *restrict a, bm8 *restrict b, size_t n);
+void bm_or(bm8 *bm, size_t n, uint8_t mask);
+void bm_xor(bm8 *bm, size_t n, uint8_t mask);
+void bm_and2(bm8 *restrict a, const bm8 *restrict b, size_t n);
+void bm_or2(bm8 *restrict a, const bm8 *restrict b, size_t n);
+void bm_xor2(bm8 *restrict a, const bm8 *restrict b, size_t n);
+void bm_not(bm8 *bm, size_t n);
 enum fhk_ctype {
  FHK_RIVAL,
  FHK_IIVAL,
@@ -230,8 +240,9 @@ void fhk_graph_destroy(struct fhk_graph *G);
 void fhk_set_given(struct fhk_graph *G, struct fhk_var *x);
 void fhk_set_solve(struct fhk_graph *G, struct fhk_var *y);
 void fhk_reset(struct fhk_graph *G, int what);
+void fhk_sup(bm8 *vmask, bm8 *mmask, struct fhk_var *y);
+void fhk_inv_sup(struct fhk_graph *G, bm8 *vmask, bm8 *mmask, struct fhk_var *y);
 int fhk_solve(struct fhk_graph *G, struct fhk_var *y);
-       
        
 typedef int (*ex_exec_f)(void *, pvalue *ret, pvalue *argv);
 typedef void (*ex_destroy_f)(void *);
@@ -244,10 +255,6 @@ typedef struct ex_func {
 } ex_func;
 ex_func *ex_R_create(const char *fname, const char *func, int narg, ptype *argt, int nret,
   ptype *rett);
-struct fhk_model_meta {
- const char *name;
- ex_func *ex;
-};
        
 typedef struct arena arena;
 arena *arena_create(size_t size);
@@ -255,4 +262,16 @@ void arena_destroy(arena *arena);
 void arena_reset(arena *arena);
 void *arena_alloc(arena *arena, size_t size, size_t align);
 void *arena_malloc(arena *arena, size_t size);
+       
+typedef struct ufhk ufhk;
+typedef struct uset uset;
+ufhk *ufhk_create(struct lex *lex);
+void ufhk_destroy(ufhk *u);
+void ufhk_set_var(ufhk *u, lexid varid, struct fhk_var *x);
+void ufhk_set_model(ufhk *u, const char *name, ex_func *f, struct fhk_model *m);
+void ufhk_set_graph(ufhk *u, struct fhk_graph *G);
+int ufhk_update(ufhk *u, uset *s, sim *sim);
+int ufhk_update_slice(ufhk *u, uset *s, sim_slice *slice);
+uset *uset_create(ufhk *u, lexid objid, size_t nvars, lexid *vars);
+void uset_destroy(uset *s);
 ]]

@@ -24,7 +24,26 @@ local function topvalue(val, t)
 	return ret
 end
 
+-- XXX: these should probable be C functions fromsimple & tosimple,
+-- since the same conversion is also used when calling R (or other models)
+local function frompvalue_s(pv, t)
+	local ret = frompvalue(pv, t)
+	if t == ffi.C.PT_BIT then
+		ret = ffi.C.unpackenum(ret)
+	end
+	return ret
+end
+
+local function topvalue_s(val, t)
+	if t == ffi.C.PT_BIT then
+		val = ffi.C.packenum(val)
+	end
+	return topvalue(val, t)
+end
+
 return {
 	frompvalue=frompvalue,
-	topvalue=topvalue
+	topvalue=topvalue,
+	frompvalue_s=frompvalue_s,
+	topvalue_s=topvalue_s
 }

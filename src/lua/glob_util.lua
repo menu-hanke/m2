@@ -1,3 +1,4 @@
+local ffi = require "ffi"
 local nogc_ref = {}
 
 function nogc(r)
@@ -43,3 +44,10 @@ function collect(tab)
 
 	return ret
 end
+
+function arena_copystring(a, s)
+	local ret = ffi.C.arena_malloc(a, #s+1)
+	ffi.copy(ret, s)
+	return ret
+end
+

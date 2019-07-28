@@ -16,6 +16,10 @@ Mb_3 <- function(z) {
 	return(z*5)
 }
 
+Mb_4 <- function(z) {
+	return(z/5)
+}
+
 Mc_1 <- function(x) {
 	return(exp(x))
 }

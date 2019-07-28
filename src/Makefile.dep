@@ -6,6 +6,8 @@ lex.o: lex.c lex.h def.h list.h
 arena.o: arena.c def.h
 sim.o: sim.c sim.h lex.h def.h list.h arena.h save.h bitmap.h
 save.o: save.c arena.h
+update.o: update.c sim.h lex.h def.h list.h fhk.h bitmap.h arena.h exec.h \
+ update.h
 exec_R.o: exec_R.c lex.h def.h list.h exec.h
 lua/m2_cdef.lua: lua_exports.h lex.h def.h list.h sim.h fhk.h bitmap.h \
- fhk_call.h exec.h arena.h
+ exec.h arena.h update.h
