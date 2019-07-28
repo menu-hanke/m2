@@ -33,7 +33,6 @@ static void param_bounds(double *Sp_min, double *Sp_max, struct fhk_model *m);
 static void mmin2(struct fhk_model **m1, struct fhk_model **m2, struct fhk_var *y);
 
 #define UNSOLVABLE(e) ISPINF((e)->mark.min_cost)
-#define VM_HASBOUND(vm) ((vm)->has_bound || (vm)->given)
 #define VM_CHAINSELECTED(vm) ((vm)->chain_selected || (vm)->given)
 #define ISPINF(x) (isinf(x) && (x)>0)
 #define VBMAP(s, y) (s)->G->v_bitmaps[(y)->idx]
@@ -63,8 +62,12 @@ int fhk_solve(struct fhk_graph *G, struct fhk_var *y){
 static void mm_bound_cost_v(struct state *s, struct fhk_var *y, double beta){
 	fhk_vbmap *bm = &VBMAP(s, y);
 
-	if(VM_HASBOUND(bm))
+	if(bm->given){
+		y->mark.min_cost = 0;
+		y->mark.max_cost = 0;
+		bm->has_bound = 1;
 		return;
+	}
 
 	// var cost bounding should never hit a cycle,
 	// mm_bound_cost_m checks this flag before calling.
@@ -168,7 +171,7 @@ betabound:
 static void mm_solve_chain_v(struct state *s, struct fhk_var *y, double beta){
 	fhk_vbmap *bm = &VBMAP(s, y);
 
-	assert(VM_HASBOUND(bm));
+	assert(bm->has_bound);
 
 	if(VM_CHAINSELECTED(bm))
 		return;
@@ -460,6 +463,12 @@ static void resolve_given(struct state *s, struct fhk_var *x){
 
 			if(s->G->resolve_virtual(s->G, x->udata, &x->mark.value))
 				FAIL(FHK_RESOLVE_FAILED, NULL, x);
+
+			dv("-> %f / %ld / %#lx\n",
+					x->mark.value.r,
+					x->mark.value.i,
+					x->mark.value.b
+			);
 		}
 	}
 }
