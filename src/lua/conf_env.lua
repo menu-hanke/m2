@@ -160,7 +160,9 @@ end
 
 function env.obj(name)
 	newactive(objs, name, {
-		name = name
+		name = name,
+		fields = {},
+		uprefs = {}
 	}, "obj")
 end
 
