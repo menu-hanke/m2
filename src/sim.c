@@ -18,6 +18,7 @@ struct vec_upref {
 };
 
 struct sim_vec {
+	// could have objid/obj_def* here
 	size_t n_alloc;
 	size_t n_used;
 	struct sim_vec *next_root;
@@ -164,9 +165,27 @@ int sim_next(sim_iter *it){
 	return SIM_ITER_NEXT;
 }
 
+struct sim_vec *sim_first_rv(struct sim *sim, lexid objid){
+	return sim->rootvecs[objid];
+}
+
+struct sim_vec *sim_next_rv(struct sim_vec *prev){
+	return prev->next_root;
+}
+
+void sim_used(struct sim_vec *vec, sim_slice *slice){
+	slice->vec = vec;
+	slice->from = 0;
+	slice->to = vec->n_used;
+}
+
 void *sim_varp(struct sim *sim, sim_objref *ref, lexid objid, lexid varid){
 	struct objinfo *oi = &sim->objinfo[objid];
 	return ((char *) ref->vec->vars[varid]) + oi->var_sizes[varid]*ref->idx;
+}
+
+void *sim_varp_base(struct sim_vec *vec, lexid varid){
+	return vec->vars[varid];
 }
 
 pvalue sim_read1p(struct sim *sim, sim_objref *ref, lexid objid, lexid varid){
@@ -177,6 +196,10 @@ pvalue sim_read1p(struct sim *sim, sim_objref *ref, lexid objid, lexid varid){
 void sim_write1p(struct sim *sim, sim_objref *ref, lexid objid, lexid varid, pvalue value){
 	struct obj_def *obj = &sim->lex->objs.data[objid];
 	demote(sim_varp(sim, ref, objid, varid), obj->vars.data[varid]->type, value);
+}
+
+sim_objref *sim_get_upref(struct sim_vec *vec, int uprefidx){
+	return &vec->uprefs[uprefidx].owner;
 }
 
 int sim_enter(struct sim *sim){

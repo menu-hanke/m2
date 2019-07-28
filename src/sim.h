@@ -42,9 +42,14 @@ void sim_allocv(sim *sim, sim_slice *pos, lexid objid, sim_objref *uprefs, size_
 // TODO deallocv
 int sim_first(sim *sim, sim_iter *it, lexid objid, sim_objref *upref, int uprefidx);
 int sim_next(sim_iter *it);
+sim_vec *sim_first_rv(sim *sim, lexid objid);
+sim_vec *sim_next_rv(sim_vec *prev);
+void sim_used(sim_vec *vec, sim_slice *slice);
 void *sim_varp(sim *sim, sim_objref *ref, lexid objid, lexid varid);
+void *sim_varp_base(sim_vec *vec, lexid varid);
 pvalue sim_read1p(sim *sim, sim_objref *ref, lexid objid, lexid varid);
 void sim_write1p(sim *sim, sim_objref *ref, lexid objid, lexid varid, pvalue value);
+sim_objref *sim_get_upref(sim_vec *vec, int uprefidx);
 
 int sim_enter(sim *sim);
 void sim_rollback(sim *sim);
