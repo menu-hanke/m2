@@ -6,15 +6,22 @@
 #include <stddef.h>
 #include <assert.h>
 
-typedef uint8_t bm8 __attribute__((aligned(M2_VECTOR_SIZE)));
+#define BITMAP_ALIGN M2_VECTOR_SIZE
+
+typedef uint8_t bm8 __attribute__((aligned(BITMAP_ALIGN)));
 
 bm8 *bm_alloc(size_t n);
 void bm_free(bm8 *bm);
 
 void bm_zero(bm8 *bm, size_t n);
+void bm_copy(bm8 *restrict a, const bm8 *restrict b, size_t n);
 void bm_and(bm8 *bm, size_t n, uint8_t mask);
-void bm_and2(bm8 *restrict a, bm8 *restrict b, size_t n);
-void bm_or2(bm8 *restrict a, bm8 *restrict b, size_t n);
+void bm_or(bm8 *bm, size_t n, uint8_t mask);
+void bm_xor(bm8 *bm, size_t n, uint8_t mask);
+void bm_and2(bm8 *restrict a, const bm8 *restrict b, size_t n);
+void bm_or2(bm8 *restrict a, const bm8 *restrict b, size_t n);
+void bm_xor2(bm8 *restrict a, const bm8 *restrict b, size_t n);
+void bm_not(bm8 *bm, size_t n);
 
 // can't have bm8 here as an union member because of the alignment
 #define BMU8(...) { uint8_t u8;\
