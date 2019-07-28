@@ -177,12 +177,9 @@ void fhk_graph_destroy(struct fhk_graph *G);
 void fhk_set_given(struct fhk_graph *G, struct fhk_var *x);
 void fhk_set_solve(struct fhk_graph *G, struct fhk_var *y);
 void fhk_reset(struct fhk_graph *G, int what);
+void fhk_sup(bm8 *vmask, bm8 *mmask, struct fhk_var *y);
+void fhk_inv_sup(struct fhk_graph *G, bm8 *vmask, bm8 *mmask, struct fhk_var *y);
+// TODO: space intersection stuff..
 
 /* fhk_solve.c */
 int fhk_solve(struct fhk_graph *G, struct fhk_var *y);
-
-/* fhk_inspect.c */
-// TODO!
-//void fhk_supp(struct fhk_graph *G, bm8 *bm, struct fhk_var *y);
-//void fhk_inv_supp(struct fhk_graph *G, bm8 *bm, struct fhk_var *y);
-//some function that lists selectable models under var space
