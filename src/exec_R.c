@@ -186,6 +186,10 @@ static SEXPTYPE get_sexp_type(ptype t){
 		case PT_INT: /* XXX: R doesn't have 64-bit integers so this may cause problems */
 		case PT_BIT:
 			return INTSXP;
+
+		case PT_POS:
+		case PT_UDATA:
+			assert(0);
 	}
 
 	UNREACHABLE();

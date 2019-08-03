@@ -1,56 +1,47 @@
 #pragma once
 
 #include "lex.h"
+#include "grid.h"
 
 #include <stddef.h>
+#include <stdint.h>
 
 typedef struct sim sim;
-typedef struct sim_vec sim_vec;
+typedef uint64_t sim_branchid;
 
-enum {
-	SIM_ITER_END  = 0,
-	SIM_ITER_NEXT = -1
-};
+#define SIM_NO_BRANCH 0
 
-enum {
-	SIM_OK             = 0,
-	SIM_EOOM           = 1,
-	SIM_EDEPTH_LIMIT   = 2,
-	SIM_EINVALID_FRAME = 3
-};
+typedef struct sim_objvec {
+	size_t n_alloc;
+	size_t n_used;
+	size_t n_bands;
+	struct tvec bands[];
+} sim_objvec;
 
 typedef struct sim_objref {
-	sim_vec *vec;
+	sim_objvec *vec;
 	size_t idx;
 } sim_objref;
-
-typedef struct sim_slice {
-	sim_vec *vec;
-	size_t from;
-	size_t to;
-} sim_slice;
-
-typedef struct sim_iter {
-	sim_objref ref;
-	int upref;
-} sim_iter;
 
 sim *sim_create(struct lex *lex);
 void sim_destroy(sim *sim);
 
-void sim_allocv(sim *sim, sim_slice *pos, lexid objid, sim_objref *uprefs, size_t n);
-// TODO deallocv
-int sim_first(sim *sim, sim_iter *it, lexid objid, sim_objref *upref, int uprefidx);
-int sim_next(sim_iter *it);
-sim_vec *sim_first_rv(sim *sim, lexid objid);
-sim_vec *sim_next_rv(sim_vec *prev);
-void sim_used(sim_vec *vec, sim_slice *slice);
-void *sim_varp(sim *sim, sim_objref *ref, lexid objid, lexid varid);
-void *sim_varp_base(sim_vec *vec, lexid varid);
-pvalue sim_read1p(sim *sim, sim_objref *ref, lexid objid, lexid varid);
-void sim_write1p(sim *sim, sim_objref *ref, lexid objid, lexid varid, pvalue value);
-sim_objref *sim_get_upref(sim_vec *vec, int uprefidx);
+struct grid *sim_get_envgrid(sim *sim, lexid envid);
+struct grid *sim_get_objgrid(sim *sim, lexid objid);
+size_t sim_env_effective_order(sim *sim, lexid envid);
 
-int sim_enter(sim *sim);
-void sim_rollback(sim *sim);
-int sim_exit(sim *sim);
+void *S_obj_varp(sim_objref *ref, lexid varid);
+pvalue S_obj_read(sim_objref *ref, lexid varid);
+void *S_envp(sim *sim, lexid envid, gridpos pos);
+pvalue S_read_env(sim *sim, lexid envid, gridpos pos);
+void S_allocv(sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos);
+void S_allocvs(sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos);
+// TODO: S_deallocv
+void S_allocb(sim *sim, struct tvec *v, sim_objvec *vec, lexid varid);
+
+void S_savepoint(sim *sim);
+void S_restore(sim *sim);
+void S_enter(sim *sim);
+void S_exit(sim *sim);
+sim_branchid S_branch(sim *sim, size_t n, sim_branchid *branches);
+sim_branchid S_next_branch(sim *sim);

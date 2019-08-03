@@ -1,267 +1,363 @@
-#include "sim.h"
-#include "def.h"
-#include "list.h"
 #include "lex.h"
 #include "arena.h"
+#include "grid.h"
 #include "save.h"
-#include "bitmap.h"
+#include "list.h"
+#include "def.h"
+#include "sim.h"
 
+#include <stddef.h>
+#include <string.h>
 #include <stdlib.h>
 #include <stdalign.h>
-#include <string.h>
+#include <alloca.h>
 
-#define ALIGN_VECTOR M2_VECTOR_SIZE
+#define VEC_ALIGN M2_VECTOR_SIZE
 
-struct vec_upref {
-	sim_objref owner;
-	struct sim_vec *next;
+struct env {
+	type type;
+	size_t zoom_order;
+	gridpos zoom_mask;
+	struct grid grid;
 };
 
-struct sim_vec {
-	// could have objid/obj_def* here
-	size_t n_alloc;
-	size_t n_used;
-	struct sim_vec *next_root;
-	struct vec_upref *uprefs;
-	struct sim_vec ***downrefs;
-	void *vars[];
+struct branchinfo {
+	size_t nb;
+	size_t next;
+	sim_branchid ids[];
 };
 
 struct frame {
 	unsigned init : 1;
 	unsigned inside : 1; /* debug */
+
 	arena *arena;
 	save *save;
+	struct branchinfo *branches;
 };
 
-struct objinfo {
-	size_t *var_sizes;
+struct tmp_stackp {
+	struct tmp_stackp *prev;
+	arena_ptr ap;
 };
 
 struct sim {
-	// Use an arena for stuff with same lifetime as sim, just for convenience so deallocation
-	// doesn't become a huge ritual.
 	arena *static_arena;
-	struct lex *lex;
-	struct objinfo *objinfo;
-	struct sim_vec **rootvecs;
+
+	size_t n_obj;
+	struct grid *objs;
+	size_t n_env;
+	struct env *envs;
+
 	unsigned depth;
 	struct frame stack[SIM_MAX_DEPTH];
+
+	arena *tmp_arena;
+	struct tmp_stackp *tmp_sp;
 };
 
-static void init_objs(struct sim *sim);
-static void init_alloc_info(struct sim *sim, struct objinfo *oi, struct obj_def *obj);
-static void init_stack(struct sim *sim);
+static void init_objs(struct sim *sim, struct lex *lex);
+static void init_objgrid(struct sim *sim, struct grid *g, struct obj_def *obj);
+static void init_envs(struct sim *sim, struct lex *lex);
+static void init_envgrid(struct sim *sim, struct env *e, struct env_def *def);
+static void init_frame(struct sim *sim);
+
+static void create_savepoint(struct sim *sim, save *sp);
+static size_t next_cell_allocvs(struct sim *sim, struct grid *g, size_t n, gridpos *pos,
+		sim_objref *refs);
+
+static void v_ensure_cap(struct sim *sim, sim_objvec *v, size_t n);
+static size_t v_alloc(struct sim *sim, sim_objvec *v, size_t n);
 
 static void destroy_stack(struct sim *sim);
 
 static void f_init(struct frame *f);
 static void f_destroy(struct frame *f);
 static void f_enter(struct frame *f);
+static save *f_savepoint(struct frame *f);
+static void f_restore(struct frame *f);
+static void f_branch(struct frame *f, size_t n, sim_branchid *ids);
+static sim_branchid f_next_branch(struct frame *f);
 static void f_exit(struct frame *f);
 static void *f_alloc(struct frame *f, size_t size, size_t align);
-
-static void allocfv(struct sim *sim, void **vars, struct sim_vec ***downrefs, lexid objid,
-		size_t n);
-static struct sim_vec *findv(struct sim *sim, lexid objid, sim_objref *uprefs);
-static struct sim_vec *createv(struct sim *sim, lexid objid, sim_objref *uprefs, size_t n);
-static void insertv(struct sim *sim, struct sim_vec *vec, lexid objid, sim_objref *uprefs);
-static void resizev(struct sim *sim, struct sim_vec *vec, lexid objid, size_t n);
-static void ensurecapv(struct sim *sim, struct sim_vec *vec, lexid objid, size_t n);
-static void initslicev(struct sim *sim, struct sim_vec *vec, lexid objid, size_t from, size_t to);
-
-static void sp_savestate(struct sim *sim, save *save);
-static void sp_savev(struct sim *sim, save *save, struct sim_vec *vec, lexid objid);
 
 #define TOP(sim) (&((sim)->stack[(sim)->depth]))
 #define PREV(sim) (&((sim)->stack[(sim)->depth-1]))
 static void *static_malloc(struct sim *sim, size_t size);
-static int same_ref(sim_objref *a, sim_objref *b);
-static size_t nextvsize(size_t n);
+static int cmp_gridpos(const void *a, const void *b);
 
 struct sim *sim_create(struct lex *lex){
-	arena *static_arena = arena_create(1024);
+	arena *static_arena = arena_create(SIM_STATIC_ARENA_SIZE);
 	struct sim *sim = arena_malloc(static_arena, sizeof(*sim));
 	sim->static_arena = static_arena;
-	sim->lex = lex;
-	init_stack(sim);
-	init_objs(sim);
+	sim->tmp_arena = arena_create(SIM_TMP_ARENA_SIZE);
+	init_objs(sim, lex);
+	init_envs(sim, lex);
+	init_frame(sim);
 	return sim;
 }
 
 void sim_destroy(struct sim *sim){
 	destroy_stack(sim);
+	arena_destroy(sim->tmp_arena);
 	arena_destroy(sim->static_arena);
 }
 
-void *sim_alloc(struct sim *sim, size_t size, size_t align){
-	return f_alloc(TOP(sim), size, align);
+struct grid *sim_get_envgrid(struct sim *sim, lexid envid){
+	assert(envid < sim->n_env);
+	return &sim->envs[envid].grid;
 }
 
-void sim_allocv(struct sim *sim, sim_slice *pos, lexid objid, sim_objref *uprefs, size_t n){
-	struct sim_vec *vec = findv(sim, objid, uprefs);
+struct grid *sim_get_objgrid(sim *sim, lexid objid){
+	assert(objid < sim->n_obj);
+	return &sim->objs[objid];
+}
 
-	if(vec)
-		ensurecapv(sim, vec, objid, n);
+size_t sim_env_effective_order(struct sim *sim, lexid envid){
+	assert(envid < sim->n_env);
+	struct env *e = &sim->envs[envid];
+	return e->zoom_order ? e->zoom_order : e->grid.order;
+}
+
+void *S_obj_varp(sim_objref *ref, lexid varid){
+	struct tvec *v = &ref->vec->bands[varid];
+	return tvec_varp(v, ref->idx);
+}
+
+pvalue S_obj_read(sim_objref *ref, lexid varid){
+	return promote(S_obj_varp(ref, varid), ref->vec->bands[varid].type);
+}
+
+void *S_envp(struct sim *sim, lexid envid, gridpos pos){
+	struct env *e = &sim->envs[envid];
+
+	if(e->zoom_order)
+		pos = grid_zoom_up(pos & e->zoom_mask, POSITION_ORDER, e->zoom_order);
 	else
-		vec = createv(sim, objid, uprefs, n);
+		pos = grid_zoom_up(pos, POSITION_ORDER, e->grid.order);
 
-	initslicev(sim, vec, objid, vec->n_used, vec->n_used+n);
-
-	pos->vec = vec;
-	pos->from = vec->n_used;
-	pos->to = vec->n_used + n;
-	vec->n_used += n;
+	return grid_data(&e->grid, pos);
 }
 
-int sim_first(struct sim *sim, sim_iter *it, lexid objid, sim_objref *upref, int uprefidx){
-	struct sim_vec *v;
+pvalue S_read_env(struct sim *sim, lexid envid, gridpos pos){
+	return promote(S_envp(sim, envid, pos), sim->envs[envid].type);
+}
 
-	if(upref){
-		struct obj_def *obj = &sim->lex->objs.data[objid];
-		int backidx = obj->uprefs.data[uprefidx].back_idx;
-		v = upref->vec->downrefs[backidx][upref->idx];
-		while(v && !v->n_used)
-			v = v->uprefs[uprefidx].next;
-	}else{
-		v = sim->rootvecs[objid];
-		while(v && !v->n_used)
-			v = v->next_root;
-		uprefidx = -1;
+void S_allocv(struct sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos){
+	// NOTE: this modifies pos!
+	// TODO: a better sort here is a good idea
+	qsort(pos, n, sizeof(gridpos), cmp_gridpos);
+	S_allocvs(sim, refs, objid, n, pos);
+}
+
+void S_allocvs(struct sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos){
+	// entries going in the same cell are now guaranteed to be sequential due to Z-ordering
+	
+	struct grid *g = &sim->objs[objid];
+
+	while(n){
+		size_t nv = next_cell_allocvs(sim, g, n, pos, refs);
+		n -= nv;
+		pos += nv;
+		refs += nv;
 	}
-
-	if(!v)
-		return SIM_ITER_END;
-
-	it->ref.vec = v;
-	it->ref.idx = 0;
-	it->upref = uprefidx;
-
-	return SIM_ITER_NEXT;
 }
 
-int sim_next(sim_iter *it){
-	if(++it->ref.idx < it->ref.vec->n_used)
-		return SIM_ITER_NEXT;
-
-	struct sim_vec *v = it->ref.vec;
-
-	if(it->upref >= 0){
-		do {
-			v = v->uprefs[it->upref].next;
-		} while(v && !v->n_used);
-	}else{
-		do {
-			v = v->next_root;
-		} while(v && !v->n_used);
-	}
-
-	if(!v)
-		return SIM_ITER_END;
-
-	it->ref.vec = v;
-	it->ref.idx = 0;
-
-	return SIM_ITER_NEXT;
+// return a new simd aligned uninitialized band matching the specified band
+void S_allocb(struct sim *sim, struct tvec *v, sim_objvec *vec, lexid varid){
+	struct tvec *band = &vec->bands[varid];
+	v->type = band->type;
+	v->stride = band->stride;
+	v->data = f_alloc(TOP(sim), v->stride*vec->n_alloc, VEC_ALIGN);
 }
 
-struct sim_vec *sim_first_rv(struct sim *sim, lexid objid){
-	return sim->rootvecs[objid];
+void S_savepoint(struct sim *sim){
+	create_savepoint(sim, f_savepoint(TOP(sim)));
 }
 
-struct sim_vec *sim_next_rv(struct sim_vec *prev){
-	return prev->next_root;
+void S_restore(struct sim *sim){
+	f_restore(TOP(sim));
 }
 
-void sim_used(struct sim_vec *vec, sim_slice *slice){
-	slice->vec = vec;
-	slice->from = 0;
-	slice->to = vec->n_used;
-}
-
-void *sim_varp(struct sim *sim, sim_objref *ref, lexid objid, lexid varid){
-	struct objinfo *oi = &sim->objinfo[objid];
-	return ((char *) ref->vec->vars[varid]) + oi->var_sizes[varid]*ref->idx;
-}
-
-void *sim_varp_base(struct sim_vec *vec, lexid varid){
-	return vec->vars[varid];
-}
-
-pvalue sim_read1p(struct sim *sim, sim_objref *ref, lexid objid, lexid varid){
-	struct obj_def *obj = &sim->lex->objs.data[objid];
-	return promote(sim_varp(sim, ref, objid, varid), obj->vars.data[varid]->type);
-}
-
-void sim_write1p(struct sim *sim, sim_objref *ref, lexid objid, lexid varid, pvalue value){
-	struct obj_def *obj = &sim->lex->objs.data[objid];
-	demote(sim_varp(sim, ref, objid, varid), obj->vars.data[varid]->type, value);
-}
-
-sim_objref *sim_get_upref(struct sim_vec *vec, int uprefidx){
-	return &vec->uprefs[uprefidx].owner;
-}
-
-int sim_enter(struct sim *sim){
-	if(sim->depth+1 >= SIM_MAX_DEPTH)
-		return SIM_EDEPTH_LIMIT;
-
+void S_enter(struct sim *sim){
+	// TODO error handling
+	assert(sim->depth+1 < SIM_MAX_DEPTH);
 	sim->depth++;
-	struct frame *top = TOP(sim);
-	f_enter(top);
-
-	// save sim state as it was when we entered the frame,
-	// this can be restored by sim_rollback() as many times as the caller wants
-	top->save = save_create(top->arena);
-	sp_savestate(sim, top->save);
-
-	return SIM_OK;
+	f_enter(TOP(sim));
 }
 
-void sim_rollback(struct sim *sim){
-	save_rollback(TOP(sim)->save);
-}
-
-int sim_exit(struct sim *sim){
-	if(!sim->depth)
-		return SIM_EINVALID_FRAME;
-
+void S_exit(struct sim *sim){
+	assert(sim->depth > 0);
 	f_exit(TOP(sim));
 	sim->depth--;
-
-	return SIM_OK;
 }
 
-static void init_objs(struct sim *sim){
-	size_t nobj = sim->lex->objs.n;
+// Note: after calling this function, the only sim calls to this frame allowed are:
+// * calling S_next_branch() until it returns 0
+// * calling S_exit() to exit the frame
+sim_branchid S_branch(struct sim *sim, size_t n, sim_branchid *branches){
+	// TODO: logic concerning replaying simulations or specific branches goes here
+	// e.g. when replaying, only use 1 (or m for m<=n) branches
+	f_branch(TOP(sim), n, branches);
 
-	sim->objinfo = static_malloc(sim, nobj * sizeof(*sim->objinfo));
-	for(size_t i=0;i<nobj;i++)
-		init_alloc_info(sim, &sim->objinfo[i], &sim->lex->objs.data[i]);
+	// since simulating on this branch is forbidden now, we only need to make a savepoint
+	// if there are more than 1 branch (this state will be forgotten anyway by the relevant
+	// upper level branch anyway)
+	if(n > 1)
+		S_savepoint(sim);
 
-	sim->rootvecs = static_malloc(sim, nobj * sizeof(*sim->rootvecs));
-	memset(sim->rootvecs, 0, nobj * sizeof(*sim->rootvecs));
+	sim_branchid ret = f_next_branch(TOP(sim));
+	if(ret != SIM_NO_BRANCH)
+		S_enter(sim);
+
+	// TODO: forking could go here?
+	return ret;
 }
 
-static void init_alloc_info(struct sim *sim, struct objinfo *oi, struct obj_def *obj){
-	// TODO hot/cold attrs, const attrs?
-	// Note: this doesn't take into account alignment.
-	// alignment is currently handled automatically since each allocation count is
-	// a multiple of alignment
-	
-	size_t nvar = obj->vars.n;
-	oi->var_sizes = static_malloc(sim, nvar * sizeof(*oi->var_sizes));
+sim_branchid S_next_branch(struct sim *sim){
+	sim_branchid ret = f_next_branch(TOP(sim));
 
-	for(size_t i=0;i<nvar;i++){
-		const struct type_def *td = get_typedef(obj->vars.data[i]->type);
-		oi->var_sizes[i] = td->size;
+	if(ret != SIM_NO_BRANCH){
+		S_exit(sim);
+		S_restore(sim);
+		S_enter(sim);
 	}
+
+	return ret;
 }
 
-static void init_stack(struct sim *sim){
-	memset(sim->stack, 0, sizeof(struct frame) * SIM_MAX_DEPTH);
+static void init_objs(struct sim *sim, struct lex *lex){
+	sim->n_obj = VECN(lex->objs);
+	sim->objs = static_malloc(sim, sim->n_obj * sizeof(*sim->objs));
+	for(lexid i=0;i<sim->n_obj;i++)
+		init_objgrid(sim, &sim->objs[i], &VECE(lex->objs, i));
+}
+
+static void init_objgrid(struct sim *sim, struct grid *g, struct obj_def *obj){
+	size_t order = GRID_ORDER(obj->resolution);
+	size_t vecsize = sizeof(sim_objvec) + VECN(obj->vars)*sizeof(struct tvec);
+
+	sim_objvec *v = alloca(vecsize);
+	v->n_alloc = 0;
+	v->n_used = 0;
+	v->n_bands = VECN(obj->vars);
+
+	for(lexid i=0;i<VECN(obj->vars);i++){
+		struct var_def *var = &VECE(obj->vars, i);
+		struct tvec *band = &v->bands[i];
+		band->type = var->type;
+		band->stride = tsize(var->type);
+		band->data = NULL;
+	}
+
+	size_t gsize = grid_data_size(order, vecsize);
+	dv("obj grid[%s]: vec size=%zu (%zu bands), resolution=%zu (order %zu) grid size=%zu bytes\n",
+			obj->name, vecsize, VECN(obj->vars), obj->resolution, order, gsize);
+
+	void *data = static_malloc(sim, gsize);
+	grid_init(g, order, vecsize, data);
+
+	for(gridpos z=0;z<grid_max(order);z++)
+		memcpy(grid_data(g, z), v, vecsize);
+}
+
+static void init_envs(struct sim *sim, struct lex *lex){
+	sim->n_env = VECN(lex->envs);
+	sim->envs = static_malloc(sim, sim->n_env * sizeof(*sim->envs));
+	for(lexid i=0;i<sim->n_env;i++)
+		init_envgrid(sim, &sim->envs[i], &VECE(lex->envs, i));
+}
+
+static void init_envgrid(struct sim *sim, struct env *e, struct env_def *def){
+	size_t order = GRID_ORDER(def->resolution);
+	size_t stride = tsize(def->type);
+	size_t gsize = grid_data_size(order, stride);
+	dv("env grid[%s]: stride=%zu resolution=%zu (order %zu) grid size=%zu bytes\n",
+			def->name, stride, def->resolution, order, gsize);
+
+	e->type = def->type;
+	e->zoom_mask = ~0;
+	void *data = static_malloc(sim, gsize);
+	grid_init(&e->grid, order, stride, data);
+}
+
+static void init_frame(struct sim *sim){
 	sim->depth = 0;
 	f_enter(TOP(sim));
+}
+
+static void create_savepoint(struct sim *sim, save *sp){
+	// Note: this method only copies some data pointers, if you actually want to save
+	// stuff you need to either switch the data pointer or add the relevant vectors/grids
+	// to the save point
+	
+	// Copy vector headers for each object. The grid headers don't need to be copied
+	// because no one should ever change them
+	for(size_t i=0;i<sim->n_obj;i++){
+		struct grid *g = &sim->objs[i];
+		save_copy(sp, g->data, grid_data_size(g->order, g->stride));
+	}
+
+	// Env data pointers can be modified so save the grid headers
+	save_copy(sp, sim->envs, sim->n_env*sizeof(*sim->envs));
+}
+
+static size_t next_cell_allocvs(struct sim *sim, struct grid *g, size_t n, gridpos *pos,
+		sim_objref *refs){
+
+	gridpos vcell = grid_zoom_up(*pos, POSITION_ORDER, g->order);
+
+	size_t nv = 1;
+	// TODO this scan loop can be vectorized :>
+	while(grid_zoom_up(pos[nv], POSITION_ORDER, g->order) == vcell && nv<n)
+		nv++;
+
+	sim_objvec *v = grid_data(g, vcell);
+	size_t vpos = v_alloc(sim, v, nv);
+	void *varp = tvec_varp(&v->bands[VARID_POSITION], vpos);
+	memcpy(varp, pos, nv*sizeof(gridpos));
+
+	for(size_t i=0;i<nv;i++){
+		refs[i].vec = v;
+		refs[i].idx = vpos+i;
+	}
+
+	// TODO: could do some init here eg. zeroing/setting default values
+
+	return nv;
+}
+
+static void v_ensure_cap(struct sim *sim, sim_objvec *v, size_t n){
+	if(v->n_used + n <= v->n_alloc)
+		return;
+
+	size_t na = v->n_alloc;
+	if(!na)
+		na = SIM_INIT_VEC_SIZE;
+
+	while(na < n+v->n_used)
+		na <<= 1;
+
+	// frame-alloc new bands, no need to free old ones since they were frame-alloced as well
+	// NOTE: this will not work if we some day do interleaved bands!
+	for(size_t i=0;i<v->n_bands;i++){
+		struct tvec *b = &v->bands[i];
+		void *old_data = b->data;
+		b->data = f_alloc(TOP(sim), b->stride*na, VEC_ALIGN);
+		if(v->n_used)
+			memcpy(b->data, old_data, b->stride*v->n_used);
+	}
+
+	v->n_alloc = na;
+}
+
+static size_t v_alloc(struct sim *sim, sim_objvec *v, size_t n){
+	v_ensure_cap(sim, v, n);
+	size_t ret = v->n_used;
+	v->n_used += n;
+	dv("alloc %zu entries [%zu-%zu] on vector %p (%zu/%zu used)\n",
+			n, ret, v->n_used, v, v->n_used, v->n_alloc);
+	return ret;
 }
 
 static void destroy_stack(struct sim *sim){
@@ -279,13 +375,14 @@ static void f_init(struct frame *f){
 
 static void f_destroy(struct frame *f){
 	assert(f->init);
-	DD(f->init = 0);
 	arena_destroy(f->arena);
 }
 
 static void f_enter(struct frame *f){
 	assert(!f->inside);
-	DD(f->inside = 1);
+	f->inside = 1;
+	f->branches = NULL;
+	f->save = NULL;
 
 	if(!f->init)
 		f_init(f);
@@ -293,181 +390,50 @@ static void f_enter(struct frame *f){
 	arena_reset(f->arena);
 }
 
+static save *f_savepoint(struct frame *f){
+	assert(f->inside && !f->save);
+
+	f->save = save_create(f->arena);
+	return f->save;
+}
+
+static void f_restore(struct frame *f){
+	assert(f->inside && f->save);
+	save_rollback(f->save);
+}
+
+static void f_branch(struct frame *f, size_t n, sim_branchid *ids){
+	assert(f->inside && !f->branches);
+
+	f->branches = f_alloc(f, sizeof(*f->branches) + n*sizeof(sim_branchid), alignof(*f->branches));
+	f->branches->nb = n;
+	f->branches->next = 0;
+	memcpy(f->branches->ids, ids, n*sizeof(sim_branchid));
+}
+
+static sim_branchid f_next_branch(struct frame *f){
+	assert(f->inside && f->branches);
+
+	struct branchinfo *b = f->branches;
+	if(b->next < b->nb)
+		return b->ids[b->next++];
+
+	return SIM_NO_BRANCH;
+}
+
 static void f_exit(struct frame *f){
 	assert(f->inside);
-	DD(f->inside = 0);
+	f->inside = 0;
 }
 
 static void *f_alloc(struct frame *f, size_t size, size_t align){
 	return arena_alloc(f->arena, size, align);
 }
 
-static void allocfv(struct sim *sim, void **vars, struct sim_vec ***downrefs, lexid objid,
-		size_t n){
-
-	struct objinfo *oi = &sim->objinfo[objid];
-	struct obj_def *obj = &sim->lex->objs.data[objid];
-
-	for(size_t i=0;i<obj->vars.n;i++)
-		vars[i] = sim_alloc(sim, n*oi->var_sizes[i], ALIGN_VECTOR);
-
-	for(size_t i=0;i<obj->downrefs.n;i++)
-		downrefs[i] = sim_alloc(sim, n*sizeof(*downrefs), alignof(*downrefs));
-}
-
-static struct sim_vec *findv(struct sim *sim, lexid objid, sim_objref *uprefs){
-	struct obj_def *obj = &sim->lex->objs.data[objid];
-	size_t nup = obj->uprefs.n;
-
-	if(nup){
-		// has atleast one upref, find it by picking the first upref and following
-		// its vector list
-		int back_idx = obj->uprefs.data[0].back_idx;
-		struct sim_vec *v = uprefs[0].vec->downrefs[back_idx][uprefs[0].idx];
-
-		for(; v; v=v->uprefs[0].next){
-			// first ref is always same so we can check from 1
-			for(size_t i=1;i<nup;i++){
-				if(!same_ref(&v->uprefs[i].owner, &uprefs[i]))
-					continue;
-			}
-
-			return v;
-		}
-
-		return NULL;
-	}
-
-	// no uprefs, it has to be root
-	return sim->rootvecs[objid];
-}
-
-static struct sim_vec *createv(struct sim *sim, lexid objid, sim_objref *uprefs, size_t n){
-	struct obj_def *obj = &sim->lex->objs.data[objid];
-	struct sim_vec *ret = sim_alloc(sim, sizeof(*ret) + obj->vars.n*sizeof(void *), alignof(*ret));
-
-	size_t ndr = obj->downrefs.n;
-	if(ndr)
-		ret->downrefs = sim_alloc(sim, ndr*sizeof(*ret->downrefs), alignof(*ret->downrefs));
-
-	size_t nur = obj->uprefs.n;
-	if(nur)
-		ret->uprefs = sim_alloc(sim, nur*sizeof(*ret->uprefs), alignof(*ret->uprefs));
-	
-	n = nextvsize(n);
-	allocfv(sim, ret->vars, ret->downrefs, objid, n);
-	ret->n_alloc = n;
-	ret->n_used = 0;
-
-	insertv(sim, ret, objid, uprefs);
-
-	return ret;
-}
-
-static void insertv(struct sim *sim, struct sim_vec *vec, lexid objid, sim_objref *uprefs){
-	struct obj_def *obj = &sim->lex->objs.data[objid];
-
-	for(size_t i=0;i<obj->uprefs.n;i++){
-		struct obj_ref *r = &obj->uprefs.data[i];
-		struct sim_vec *tail = uprefs[i].vec->downrefs[r->back_idx][uprefs[i].idx];
-		vec->uprefs[i].next = tail;
-		vec->uprefs[i].owner = uprefs[i];
-		uprefs[i].vec->downrefs[r->back_idx][uprefs[i].idx] = vec;
-	}
-
-	vec->next_root = sim->rootvecs[objid];
-	sim->rootvecs[objid] = vec;
-}
-
-static void resizev(struct sim *sim, struct sim_vec *vec, lexid objid, size_t n){
-	struct obj_def *obj = &sim->lex->objs.data[objid];
-	struct objinfo *oi = &sim->objinfo[objid];
-	void *vars[obj->vars.n];
-	struct sim_vec **downrefs[obj->downrefs.n];
-	allocfv(sim, vars, downrefs, objid, n);
-
-	for(size_t i=0;i<obj->vars.n;i++)
-		memcpy(vars[i], vec->vars[i], vec->n_used*oi->var_sizes[i]);
-
-	for(size_t i=0;i<obj->downrefs.n;i++)
-		memcpy(downrefs[i], vec->downrefs[i], vec->n_used*sizeof(struct sim_vec *));
-
-	vec->n_alloc = n;
-	memcpy(vec->vars, vars, obj->vars.n*sizeof(*vec->vars));
-	memcpy(vec->downrefs, downrefs, obj->downrefs.n*sizeof(*vec->downrefs));
-}
-
-static void ensurecapv(struct sim *sim, struct sim_vec *vec, lexid objid, size_t n){
-	size_t need = vec->n_used + n;
-	if(vec->n_alloc >= need)
-		return;
-
-	size_t na = vec->n_alloc;
-	while(na < need)
-		na *= 2;
-
-	resizev(sim, vec, objid, na);
-}
-
-static void initslicev(struct sim *sim, struct sim_vec *vec, lexid objid, size_t from, size_t to){
-	struct obj_def *obj = &sim->lex->objs.data[objid];
-
-	for(size_t i=0;i<obj->downrefs.n;i++)
-		memset(&vec->downrefs[i][from], 0, (to-from)*sizeof(struct downref *));
-}
-
-static void sp_savestate(struct sim *sim, save *save){
-	// XXX: saving is currently implemented as recursively saving the whole sim state
-	// the sim could be a bit smarter about this, for example only saving the vector header
-	// and then saving the vector contents if they are changed before the next save point
-	
-	// most things in the sim struct (frame info, objinfo etc) don't need to be saved.
-	// just save vector headers and contents
-	
-	save_copy(save, sim->rootvecs, sim->lex->objs.n * sizeof(*sim->rootvecs));
-
-	for(lexid i=0;i<sim->lex->objs.n;i++){
-		for(struct sim_vec *v=sim->rootvecs[i]; v; v=v->next_root)
-			sp_savev(sim, save, v, i);
-	}
-}
-
-static void sp_savev(struct sim *sim, save *save, struct sim_vec *vec, lexid objid){
-	struct obj_def *obj = &sim->lex->objs.data[objid];
-
-	save_copy(save, vec, sizeof(*vec) + obj->vars.n*sizeof(void *));
-
-	if(obj->downrefs.n)
-		save_copy(save, vec->downrefs, obj->downrefs.n*sizeof(*vec->downrefs));
-
-	if(obj->uprefs.n)
-		save_copy(save, vec->uprefs, obj->uprefs.n*sizeof(*vec->uprefs));
-
-	if(!vec->n_used)
-		return;
-
-	struct objinfo *oi = &sim->objinfo[objid];
-
-	for(size_t i=0;i<obj->vars.n;i++)
-		save_copy(save, vec->vars[i], vec->n_used*oi->var_sizes[i]);
-
-	for(size_t i=0;i<obj->downrefs.n;i++)
-		save_copy(save, vec->downrefs[i], vec->n_used*sizeof(**vec->downrefs));
-}
-
 static void *static_malloc(struct sim *sim, size_t size){
 	return arena_malloc(sim->static_arena, size);
 }
 
-static int same_ref(sim_objref *a, sim_objref *b){
-	return a->vec == b->vec && a->idx == b->idx;
-}
-
-static size_t nextvsize(size_t n){
-	// round to next power of 2
-	// (there's probably a bit hack to do this but i assume gcc can optimize)
-	size_t ret = 1;
-	while(ret < n)
-		ret *= 2;
-	return ret;
+static int cmp_gridpos(const void *a, const void *b){
+	return *((gridpos *) a) - *((gridpos *) b);
 }

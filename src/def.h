@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <assert.h>
 #define dd(...) fprintf(stderr, __VA_ARGS__)
-#define dv(fmt, ...) dd("%s@%-20s" fmt, __FILE__, __func__, ##__VA_ARGS__)
+#define dv(fmt, ...) dd("(%-10s) %-20s" fmt, __FILE__, __func__, ##__VA_ARGS__)
 #define DD(x) x
 #define UNREACHABLE() assert(!"unreachable")
 
@@ -54,4 +54,19 @@
 // (these are allocated per stack level)
 #ifndef SIM_ARENA_SIZE
 #define SIM_ARENA_SIZE 8096
+#endif
+
+// size for initial chunk of static arena
+#ifndef SIM_STATIC_ARENA_SIZE
+#define SIM_STATIC_ARENA_SIZE (1 << 16)
+#endif
+
+// init vector size for sim object vectors
+#ifndef SIM_INIT_VEC_SIZE
+#define SIM_INIT_VEC_SIZE 128
+#endif
+
+// initial temp stack chunk size
+#ifndef SIM_TMP_ARENA_SIZE
+#define SIM_TMP_ARENA_SIZE 8096
 #endif

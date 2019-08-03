@@ -7,14 +7,14 @@
 
 #define BITMAP_OP(n, step)\
 	do{\
-		size_t vs = VS(n);\
+		size_t vs = BITMAP_SIZE(n);\
 		for(size_t i=0;i<vs;i++){\
 			step;\
 		}\
 	} while(0)
 
 bm8 *bm_alloc(size_t n){
-	return aligned_alloc(BITMAP_ALIGN, VS(n));
+	return aligned_alloc(BITMAP_ALIGN, BITMAP_SIZE(n));
 }
 
 void bm_free(bm8 *bm){
@@ -22,11 +22,11 @@ void bm_free(bm8 *bm){
 }
 
 void bm_zero(bm8 *bm, size_t n){
-	memset(bm, 0, VS(n));
+	memset(bm, 0, BITMAP_SIZE(n));
 }
 
 void bm_copy(bm8 *restrict a, const bm8 *restrict b, size_t n){
-	memcpy(a, b, VS(n));
+	memcpy(a, b, BITMAP_SIZE(n));
 }
 
 void bm_and(bm8 *bm, size_t n, uint8_t mask){

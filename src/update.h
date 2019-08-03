@@ -1,24 +1,21 @@
 #pragma once
 
-#include "sim.h"
 #include "fhk.h"
 #include "lex.h"
-#include "exec.h"
-#include "list.h"
 
-typedef struct ufhk ufhk;
+typedef struct ugraph ugraph;
 typedef struct uset uset;
 
-ufhk *ufhk_create(struct lex *lex);
-void ufhk_destroy(ufhk *u);
+ugraph *u_create(sim *sim, struct lex *lex, struct fhk_graph *G);
+void u_destroy(ugraph *u);
 
-void ufhk_set_var(ufhk *u, lexid varid, struct fhk_var *x);
-// void ufhk_set_virtual
-void ufhk_set_model(ufhk *u, const char *name, ex_func *f, struct fhk_model *m);
-void ufhk_set_graph(ufhk *u, struct fhk_graph *G);
+void u_link_var(ugraph *u, struct fhk_var *x, struct obj_def *obj, struct var_def *var);
+void u_link_env(ugraph *u, struct fhk_var *x, struct env_def *env);
+void u_link_computed(ugraph *u, struct fhk_var *x, const char *name);
+void u_link_model(ugraph *u, struct fhk_model *m, const char *name, ex_func *f);
 
-int ufhk_update(ufhk *u, uset *s, sim *sim);
-int ufhk_update_slice(ufhk *u, uset *s, sim_slice *slice);
-
-uset *uset_create(ufhk *u, lexid objid, size_t nvars, lexid *vars);
+uset *uset_create_vars(ugraph *u, lexid objid, size_t nv, lexid *varids);
+uset *uset_create_envs(ugraph *u, size_t nv, lexid *envids);
 void uset_destroy(uset *s);
+
+void uset_update(ugraph *u, uset *s);

@@ -6,7 +6,8 @@
 #include <stddef.h>
 #include <assert.h>
 
-#define BITMAP_ALIGN M2_VECTOR_SIZE
+#define BITMAP_ALIGN   M2_VECTOR_SIZE
+#define BITMAP_SIZE(n) VS(n)
 
 typedef uint8_t bm8 __attribute__((aligned(BITMAP_ALIGN)));
 

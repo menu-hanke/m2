@@ -1,6 +1,7 @@
 /* simple bump allocator */
 
 #include "def.h"
+#include "arena.h"
 
 #include <stdlib.h>
 #include <stdint.h>
@@ -20,6 +21,7 @@ struct arena {
 };
 
 static struct chunk *alloc_chunk(size_t size);
+static void reset_chunk(struct chunk *c);
 static void *bump(struct chunk *c, size_t size, size_t align);
 static void *bump_next_chunk(struct arena *arena, size_t size, size_t align);
 
@@ -46,10 +48,8 @@ void arena_destroy(struct arena *arena){
 }
 
 void arena_reset(struct arena *arena){
-	for(struct chunk *c=arena->first; c; c=c->next)
-		c->ptr = c->data;
-
 	arena->chunk = arena->first;
+	reset_chunk(arena->chunk);
 }
 
 void *arena_alloc(struct arena *arena, size_t size, size_t align){
@@ -65,13 +65,31 @@ void *arena_malloc(struct arena *arena, size_t size){
 	return arena_alloc(arena, size, alignof(max_align_t));
 }
 
+char *arena_salloc(struct arena *arena, size_t size){
+	return arena_alloc(arena, size, 1);
+}
+
+void arena_save(struct arena *arena, arena_ptr *p){
+	p->chunk = arena->chunk;
+	p->ptr = arena->chunk->ptr;
+}
+
+void arena_restore(struct arena *arena, arena_ptr *p){
+	arena->chunk = p->chunk;
+	arena->chunk->ptr = p->ptr;
+}
+
 static struct chunk *alloc_chunk(size_t size){
 	// TODO: this doesn't have to be backed by malloc, support other allocators if needed
 	struct chunk *ret = malloc(sizeof(*ret) + size);
 	ret->size = size;
-	ret->ptr = ret->data;
+	reset_chunk(ret);
 	dv("alloc chunk size=%zu\n", size);
 	return ret;
+}
+
+static void reset_chunk(struct chunk *c){
+	c->ptr = c->data;
 }
 
 static void *bump(struct chunk *c, size_t size, size_t align){
@@ -95,6 +113,7 @@ static void *bump_next_chunk(struct arena *arena, size_t size, size_t align){
 	while(c->next){
 		// find a preallocated chunk that fits?
 		c = c->next;
+		reset_chunk(c);
 		void *ret = bump(c, size, align);
 		if(ret){
 			arena->chunk = c;

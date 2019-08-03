@@ -1,354 +1,395 @@
-#include "sim.h"
 #include "fhk.h"
-#include "bitmap.h"
-#include "arena.h"
 #include "exec.h"
-#include "update.h"
+#include "arena.h"
+#include "sim.h"
+#include "def.h"
 
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
-// Note: gvar matches the fhk graph vars - multiple objects can point to this
-struct gvar {
-	struct fhk_var *x;
-	struct var_def *def;
+#define USET_ENVID (~0)
 
-	void *base;
-	size_t *pos;
-	size_t stride;
+enum {
+	V_VAR      = 0,
+	V_ENV      = 1,
+	V_COMPUTED = 2
 };
 
-struct gmodel {
-	const char *name;
+struct var {
+	int type;
+
+	union {
+		/* V_SIM */
+		struct {
+			struct var_def *vdef;
+			lexid objid;
+			lexid varid;
+		};
+
+		/* V_ENV */
+		struct {
+			struct env_def *edef;
+			lexid envid;
+		};
+
+		/* V_COMPUTED */
+		struct {
+			char *name;
+		};
+	};
+};
+
+struct model {
+	char *name;
 	ex_func *f;
 };
 
-struct gobj {
-	size_t pos;
-};
-
-struct ufhk {
+struct ugraph {
 	arena *arena;
+	sim *sim;
 	struct lex *lex;
-	// objs & vars indexed by lex id, map to fhk variables
-	struct gobj *objs;
-	struct gvar *vars;
 	struct fhk_graph *G;
+	struct fhk_var **envs;
+	struct fhk_var ***vars;
+
+	sim_objref u_objref;
 };
 
 struct uset {
-	lexid objid;
-	SVEC(lexid) vars;
 	bm8 *init_v;
 	bm8 *reset_v, *reset_m;
+	lexid objid;
+	size_t nv;
+	lexid varids[];
 };
 
-static void start_vec(struct ufhk *u, struct uset *s);
-static int update_slice(struct ufhk *u, struct uset *s, sim_slice *slice);
-static void activate(struct ufhk *u, sim_objref *ref, struct obj_def *obj);
-static void deactivate(struct ufhk *u, struct obj_def *obj);
+static void update_cell(struct ugraph *u, struct uset *s, gridpos cell);
 
-static void compute_init(struct ufhk *u, struct uset *s);
-static void init_given(struct ufhk *u, bm8 *init, struct obj_def *obj);
-static void compute_reset(struct ufhk *u, struct uset *s);
+static void s_vars_init(struct ugraph *u, struct uset *s);
+static void s_vars_reset(struct ugraph *u, struct uset *s);
+static void s_envs_init(struct ugraph *u, struct uset *s);
+static void s_envs_reset(struct ugraph *u, struct uset *s);
+static struct uset *s_create_uset(struct ugraph *u, size_t nv, lexid *varids);
 
-static int cb_model_exec(struct fhk_graph *G, void *udata, pvalue *ret, pvalue *args);
-static int cb_resolve_virtual(struct fhk_graph *G, void *udata, pvalue *value);
-static const char *cb_ddv(void *udata);
-static const char *cb_ddm(void *udata);
+static void mark_envs_given(struct ugraph *u, bm8 *bm);
 
-static void *gvar_varp(struct gvar *gv);
-static void gvar_reset(struct gvar *gv);
-static void gvar_init(struct gvar *gv, struct var_def *def);
+static int G_model_exec(struct fhk_graph *G, void *udata, pvalue *ret, pvalue *args);
+static int G_resolve_virtual(struct fhk_graph *G, void *udata, pvalue *value);
+static const char *G_ddv(void *udata);
+static const char *G_ddm(void *udata);
 
-static void init_objs(struct ufhk *u);
-static void init_vars(struct ufhk *u);
-
-struct ufhk *ufhk_create(struct lex *lex){
+struct ugraph *u_create(sim *sim, struct lex *lex, struct fhk_graph *G){
 	arena *arena = arena_create(1024);
-	struct ufhk *u = arena_malloc(arena, sizeof(*u));
-	u->lex = lex;
+	struct ugraph *u = arena_malloc(arena, sizeof(*u));
 	u->arena = arena;
-	init_objs(u);
-	init_vars(u);
+	u->sim = sim;
+	u->lex = lex;
+
+	u->envs = arena_malloc(arena, VECN(lex->envs)*sizeof(*u->envs));
+	memset(u->envs, 0, VECN(lex->envs)*sizeof(*u->envs));
+	u->vars = arena_malloc(arena, VECN(lex->objs)*sizeof(*u->vars));
+	for(lexid i=0;i<VECN(lex->objs);i++){
+		struct obj_def *obj = &VECE(lex->objs, i);
+		u->vars[i] = arena_malloc(arena, VECN(obj->vars)*sizeof(**u->vars));
+		memset(u->vars[i], 0, VECN(obj->vars)*sizeof(**u->vars));
+	}
+
+	u->G = G;
+	G->udata = u;
+	G->model_exec = G_model_exec;
+	G->resolve_virtual = G_resolve_virtual;
+	G->debug_desc_var = G_ddv;
+	G->debug_desc_model = G_ddm;
+
 	return u;
 }
 
-void ufhk_destroy(struct ufhk *u){
+void u_destroy(struct ugraph *u){
 	arena_destroy(u->arena);
 }
 
-void ufhk_set_var(struct ufhk *u, lexid varid, struct fhk_var *x){
-	struct gvar *gv = &u->vars[varid];
-	// XXX: array-backed variables should just be implemented in fhk.
+void u_link_var(struct ugraph *u, struct fhk_var *x, struct obj_def *obj, struct var_def *var){
+	struct var *v = arena_malloc(u->arena, sizeof(*v));
+	v->type = V_VAR;
+	v->vdef = var;
+	v->objid = obj->id;
+	v->varid = var->id;
+	x->udata = v;
 	x->is_virtual = 1;
-	gv->x = x;
-	x->udata = gv;
+	u->vars[obj->id][var->id] = x;
+	dv("fhk var[%d] = lex var[%d] %s of obj[%d] %s\n",
+			x->idx, var->id, var->name, obj->id, obj->name);
 }
 
-void ufhk_set_model(struct ufhk *u, const char *name, ex_func *f, struct fhk_model *m){
-	struct gmodel *gm = arena_malloc(u->arena, sizeof(*gm));
-	char *ncopy = arena_alloc(u->arena, strlen(name)+1, 1);
-	strcpy(ncopy, name);
-	gm->name = ncopy;
-	gm->f = f;
-	m->udata = gm;
+void u_link_env(struct ugraph *u, struct fhk_var *x, struct env_def *env){
+	struct var *v = arena_malloc(u->arena, sizeof(*v));
+	v->type = V_ENV;
+	v->edef = env;
+	v->envid = env->id;
+	x->udata = v;
+	x->is_virtual = 1;
+	u->envs[env->id] = x;
+	dv("fhk var[%d] = env[%d] %s\n", x->idx, env->id, env->name);
 }
 
-void ufhk_set_graph(struct ufhk *u, struct fhk_graph *G){
-	u->G = G;
-	G->udata = u;
-	G->model_exec = cb_model_exec;
-	G->resolve_virtual = cb_resolve_virtual;
-	G->debug_desc_var = cb_ddv;
-	G->debug_desc_model = cb_ddm;
+void u_link_computed(struct ugraph *u, struct fhk_var *x, const char *name){
+	struct var *v = arena_malloc(u->arena, sizeof(*v));
+	v->type = V_COMPUTED;
+	size_t namelen = strlen(name) + 1;
+	v->name = arena_salloc(u->arena, namelen);
+	memcpy(v->name, name, namelen);
+	x->udata = v;
+	x->is_virtual = 1;
+	dv("fhk var[%d] = computed %s\n", x->idx, name);
 }
 
-int ufhk_update(struct ufhk *u, struct uset *s, sim *sim){
-	int ret = 0;
-	sim_slice slice;
-
-	for(sim_vec *v=sim_first_rv(sim, s->objid); v; v=sim_next_rv(v)){
-		start_vec(u, s);
-		sim_used(v, &slice);
-		ret = update_slice(u, s, &slice);
-		
-		// TODO: see note on update_slice
-		if(ret)
-			break;
-	}
-
-	deactivate(u, &SVECE(u->lex->objs, s->objid));
-	return ret;
+void u_link_model(struct ugraph *u, struct fhk_model *m, const char *name, ex_func *f){
+	struct model *mdl = arena_malloc(u->arena, sizeof(*mdl));
+	size_t namelen = strlen(name) + 1;
+	mdl->name = arena_salloc(u->arena, namelen);
+	memcpy(mdl->name, name, namelen);
+	mdl->f = f;
+	m->udata = mdl;
+	dv("fhk model[%d] = model[%p] %s\n", m->idx, f, name);
 }
 
-int ufhk_update_slice(struct ufhk *u, struct uset *s, sim_slice *slice){
-	start_vec(u, s);
-	int ret = update_slice(u, s, slice);
-	deactivate(u, &SVECE(u->lex->objs, s->objid));
-	return ret;
-}
-
-struct uset *uset_create(struct ufhk *u, lexid objid, size_t nvars, lexid *vars){
-	// Allocate with malloc instead of arena because these can have a shorter life time
-	// than the updater (which generally lives through the whole program)
-	struct uset *s = malloc(sizeof(*s));
+struct uset *uset_create_vars(struct ugraph *u, lexid objid, size_t nv, lexid *varids){
+	struct uset *s = s_create_uset(u, nv, varids);
 	s->objid = objid;
-	s->vars.data = NULL;
-	SVEC_RESIZE(s->vars, nvars);
-	memcpy(s->vars.data, vars, nvars*sizeof(*vars));
-	s->init_v = bm_alloc(u->G->n_var);
-	s->reset_v = bm_alloc(u->G->n_var);
-	s->reset_m = bm_alloc(u->G->n_mod);
-	compute_init(u, s);
-	compute_reset(u, s);
+	s_vars_init(u, s);
+	s_vars_reset(u, s);
 	return s;
 }
 
-void uset_destroy(uset *s){
+struct uset *uset_create_envs(struct ugraph *u, size_t nv, lexid *envids){
+	struct uset *s = s_create_uset(u, nv, envids);
+	s->objid = USET_ENVID;
+	s_envs_init(u, s);
+	s_envs_reset(u, s);
+	return s;
+}
+
+void uset_destroy(struct uset *s){
 	bm_free(s->init_v);
 	bm_free(s->reset_v);
 	bm_free(s->reset_m);
-	free(s->vars.data);
 	free(s);
 }
 
-static void start_vec(struct ufhk *u, struct uset *s){
-	bm_copy((bm8 *) u->G->v_bitmaps, s->init_v, u->G->n_var);
-	bm_zero((bm8 *) u->G->m_bitmaps, u->G->n_mod);
+void uset_update(struct ugraph *u, struct uset *s){
+	struct grid *objgrid = sim_get_objgrid(u->sim, s->objid);
+	gridpos max = grid_max(objgrid->order);
+
+	for(gridpos i=0;i<max;i++)
+		update_cell(u, s, i);
 }
 
-static int update_slice(struct ufhk *u, struct uset *s, sim_slice *slice){
-	activate(u, (sim_objref *) slice, &SVECE(u->lex->objs, s->objid));
+static void update_cell(struct ugraph *u, struct uset *s, gridpos cell){
+	// TODO: update for envs, that should loop over gridpos instead of vector elements
 
-	struct obj_def *obj = &SVECE(u->lex->objs, s->objid);
-	struct gobj *go = &u->objs[s->objid];
+	struct grid *objgrid = sim_get_objgrid(u->sim, s->objid);
+	sim_objvec *v = grid_data(objgrid, cell);
 
-	for(go->pos=slice->from; go->pos<slice->to; go->pos++){
-		bm_and2((bm8 *) u->G->v_bitmaps, s->reset_v, u->G->n_var);
-		bm_and2((bm8 *) u->G->m_bitmaps, s->reset_m, u->G->n_mod);
+	if(!v->n_used)
+		return;
 
-		for(size_t i=0;i<s->vars.n;i++){
-			// XXX: If needed these varids can be precomputed in s
-			lexid varid = SVECE(obj->vars, SVECE(s->vars, i))->id;
-			struct gvar *gv = &u->vars[varid];
+	u->u_objref.vec = v;
 
-			// this will crash if someone wants to solve a variable that is not in the graph
-			// maybe we could just return an error code if gv->x == NULL
-			int res = fhk_solve(u->G, gv->x);
+	// (1) totally reset graph, this also sets the correct given/solve flags
+	struct fhk_graph *G = u->G;
+	bm_copy((bm8 *) G->v_bitmaps, s->init_v, G->n_var);
+	bm_zero((bm8 *) G->m_bitmaps, G->n_mod);
 
-			// TODO: this is not the right thing to do here since it stops all other objects
-			// after this from being updated. Maybe call an user-set error handler or return
-			// an error code if any errors occurred?
-			if(res != FHK_OK)
-				return res;
+	// (2) collect new vectors to put the results in, this is done for 2 reasons
+	//   - since we just change the pointer, the old data doesn't need to be copied to safety
+	//   - we avoid overwriting old data since that could in theory change the results of some models
+	size_t nv = s->nv;
+	struct tvec bands[nv];
+	for(size_t i=0;i<nv;i++)
+		S_allocb(u->sim, &bands[i], v, s->varids[i]);
 
-			demote(gvar_varp(gv), gv->def->type, gv->x->mark.value);
+	// (3) collect the fhk var pointers here since we are going to go over this array a lot
+	struct fhk_var *x[nv];
+	for(size_t i=0;i<nv;i++)
+		x[i] = u->vars[s->objid][s->varids[i]];
+
+	// (4) solve!
+	size_t n = v->n_used;
+	for(size_t i=0;i<n;i++){
+		bm_and2((bm8 *) G->v_bitmaps, s->reset_v, G->n_var);
+		bm_and2((bm8 *) G->m_bitmaps, s->reset_m, G->n_mod);
+		u->u_objref.idx = i;
+
+		for(size_t j=0;j<nv;j++){
+			int res = fhk_solve(G, x[j]);
+			assert(!res); // TODO error handling goes here
 		}
+
+		for(size_t j=0;j<nv;j++)
+			demote(tvec_varp(&bands[j], i), bands[j].type, x[j]->mark.value);
 	}
 
-	return 0;
+	// (5) replace only the changed pointers, the old data is safe generally in the previous
+	// branch arena
+	for(size_t i=0;i<nv;i++)
+		v->bands[s->varids[i]].data = bands[i].data;
 }
 
-static void activate(struct ufhk *u, sim_objref *ref, struct obj_def *obj){
-	// XXX: This could be optimized by only activating the set of variables possibly
-	// needed for calculating the requested variables. This set can be precomputed in ufhk_uset
-	// (See: fhk_supp)
-	// XXX: Another optimization is to only do this for shared variables
-	// (put void **base to gobj, point it at vector base, compute address from var index).
-	// Since there are only a few shared vars, this makes activation basically a loop over objids
-	
-	struct gobj *go = &u->objs[obj->id];
-	go->pos = ref->idx;
-
-	for(lexid i=0;i<obj->vars.n;i++){
-		lexid varid = SVECE(obj->vars, i)->id;
-		struct gvar *gv = &u->vars[varid];
-		gv->base = sim_varp_base(ref->vec, i);
-		gv->pos = &go->pos;
-	}
-
-	for(size_t i=0;i<obj->uprefs.n;i++){
-		sim_objref *up = sim_get_upref(ref->vec, i);
-		activate(u, up, SVECE(obj->uprefs, i).ref);
-	}
-}
-
-static void deactivate(struct ufhk *u, struct obj_def *obj){
-	// Not necessary but it's nice for debug purposes to crash rather than read garbage
-	for(lexid i=0;i<obj->vars.n;i++){
-		struct var_def *var = SVECE(obj->vars, i);
-		gvar_reset(&u->vars[var->id]);
-	}
-
-	for(size_t i=0;i<obj->uprefs.n;i++)
-		deactivate(u, SVECE(obj->uprefs, i).ref);
-}
-
-static void compute_init(struct ufhk *u, struct uset *s){
+static void s_vars_init(struct ugraph *u, struct uset *s){
 	size_t nv = u->G->n_var;
-
 	bm_zero(s->init_v, nv);
 
-	struct obj_def *obj = &SVECE(u->lex->objs, s->objid);
-	init_given(u, s->init_v, obj);
+	// envs are always given
+	mark_envs_given(u, s->init_v);
 
+	struct obj_def *obj = &VECE(u->lex->objs, s->objid);
+	fhk_vbmap given = { .given=1 };
 	fhk_vbmap solve = { .solve=1 };
 
-	// TODO: maybe return an error instead of crashing if x is null
-	for(size_t i=0;i<s->vars.n;i++){
-		lexid id = SVECE(obj->vars, SVECE(s->vars, i))->id;
-		struct fhk_var *x = u->vars[id].x;
+	// first set all vars on the object to given
+	for(lexid i=0;i<VECN(obj->vars);i++){
+		struct fhk_var *x = u->vars[s->objid][i];
+		if(x)
+			s->init_v[x->idx] = given.u8;
+	}
+
+	// then set the requested ones to solve
+	for(size_t i=0;i<s->nv;i++){
+		struct fhk_var *x = u->vars[s->objid][s->varids[i]];
 		s->init_v[x->idx] = solve.u8;
 	}
 }
 
-static void init_given(struct ufhk *u, bm8 *init, struct obj_def *obj){
-	fhk_vbmap given = { .given=1 };
-
-	for(lexid i=0;i<obj->vars.n;i++){
-		lexid id = SVECE(obj->vars, i)->id;
-		struct fhk_var *x = u->vars[id].x;
-		if(x)
-			init[x->idx] = given.u8;
-	}
-
-	for(size_t i=0;i<obj->uprefs.n;i++)
-		init_given(u, init, SVECE(obj->uprefs, i).ref);
-}
-
-static void compute_reset(struct ufhk *u, struct uset *s){
+static void s_vars_reset(struct ugraph *u, struct uset *s){
 	size_t nv = u->G->n_var;
 	size_t nm = u->G->n_mod;
 
 	bm_zero(s->reset_v, nv);
 	bm_zero(s->reset_m, nm);
 
-	struct obj_def *obj = &SVECE(u->lex->objs, s->objid);
-
-	struct fhk_var *vars[obj->vars.n];
-	size_t nx = 0;
-
-	// collect fhk variables corresponding to obj vars, note that not all of them
-	// are necessarily in the fhk graph
-	for(size_t i=0;i<obj->vars.n;i++){
-		lexid id = SVECE(obj->vars, i)->id;
-		struct fhk_var *x = u->vars[id].x;
+	// each iteration the following is reset:
+	// (1) all object variables
+	// (2) envs with a smaller grid than the object grid
+	// (3) everything depending on (1) & (2), above the requested vars
+	
+	// (1)
+	struct obj_def *obj = &VECE(u->lex->objs, s->objid);
+	for(lexid i=0;i<VECN(obj->vars);i++){
+		struct fhk_var *x = u->vars[s->objid][i];
 		if(x)
-			vars[nx++] = x;
+			s->reset_v[x->idx] = 0xff;
 	}
 
-	for(size_t i=0;i<nx;i++)
-		s->reset_v[vars[i]->idx] = 0xff;
+	// (2)
+	size_t order = sim_get_objgrid(u->sim, s->objid)->order;
+	for(lexid i=0;i<VECN(u->lex->envs);i++){
+		// Note: if the zoom is changed this mask needs to be recalculated (TODO)
+		struct fhk_var *x = u->envs[i];
+		if(x){
+			size_t xord = sim_env_effective_order(u->sim, i);
+			if(xord > order)
+				s->reset_v[x->idx] = 0xff;
+		}
+	}
 
-	for(size_t i=0;i<nx;i++)
-		fhk_inv_sup(u->G, s->reset_v, s->reset_v, vars[i]);
+	// (3)
+	// zero the relevant indices first, fhk_inv_supp will set them
+	for(size_t i=0;i<s->nv;i++){
+		struct fhk_var *x = u->vars[s->objid][s->varids[i]];
+		s->reset_v[x->idx] = 0;
+	}
+	for(size_t i=0;i<s->nv;i++){
+		struct fhk_var *x = u->vars[s->objid][s->varids[i]];
+		fhk_inv_supp(u->G, s->reset_v, s->reset_m, x);
+	}
 
-	// mask now contains each variable(/model) that can possibly change when iterating over obj,
-	// negate it to get a mask that resets everything that can change
+	// now each thing to reset is marked with 0xff, but we want to mask them out so negate them
 	bm_not(s->reset_v, nv);
 	bm_not(s->reset_m, nm);
 
-	// don't change given or solve bits for any variable
-	// TODO: constant like FHK_SOLVER_BITS for mask that the solver changes?
-	fhk_vbmap m = { .given=1, .solve=1 };
-	bm_or(s->reset_v, nv, m.u8);
+	// finally, don't mask out given and solve bits
+	fhk_vbmap keep = { .given=1, .solve=1 };
+	bm_or(s->reset_v, nv, keep.u8);
 }
 
-static int cb_model_exec(struct fhk_graph *G, void *udata, pvalue *ret, pvalue *args){
-	(void)G;
-
-	ex_func *f = ((struct gmodel *) udata)->f;
-	return ex_exec(f, ret, args);
+static void s_envs_init(struct ugraph *u, struct uset *s){
+	(void)u;
+	(void)s;
+	assert(!"TODO");
 }
 
-static int cb_resolve_virtual(struct fhk_graph *G, void *udata, pvalue *value){
+static void s_envs_reset(struct ugraph *u, struct uset *s){
+	(void)u;
+	(void)s;
+	assert(!"TODO");
+}
+
+static struct uset *s_create_uset(struct ugraph *u, size_t nv, lexid *varids){
+	// use malloc here instead of arena since uset lifetime can be shorter than ugraph
+	struct uset *s = malloc(sizeof(*s) + nv*sizeof(lexid));
+	s->nv = nv;
+	memcpy(s->varids, varids, nv*sizeof(*varids));
+	s->init_v = bm_alloc(u->G->n_var);
+	s->reset_v = bm_alloc(u->G->n_var);
+	s->reset_m = bm_alloc(u->G->n_mod);
+	return s;
+}
+
+static void mark_envs_given(struct ugraph *u, bm8 *bm){
+	fhk_vbmap given = { .given=1 };
+
+	for(lexid i=0;i<VECN(u->lex->envs);i++){
+		struct fhk_var *x = u->envs[i];
+		if(x)
+			bm[x->idx] = given.u8;
+	}
+}
+
+static int G_model_exec(struct fhk_graph *G, void *udata, pvalue *ret, pvalue *args){
 	(void)G;
 
-	struct gvar *gv = udata;
-	*value = promote(gvar_varp(gv), gv->def->type);
+	struct model *m = udata;
+	return ex_exec(m->f, ret, args);
+}
+
+static int G_resolve_virtual(struct fhk_graph *G, void *udata, pvalue *value){
+	struct ugraph *u = G->udata;
+	struct var *v = udata;
+	
+	switch(v->type){
+		case V_VAR: 
+			*value = S_obj_read(&u->u_objref, v->varid);
+			break;
+
+		case V_ENV: {
+			gridpos pos = S_obj_read(&u->u_objref, VARID_POSITION).p;
+			*value = S_read_env(u->sim, v->envid, pos);
+			break;
+		}
+
+		default: UNREACHABLE();
+	}
+
 	return FHK_OK;
 }
 
-static const char *cb_ddv(void *udata){
-	// computed vars etc. will not have udata set
-	// we could just add names for them but this is only used for debug
-	if(!udata)
-		return "(computed)";
+static const char *G_ddv(void *udata){
+	struct var *v = udata;
 
-	return ((struct gvar *) udata)->def->name;
+	switch(v->type){
+		case V_VAR:
+			return v->vdef->name;
+		case V_ENV:
+			return v->edef->name;
+		case V_COMPUTED:
+			return v->name;
+	}
+
+	UNREACHABLE();
 }
 
-static const char *cb_ddm(void *udata){
-	return ((struct gmodel *) udata)->name;
-}
-
-static void *gvar_varp(struct gvar *gv){
-	return ((char *) gv->base) + (*gv->pos)*gv->stride;
-}
-
-static void gvar_reset(struct gvar *gv){
-	gv->base = NULL;
-	gv->pos = NULL;
-}
-
-static void gvar_init(struct gvar *gv, struct var_def *def){
-	gvar_reset(gv);
-	gv->x = NULL;
-	gv->def = def;
-	const struct type_def *td = get_typedef(def->type);
-	gv->stride = td->size;
-}
-
-static void init_objs(struct ufhk *u){
-	size_t nobj = u->lex->objs.n;
-	u->objs = arena_malloc(u->arena, nobj * sizeof(*u->objs));
-}
-
-static void init_vars(struct ufhk *u){
-	size_t nvar = u->lex->vars.n;
-
-	u->vars = arena_malloc(u->arena, nvar * sizeof(*u->vars));
-	for(lexid i=0;i<nvar;i++)
-		gvar_init(&u->vars[i], &SVECE(u->lex->vars, i));
+static const char *G_ddm(void *udata){
+	struct model *m = udata;
+	return m->name;
 }
