@@ -17,13 +17,6 @@
 static_assert((SIM_INIT_VEC_SIZE % M2_VECTOR_SIZE) == 0);
 static_assert((SIM_MAX_VAR % (8*BITMAP_ALIGN)) == 0);
 
-struct env {
-	type type;
-	size_t zoom_order;
-	gridpos zoom_mask;
-	struct grid grid;
-};
-
 struct branchinfo {
 	size_t nb;
 	size_t next;
@@ -50,7 +43,7 @@ struct sim {
 	size_t n_obj;
 	struct grid *objs;
 	size_t n_env;
-	struct env *envs;
+	sim_env *envs;
 
 	unsigned depth;
 	struct frame stack[SIM_MAX_DEPTH];
@@ -63,14 +56,16 @@ struct sim {
 static void init_objs(struct sim *sim, struct lex *lex);
 static void init_objgrid(struct sim *sim, struct grid *g, struct obj_def *obj);
 static void init_envs(struct sim *sim, struct lex *lex);
-static void init_envgrid(struct sim *sim, struct env *e, struct env_def *def);
+static void init_envgrid(struct sim *sim, sim_env *e, struct env_def *def);
 static void init_frame(struct sim *sim);
 
 static void create_savepoint(struct sim *sim, save *sp);
 static size_t next_cell_allocvs(struct sim *sim, struct grid *g, size_t n, gridpos *pos,
 		sim_objref *refs);
-static size_t next_cell_deletevs(struct sim *sim, struct grid *g, size_t n, sim_objref *refs);
+static size_t next_cell_deletevs(size_t n, sim_objref *refs);
 
+static void v_check_ref(sim_objref *ref);
+static struct tvec *v_check_band(sim_objvec *v, lexid varid);
 static void v_ensure_cap(struct sim *sim, sim_objvec *v, size_t n);
 static size_t v_alloc(struct sim *sim, sim_objvec *v, size_t n);
 
@@ -109,9 +104,37 @@ void sim_destroy(struct sim *sim){
 	arena_destroy(sim->static_arena);
 }
 
-struct grid *sim_get_envgrid(struct sim *sim, lexid envid){
+sim_env *sim_get_env(struct sim *sim, lexid envid){
 	assert(envid < sim->n_env);
-	return &sim->envs[envid].grid;
+	return &sim->envs[envid];
+}
+
+void sim_env_pvec(struct pvec *v, sim_env *e){
+	v->type = e->type;
+	v->n = grid_max(e->grid.order);
+	v->data = e->grid.data;
+}
+
+void sim_env_swap(sim_env *e, void *data){
+	e->grid.data = data;
+}
+
+size_t sim_env_orderz(sim_env *e){
+	return e->zoom_order ? e->zoom_order : e->grid.order;
+}
+
+gridpos sim_env_posz(sim_env *e, gridpos pos){
+	if(e->zoom_order)
+		pos = grid_zoom_up(pos & e->zoom_mask, POSITION_ORDER, e->zoom_order);
+	else
+		pos = grid_zoom_up(pos, POSITION_ORDER, e->grid.order);
+
+	return pos;
+}
+
+pvalue sim_env_readpos(sim_env *e, gridpos pos){
+	pos = sim_env_posz(e, pos);
+	return promote(grid_data(&e->grid, pos), e->type);
 }
 
 struct grid *sim_get_objgrid(sim *sim, lexid objid){
@@ -119,51 +142,38 @@ struct grid *sim_get_objgrid(sim *sim, lexid objid){
 	return &sim->objs[objid];
 }
 
-size_t sim_env_effective_order(struct sim *sim, lexid envid){
-	assert(envid < sim->n_env);
-	struct env *e = &sim->envs[envid];
-	return e->zoom_order ? e->zoom_order : e->grid.order;
+void sim_obj_pvec(struct pvec *v, sim_objvec *vec, lexid varid){
+	struct tvec *band = v_check_band(vec, varid);
+	v->type = band->type;
+	v->n = vec->n_used;
+	v->data = band->data;
 }
 
-void *S_obj_varp(sim_objref *ref, lexid varid){
-	struct tvec *v = &ref->vec->bands[varid];
-	return tvec_varp(v, ref->idx);
+void sim_obj_swap(sim_objvec *vec, lexid varid, void *data){
+	struct tvec *band = v_check_band(vec, varid);
+	band->data = data;
 }
 
-pvalue S_obj_read(sim_objref *ref, lexid varid){
-	return promote(S_obj_varp(ref, varid), ref->vec->bands[varid].type);
+pvalue sim_obj_read1(sim_objref *ref, lexid varid){
+	v_check_ref(ref);
+	struct tvec *band = v_check_band(ref->vec, varid);
+	return promote(tvec_varp(band, ref->idx), band->type);
 }
 
-void *S_envp(struct sim *sim, lexid envid, gridpos pos){
-	struct env *e = &sim->envs[envid];
-
-	if(e->zoom_order)
-		pos = grid_zoom_up(pos & e->zoom_mask, POSITION_ORDER, e->zoom_order);
-	else
-		pos = grid_zoom_up(pos, POSITION_ORDER, e->grid.order);
-
-	return grid_data(&e->grid, pos);
+void sim_obj_write1(sim_objref *ref, lexid varid, pvalue value){
+	v_check_ref(ref);
+	struct tvec *band = v_check_band(ref->vec, varid);
+	demote(tvec_varp(band, ref->idx), band->type, value);
 }
 
-pvalue S_read_env(struct sim *sim, lexid envid, gridpos pos){
-	return promote(S_envp(sim, envid, pos), sim->envs[envid].type);
-}
-
-void S_env_vec(struct sim *sim, struct pvec *v, lexid envid){
-	struct env *e = &sim->envs[envid];
-	v->type = e->type;
-	v->n = grid_max(e->grid.order);
-	v->data = e->grid.data;
-}
-
-void S_allocv(struct sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos){
+void sim_allocv(struct sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos){
 	// NOTE: this modifies pos!
 	// TODO: a better sort here is a good idea
 	qsort(pos, n, sizeof(gridpos), cmp_gridpos);
-	S_allocvs(sim, refs, objid, n, pos);
+	sim_allocvs(sim, refs, objid, n, pos);
 }
 
-void S_allocvs(struct sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos){
+void sim_allocvs(struct sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos){
 	// entries going in the same cell are now guaranteed to be sequential due to Z-ordering
 	
 	struct grid *g = &sim->objs[objid];
@@ -176,57 +186,61 @@ void S_allocvs(struct sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos
 	}
 }
 
-void S_deletev(struct sim *sim, lexid objid, size_t n, sim_objref *refs){
+void sim_deletev(size_t n, sim_objref *refs){
 	// same as allocv, a better sort here would be good
 	// (though this function is probably called less often since objects can be just left
 	// to die with the branch)
 	qsort(refs, n, sizeof(*refs), cmp_objref);
-	S_deletevs(sim, objid, n, refs);
+	sim_deletevs(n, refs);
 }
 
-void S_deletevs(struct sim *sim, lexid objid, size_t n, sim_objref *refs){
-	struct grid *g = &sim->objs[objid];
-
+void sim_deletevs(size_t n, sim_objref *refs){
 	while(n){
-		size_t nv = next_cell_deletevs(sim, g, n, refs);
+		size_t nv = next_cell_deletevs(n, refs);
 		n -= nv;
 		refs += nv;
 	}
 }
 
-// return a new simd aligned uninitialized band matching the specified band
-void S_allocb(struct sim *sim, struct tvec *v, sim_objvec *vec, lexid varid){
-	struct tvec *band = &vec->bands[varid];
-	v->type = band->type;
-	v->stride = band->stride;
-	v->data = f_alloc(TOP(sim), v->stride*vec->n_alloc, VEC_ALIGN);
+void *sim_frame_alloc(struct sim *sim, size_t sz, size_t align){
+	return f_alloc(TOP(sim), sz, align);
 }
 
-void S_savepoint(struct sim *sim){
+void *sim_alloc_band(struct sim *sim, sim_objvec *vec, lexid varid){
+	struct tvec *band = v_check_band(vec, varid);
+	return sim_frame_alloc(sim, band->stride*vec->n_alloc, VEC_ALIGN);
+}
+
+void *sim_alloc_env(struct sim *sim, sim_env *e){
+	struct grid *g = &e->grid;
+	return sim_frame_alloc(sim, grid_data_size(g->order, g->stride), VEC_ALIGN);
+}
+
+void sim_savepoint(struct sim *sim){
 	create_savepoint(sim, f_savepoint(TOP(sim)));
 }
 
-void S_restore(struct sim *sim){
+void sim_restore(struct sim *sim){
 	f_restore(TOP(sim));
 }
 
-void S_enter(struct sim *sim){
+void sim_enter(struct sim *sim){
 	// TODO error handling
 	assert(sim->depth+1 < SIM_MAX_DEPTH);
 	sim->depth++;
 	f_enter(TOP(sim));
 }
 
-void S_exit(struct sim *sim){
+void sim_exit(struct sim *sim){
 	assert(sim->depth > 0);
 	f_exit(TOP(sim));
 	sim->depth--;
 }
 
 // Note: after calling this function, the only sim calls to this frame allowed are:
-// * calling S_next_branch() until it returns 0
-// * calling S_exit() to exit the frame
-sim_branchid S_branch(struct sim *sim, size_t n, sim_branchid *branches){
+// * calling sim_next_branch() until it returns 0
+// * calling sim_exit() to exit the frame
+sim_branchid sim_branch(struct sim *sim, size_t n, sim_branchid *branches){
 	// TODO: logic concerning replaying simulations or specific branches goes here
 	// e.g. when replaying, only use 1 (or m for m<=n) branches
 	f_branch(TOP(sim), n, branches);
@@ -235,23 +249,23 @@ sim_branchid S_branch(struct sim *sim, size_t n, sim_branchid *branches){
 	// if there are more than 1 branch (this state will be forgotten anyway by the relevant
 	// upper level branch anyway)
 	if(n > 1)
-		S_savepoint(sim);
+		sim_savepoint(sim);
 
 	sim_branchid ret = f_next_branch(TOP(sim));
 	if(ret != SIM_NO_BRANCH)
-		S_enter(sim);
+		sim_enter(sim);
 
 	// TODO: forking could go here?
 	return ret;
 }
 
-sim_branchid S_next_branch(struct sim *sim){
+sim_branchid sim_next_branch(struct sim *sim){
 	sim_branchid ret = f_next_branch(TOP(sim));
 
 	if(ret != SIM_NO_BRANCH){
-		S_exit(sim);
-		S_restore(sim);
-		S_enter(sim);
+		sim_exit(sim);
+		sim_restore(sim);
+		sim_enter(sim);
 	}
 
 	return ret;
@@ -299,7 +313,7 @@ static void init_envs(struct sim *sim, struct lex *lex){
 		init_envgrid(sim, &sim->envs[i], &VECE(lex->envs, i));
 }
 
-static void init_envgrid(struct sim *sim, struct env *e, struct env_def *def){
+static void init_envgrid(struct sim *sim, sim_env *e, struct env_def *def){
 	size_t order = GRID_ORDER(def->resolution);
 	size_t stride = tsize(def->type);
 	size_t gsize = grid_data_size(order, stride);
@@ -362,7 +376,7 @@ static size_t next_cell_allocvs(struct sim *sim, struct grid *g, size_t n, gridp
 	return nv;
 }
 
-static size_t next_cell_deletevs(struct sim *sim, struct grid *g, size_t n, sim_objref *refs){
+static size_t next_cell_deletevs(size_t n, sim_objref *refs){
 	// There are a few possibilities for implementing deletion:
 	// (a) mark objects "dead" in a bitmap
 	//   + fast and simple
@@ -486,6 +500,15 @@ static size_t next_cell_deletevs(struct sim *sim, struct grid *g, size_t n, sim_
 	v->n_used -= nd;
 
 	return nd;
+}
+
+static void v_check_ref(sim_objref *ref){
+	assert(ref->idx < ref->vec->n_used);
+}
+
+static struct tvec *v_check_band(sim_objvec *v, lexid varid){
+	assert(varid < v->n_bands);
+	return &v->bands[varid];
 }
 
 static void v_ensure_cap(struct sim *sim, sim_objvec *v, size_t n){

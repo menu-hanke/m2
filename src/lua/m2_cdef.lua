@@ -80,7 +80,7 @@ typedef union pvalue {
 
 struct tvec {
  type type;
- size_t stride;
+ unsigned stride;
  void *data;
 };
 struct pvec {
@@ -129,6 +129,12 @@ void *tvec_varp(struct tvec *v, size_t p);
        
 typedef struct sim sim;
 typedef uint64_t sim_branchid;
+typedef struct sim_env {
+ type type;
+ size_t zoom_order;
+ gridpos zoom_mask;
+ struct grid grid;
+} sim_env;
 typedef struct sim_objvec {
  unsigned n_alloc;
  unsigned n_used;
@@ -141,25 +147,30 @@ typedef struct sim_objref {
 } sim_objref;
 sim *sim_create(struct lex *lex);
 void sim_destroy(sim *sim);
-struct grid *sim_get_envgrid(sim *sim, lexid envid);
+sim_env *sim_get_env(sim *sim, lexid envid);
+void sim_env_pvec(struct pvec *v, sim_env *e);
+void sim_env_swap(sim_env *e, void *data);
+size_t sim_env_orderz(sim_env *e);
+gridpos sim_env_posz(sim_env *e, gridpos pos);
+pvalue sim_env_readpos(sim_env *e, gridpos pos);
 struct grid *sim_get_objgrid(sim *sim, lexid objid);
-size_t sim_env_effective_order(sim *sim, lexid envid);
-void *S_obj_varp(sim_objref *ref, lexid varid);
-pvalue S_obj_read(sim_objref *ref, lexid varid);
-void *S_envp(sim *sim, lexid envid, gridpos pos);
-pvalue S_read_env(sim *sim, lexid envid, gridpos pos);
-void S_env_vec(sim *sim, struct pvec *v, lexid envid);
-void S_allocv(sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos);
-void S_allocvs(sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos);
-void S_deletev(sim *sim, lexid objid, size_t n, sim_objref *refs);
-void S_deletevs(sim *sim, lexid objid, size_t n, sim_objref *refs);
-void S_allocb(sim *sim, struct tvec *v, sim_objvec *vec, lexid varid);
-void S_savepoint(sim *sim);
-void S_restore(sim *sim);
-void S_enter(sim *sim);
-void S_exit(sim *sim);
-sim_branchid S_branch(sim *sim, size_t n, sim_branchid *branches);
-sim_branchid S_next_branch(sim *sim);
+void sim_obj_pvec(struct pvec *v, sim_objvec *vec, lexid varid);
+void sim_obj_swap(sim_objvec *vec, lexid varid, void *data);
+pvalue sim_obj_read1(sim_objref *ref, lexid varid);
+void sim_obj_write1(sim_objref *ref, lexid varid, pvalue value);
+void sim_allocv(sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos);
+void sim_allocvs(sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos);
+void sim_deletev(size_t n, sim_objref *refs);
+void sim_deletevs(size_t n, sim_objref *refs);
+void *sim_frame_alloc(sim *sim, size_t sz, size_t align);
+void *sim_alloc_band(sim *sim, sim_objvec *vec, lexid varid);
+void *sim_alloc_env(sim *sim, sim_env *e);
+void sim_savepoint(sim *sim);
+void sim_restore(sim *sim);
+void sim_enter(sim *sim);
+void sim_exit(sim *sim);
+sim_branchid sim_branch(sim *sim, size_t n, sim_branchid *branches);
+sim_branchid sim_next_branch(sim *sim);
        
 enum fhk_ctype {
  FHK_RIVAL,
@@ -315,6 +326,7 @@ void uset_update(ugraph *u, uset *s);
        
 typedef float vf32 __attribute__((aligned(16)));
 typedef double vf64 __attribute__((aligned(16)));
-void vadd_f64(vf64 *a, size_t n, double c);
-void vadd2_f64(vf64 *restrict a, const vf64 *restrict b, size_t n);
+void vset_f64(vf64 *d, double c, size_t n);
+void vadd_f64s(vf64 *d, vf64 *a, double c, size_t n);
+void vadd_f64v(vf64 *d, vf64 *a, const vf64 *restrict b, size_t n);
 ]]

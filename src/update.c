@@ -23,14 +23,13 @@ struct var {
 		/* V_SIM */
 		struct {
 			struct var_def *vdef;
-			lexid objid;
 			lexid varid;
 		};
 
 		/* V_ENV */
 		struct {
 			struct env_def *edef;
-			lexid envid;
+			sim_env *senv;
 		};
 
 		/* V_COMPUTED */
@@ -113,7 +112,6 @@ void u_link_var(struct ugraph *u, struct fhk_var *x, struct obj_def *obj, struct
 	struct var *v = arena_malloc(u->arena, sizeof(*v));
 	v->type = V_VAR;
 	v->vdef = var;
-	v->objid = obj->id;
 	v->varid = var->id;
 	x->udata = v;
 	x->is_virtual = 1;
@@ -126,7 +124,7 @@ void u_link_env(struct ugraph *u, struct fhk_var *x, struct env_def *env){
 	struct var *v = arena_malloc(u->arena, sizeof(*v));
 	v->type = V_ENV;
 	v->edef = env;
-	v->envid = env->id;
+	v->senv = sim_get_env(u->sim, env->id);
 	x->udata = v;
 	x->is_virtual = 1;
 	u->envs[env->id] = x;
@@ -206,8 +204,12 @@ static void update_cell(struct ugraph *u, struct uset *s, gridpos cell){
 	//   - we avoid overwriting old data since that could in theory change the results of some models
 	size_t nv = s->nv;
 	struct tvec bands[nv];
-	for(size_t i=0;i<nv;i++)
-		S_allocb(u->sim, &bands[i], v, s->varids[i]);
+	for(size_t i=0;i<nv;i++){
+		lexid varid = s->varids[i];
+		bands[i].type = v->bands[varid].type;
+		bands[i].stride = v->bands[varid].stride;
+		bands[i].data = sim_alloc_band(u->sim, v, varid);
+	}
 
 	// (3) collect the fhk var pointers here since we are going to go over this array a lot
 	struct fhk_var *x[nv];
@@ -233,7 +235,7 @@ static void update_cell(struct ugraph *u, struct uset *s, gridpos cell){
 	// (5) replace only the changed pointers, the old data is safe generally in the previous
 	// branch arena
 	for(size_t i=0;i<nv;i++)
-		v->bands[s->varids[i]].data = bands[i].data;
+		sim_obj_swap(v, s->varids[i], bands[i].data);
 }
 
 static void s_vars_init(struct ugraph *u, struct uset *s){
@@ -287,7 +289,7 @@ static void s_vars_reset(struct ugraph *u, struct uset *s){
 		// Note: if the zoom is changed this mask needs to be recalculated (TODO)
 		struct fhk_var *x = u->envs[i];
 		if(x){
-			size_t xord = sim_env_effective_order(u->sim, i);
+			size_t xord = sim_env_orderz(sim_get_env(u->sim, i));
 			if(xord > order)
 				s->reset_v[x->idx] = 0xff;
 		}
@@ -359,12 +361,12 @@ static int G_resolve_virtual(struct fhk_graph *G, void *udata, pvalue *value){
 	
 	switch(v->type){
 		case V_VAR: 
-			*value = S_obj_read(&u->u_objref, v->varid);
+			*value = sim_obj_read1(&u->u_objref, v->varid);
 			break;
 
 		case V_ENV: {
-			gridpos pos = S_obj_read(&u->u_objref, VARID_POSITION).p;
-			*value = S_read_env(u->sim, v->envid, pos);
+			gridpos pos = sim_obj_read1(&u->u_objref, VARID_POSITION).p;
+			*value = sim_env_readpos(v->senv, pos);
 			break;
 		}
 

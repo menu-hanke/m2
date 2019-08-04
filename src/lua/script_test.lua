@@ -38,17 +38,9 @@ end
 
 --grow1()
 
-local n = 10
-local pos = ffi.new("gridpos[?]", n)
-local refs = ffi.new("sim_objref[?]", n)
-ffi.fill(pos, 8*n)
-ffi.C.S_allocv(sim._sim, refs, id.tree, n, pos)
-
-local nd = 5
-local del = ffi.new("sim_objref[?]", nd)
-del[0] = refs[0]
-del[1] = refs[1]
-del[2] = refs[2]
-del[3] = refs[4]
-del[4] = refs[5]
-ffi.C.S_deletev(sim._sim, id.tree, nd, del)
+local year = sim:evec(env.year)
+year:set(0)
+print("year is:", year.data[0])
+print("increment!")
+year:add(1)
+print("now it is: ", year.data[0])

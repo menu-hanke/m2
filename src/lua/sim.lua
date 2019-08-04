@@ -1,5 +1,6 @@
 local ffi = require "ffi"
 local vmath = require "vmath"
+local C = ffi.C
 
 local function vecn(v)
 	return tonumber(v.nuse)
@@ -52,9 +53,13 @@ local sim = {}
 local sim_mt = { __index = sim }
 local chaintable_mt = {}
 
-local function create_env_lex(env, lex)
+local function create_env_lex(env, _sim, lex)
 	local id = setmetatable({}, {__index=function(id, name)
 		error(string.format("No id matching name '%s'", name))
+	end})
+
+	local env_ = setmetatable({}, {__index=function(env_, name)
+		error(string.format("No env matching name '%s'", name))
 	end})
 
 	for i=0, vecn(lex.objs)-1 do
@@ -69,17 +74,18 @@ local function create_env_lex(env, lex)
 
 	for i=0, vecn(lex.envs)-1 do
 		local e = vece(lex.envs, i)
-		id[ffi.string(e.name)] = e.id
+		env_[ffi.string(e.name)] = C.sim_get_env(_sim, i)
 	end
 
 	env.id = id
+	env.env = env_
 end
 
 local function create_sim(lex)
 	local env = setmetatable({}, {__index=_G})
-	create_env_lex(env, lex)
 	local chains = setmetatable({}, chaintable_mt)
-	local _sim = ffi.gc(ffi.C.sim_create(lex), ffi.C.sim_destroy)
+	local _sim = ffi.gc(C.sim_create(lex), C.sim_destroy)
+	create_env_lex(env, _sim, lex)
 
 	local sim = setmetatable({
 		env=env,
@@ -127,10 +133,21 @@ function sim:run(event, continue, ...)
 	return invoke_next_chain(self.chains[event], 1, continue, ...)
 end
 
-function sim:env_vec(envid)
+function sim:evec(env)
 	local pvec = ffi.new("struct pvec")
-	ffi.C.S_env_vec(self._sim, pvec, envid)
+	C.sim_env_pvec(pvec, env)
 	return vmath.vec(pvec)
+end
+
+function sim:swap_env(env)
+	local pvec old = ffi.new("struct pvec")
+	local pvec new = ffi.new("struct pvec")
+	C.sim_env_pvec(old. env)
+	new.type = old.type
+	new.n = old.n
+	new.data = C.sim_alloc_env(sim, env)
+	C.sim_env_swap(env, new.data)
+	return vmath.vec(old), vmath.vec(new)
 end
 
 function chaintable_mt:__index(k)

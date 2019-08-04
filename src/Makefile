@@ -1,5 +1,5 @@
 CC = gcc
-CCOPT = -O3 -flto -ffast-math -fno-finite-math-only -march=native
+CCOPT = -O3 -flto -fopenmp -ffast-math -fno-finite-math-only -march=native
 CCDEBUG = -DNDEBUG
 CCDEF =
 CCWARN = -Wall -Wextra
@@ -20,7 +20,7 @@ LUA_EXPORTS = lua_exports.h
 
 default: $(M2_EXECUTABLE)
 
-debug: CCOPT = -g3
+debug: CCOPT = -g3 -fopenmp
 debug: CCDEBUG = -DDEBUG
 debug: default
 

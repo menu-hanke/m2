@@ -57,7 +57,7 @@ static_assert(sizeof(pvalue) == sizeof(uint64_t));
 /* typed vector, this is mostly used internally by the simulator to store vars */
 struct tvec {
 	type type;
-	size_t stride;
+	unsigned stride;
 	void *data;
 };
 
