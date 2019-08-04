@@ -20,6 +20,8 @@ typedef struct sim_objvec {
 	struct tvec bands[];
 } sim_objvec;
 
+// *Temporary* reference to a sim object. Don't hold on to these.
+// The ref stays valid (inside branch) until a call to S_deletev() moves or deletes it.
 typedef struct sim_objref {
 	sim_objvec *vec;
 	size_t idx;
@@ -39,7 +41,8 @@ pvalue S_read_env(sim *sim, lexid envid, gridpos pos);
 void S_env_vec(sim *sim, struct pvec *v, lexid envid);
 void S_allocv(sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos);
 void S_allocvs(sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos);
-// TODO: S_deallocv
+void S_deletev(sim *sim, lexid objid, size_t n, sim_objref *refs);
+void S_deletevs(sim *sim, lexid objid, size_t n, sim_objref *refs);
 void S_allocb(sim *sim, struct tvec *v, sim_objvec *vec, lexid varid);
 
 void S_savepoint(sim *sim);

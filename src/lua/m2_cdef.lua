@@ -151,6 +151,8 @@ pvalue S_read_env(sim *sim, lexid envid, gridpos pos);
 void S_env_vec(sim *sim, struct pvec *v, lexid envid);
 void S_allocv(sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos);
 void S_allocvs(sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos);
+void S_deletev(sim *sim, lexid objid, size_t n, sim_objref *refs);
+void S_deletevs(sim *sim, lexid objid, size_t n, sim_objref *refs);
 void S_allocb(sim *sim, struct tvec *v, sim_objvec *vec, lexid varid);
 void S_savepoint(sim *sim);
 void S_restore(sim *sim);

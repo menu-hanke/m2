@@ -69,6 +69,7 @@ static void init_frame(struct sim *sim);
 static void create_savepoint(struct sim *sim, save *sp);
 static size_t next_cell_allocvs(struct sim *sim, struct grid *g, size_t n, gridpos *pos,
 		sim_objref *refs);
+static size_t next_cell_deletevs(struct sim *sim, struct grid *g, size_t n, sim_objref *refs);
 
 static void v_ensure_cap(struct sim *sim, sim_objvec *v, size_t n);
 static size_t v_alloc(struct sim *sim, sim_objvec *v, size_t n);
@@ -89,6 +90,7 @@ static void *f_alloc(struct frame *f, size_t size, size_t align);
 #define PREV(sim) (&((sim)->stack[(sim)->depth-1]))
 static void *static_malloc(struct sim *sim, size_t size);
 static int cmp_gridpos(const void *a, const void *b);
+static int cmp_objref(const void *a, const void *b);
 
 struct sim *sim_create(struct lex *lex){
 	arena *static_arena = arena_create(SIM_STATIC_ARENA_SIZE);
@@ -170,6 +172,24 @@ void S_allocvs(struct sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos
 		size_t nv = next_cell_allocvs(sim, g, n, pos, refs);
 		n -= nv;
 		pos += nv;
+		refs += nv;
+	}
+}
+
+void S_deletev(struct sim *sim, lexid objid, size_t n, sim_objref *refs){
+	// same as allocv, a better sort here would be good
+	// (though this function is probably called less often since objects can be just left
+	// to die with the branch)
+	qsort(refs, n, sizeof(*refs), cmp_objref);
+	S_deletevs(sim, objid, n, refs);
+}
+
+void S_deletevs(struct sim *sim, lexid objid, size_t n, sim_objref *refs){
+	struct grid *g = &sim->objs[objid];
+
+	while(n){
+		size_t nv = next_cell_deletevs(sim, g, n, refs);
+		n -= nv;
 		refs += nv;
 	}
 }
@@ -342,6 +362,132 @@ static size_t next_cell_allocvs(struct sim *sim, struct grid *g, size_t n, gridp
 	return nv;
 }
 
+static size_t next_cell_deletevs(struct sim *sim, struct grid *g, size_t n, sim_objref *refs){
+	// There are a few possibilities for implementing deletion:
+	// (a) mark objects "dead" in a bitmap
+	//   + fast and simple
+	//   - requires an extra bitmap per vector
+	//   - alloc is more complicated
+	//   - more useless copying when saving branch state
+	//   - requires skipping dead elements when iterating (really bad for simd operations)
+	// (b) move live objects over dead spots
+	//   + no extra bookkeeping
+	//   + keeps arrays sequential - no worrying about dead elements in between
+	//   + allocation is fast and simple
+	//   - requires moving each band if not deleting list tail
+	// (c) bucket arrays (aka unrolled linked list)
+	//   * this was the first version implemented
+	//   + fast and simple allocation and deallocation
+	//   - extra rituals when iterating/copying
+	//   - no sequential vectors (this also causes extra rituals in the lua side)
+	//
+	// Since deallocation is rarer than allocation, since allocations naturally die when
+	// the branch exits, deletion is done using algorithm (b) in two steps:
+	//
+	// (1) precalculate needed memcpy indices (move from list tail to deletion pos)
+	// (2) replay on all bands
+
+	sim_objvec *v = refs[0].vec;
+	size_t run_start[n];
+	size_t run_end[n];
+	run_start[0] = refs[0].idx;
+	size_t nr = 0, rlen = 1;
+	size_t nd = 1;
+
+	for(;nd<n&&refs[nd].vec==v;nd++){
+		if(refs[nd].idx == run_start[nr]+rlen){
+			rlen++;
+			continue;
+		}
+
+		run_end[nr] = run_start[nr] + rlen;
+		nr++;
+		run_start[nr] = refs[nd].idx;
+		rlen = 1;
+	}
+
+	assert(nd <= v->n_used);
+
+	run_end[nr] = run_start[nr] + rlen;
+	nr++;
+
+	dv("%zu runs to delete\n", nr);
+	for(size_t i=0;i<nr;i++)
+		dv("\t[%zu]: %zu - %zu (%zu elements)\n",
+				i, run_start[i], run_end[i], run_end[i]-run_start[i]);
+
+	size_t move_dst[nr];
+	size_t move_src[nr];
+	size_t move_num[nr];
+
+	size_t nmv = 0;
+	size_t run = 0, tail_run = nr-1;
+	size_t ptr = run_start[0], tail = v->n_used;
+
+	// doesn't matter if tail_run underflows here, since in that case the while loop
+	// will never run
+	if(tail == run_end[tail_run])
+		tail = run_start[tail_run--];
+
+	// (1)
+	while(run_end[run] < tail){
+		assert(nmv < nr);
+
+		size_t need = run_end[run] - ptr;
+		size_t avail = tail - run_end[tail_run];
+		size_t num = avail < need ? avail : need;
+
+		move_dst[nmv] = ptr;
+		move_src[nmv] = tail - num;
+		move_num[nmv] = num;
+		/*
+		dv("%zu->%zu (%zu) ptr=%zu tail=%zu need=%zu avail=%zu\n",
+				move_src[nmv], move_dst[nmv], num, ptr, tail, need, avail);
+		*/
+		nmv++;
+
+		assert(ptr+num <= run_end[run]);
+		assert(tail-num >= run_end[tail_run]);
+
+		if(ptr+num == run_end[run]){
+			if(++run == nr)
+				break;
+			ptr = run_start[run];
+		}else{
+			ptr += num;
+		}
+
+		if(tail-num == run_end[tail_run]){
+			assert(tail_run > 0);
+			tail = run_start[tail_run--];
+		}else{
+			tail -= num;
+		}
+	}
+
+	dv("deleting with %zu moves\n", nmv);
+	for(size_t i=0;i<nmv;i++)
+		dv("\t[%zu]: %zu -> %zu (%zu elements)\n", i, move_src[i], move_dst[i], move_num[i]);
+
+	// (2)
+	if(nmv){
+		for(size_t i=0;i<v->n_bands;i++){
+			struct tvec *band = &v->bands[i];
+			for(size_t j=0;j<nmv;j++){
+				memcpy(
+					tvec_varp(band, move_dst[j]),
+					tvec_varp(band, move_src[j]),
+					band->stride * move_num[j]
+				);
+			}
+		}
+	}
+
+	v->n_used -= nd;
+
+	return nd;
+}
+
 static void v_ensure_cap(struct sim *sim, sim_objvec *v, size_t n){
 	if(v->n_used + n <= v->n_alloc)
 		return;
@@ -452,4 +598,16 @@ static void *static_malloc(struct sim *sim, size_t size){
 
 static int cmp_gridpos(const void *a, const void *b){
 	return *((gridpos *) a) - *((gridpos *) b);
+}
+
+static int cmp_objref(const void *a, const void *b){
+	const sim_objref *ra = a;
+	const sim_objref *rb = b;
+
+	// this should be fine since we don't really care if they are in memory order,
+	// just that the ones in the same vector are together
+	if(ra->vec != rb->vec)
+		return ((intptr_t) ra->vec) - ((intptr_t) rb->vec);
+
+	return ((ssize_t) ra->idx) - ((ssize_t) rb->idx);
 }
