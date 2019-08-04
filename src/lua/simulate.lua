@@ -1,59 +1,50 @@
 local ffi = require "ffi"
 local conf = require "conf"
+local exec = require "exec"
 local sim = require "sim"
 
+local function init_graph(u, data)
+	for _,fv in pairs(data.fhk_vars) do
+		if fv.kind == "var" then
+			ffi.C.u_link_var(u, fv.fhk_var, fv.src.obj.lexobj, fv.src.lexvar)
+		elseif fv.kind == "env" then
+			ffi.C.u_link_env(u, fv.fhk_var, fv.src.lexenv)
+		elseif fv.kind == "computed" then
+			ffi.C.u_link_computed(u, fv.fhk_var, fv.src.name)
+		end
+	end
+
+	for _,fm in pairs(data.fhk_models) do
+		-- store pointers here to prevent gc
+		fm.ex_func = exec.from_model(fm)
+		ffi.C.u_link_model(u, fm.fhk_model, fm.name, fm.ex_func)
+	end
+end
+
 local function main(args)
-	local data = conf.read(args.config)
+	local data = conf.read(
+		get_builtin_file("builtin_lex.lua"),
+		args.config
+	)
+	local lex = conf.create_lexicon(data)
+	local s = sim.create(lex)
 
-	local lex = conf.get_lexicon(data)
-	local graph = conf.get_fhk_graph(data)
-	local S = sim.create(lex)
-	local upd = S:create_fhk_update(graph, lex)
-	local uset = upd:create_uset("sublevel", "y")
+	local G = conf.create_fhk_graph(data)
+	local u = ffi.C.u_create(s._sim, lex, G)
+	init_graph(u, data)
 
-	S:allocv("toplevel", 5)
-	local i = 0
-
-	for t in S:iter("toplevel") do
-		t.c = ffi.C.packenum(i)
-		t.x = 3.14*i
-		i = i+1
-
-		local slice = S:allocv("sublevel", 5, t)
-		upd:update_slice(slice, uset)
-	end
-
-	--[[
-	print("--- enter ---")
-	S:enter()
-
-	for t in S:iter("toplevel") do
-		local oldval = t.c
-		t.c = 2
-		print("c:", oldval, "-->", t.c)
-
-		for s in S:iter("sublevel", t) do
-			local oldx = s["x'"]
-			s["x'"] = s["x'"] ^ 2
-			print("-> x':", oldx, "-->", s["x'"])
+	-- inject fhk update set function here,
+	-- this is not probably the best place for this but w/e
+	s.env.usetv = function(objid, ...)
+		local varids = {...}
+		local c_varids = ffi.new("lexid[?]", #varids)
+		for i,v in ipairs(varids) do
+			c_vars[i-1] = v
 		end
+		return ffi.C.uset_create_vars(u, objid, #varids, varids)
 	end
 
-	print("--- rollback ---")
-	S:rollback()
-
-	for t in S:iter("toplevel") do
-		print("c:", t.c)
-
-		for s in S:iter("sublevel", t) do
-			print("-> x':", s["x'"])
-		end
-	end
-
-	for s in S:iter("sublevel") do
-		print("rootlist sublevel x':", s["x'"])
-	end
-	]]
+	s:run_script(get_builtin_file("script_test.lua"))
 end
 
 return { main=main }

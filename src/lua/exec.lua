@@ -10,6 +10,10 @@ local function promote_all(ts)
 	return ret, #ts
 end
 
+local function destroy(f)
+	f.impl.destroy(f)
+end
+
 local function create(impl, argt, rett)
 	if impl.lang ~= "R" then
 		error("sorry only R")
@@ -18,26 +22,22 @@ local function create(impl, argt, rett)
 	local argt, narg = promote_all(argt)
 	local rett, nret = promote_all(rett)
 
-	return ffi.C.ex_R_create(
+	return ffi.gc(ffi.C.ex_R_create(
 		impl.file, impl.func,
 		narg, argt,
 		nret, rett
-	)
+	), destroy)
 end
 
 local function from_model(m)
 	local argt = {}
 
 	for _,p in ipairs(m.params) do
-		table.insert(argt, p.type)
+		table.insert(argt, p.src.type)
 	end
 
-	local rett = { m.returns.type }
+	local rett = { m.returns.src.type }
 	return create(m.impl, argt, rett)
-end
-
-local function destroy(f)
-	f.impl.destroy(f)
 end
 
 return {

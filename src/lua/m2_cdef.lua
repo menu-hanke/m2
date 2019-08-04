@@ -4,119 +4,18 @@ ffi.cdef [[
        
        
        
-typedef enum type {
- T_F32 = 0,
- T_F64 = 1,
- T_I8 = 2,
- T_I16 = 3,
- T_I32 = 4,
- T_I64 = 5,
- T_B8 = 6,
- T_B16 = 7,
- T_B32 = 8,
- T_B64 = 9
-} type;
-typedef enum ptype {
- PT_REAL = 1,
- PT_INT = 2,
- PT_BIT = 3
-} ptype;
-typedef union pvalue {
- double r;
- int64_t i;
- uint64_t b;
-} pvalue;
-
-typedef unsigned lexid;
-struct type_def {
- const char *name;
- size_t size;
-};
-struct bitenum_def {
- const char *name;
- uint64_t bit_mask;
- const char **value_names;
-};
-struct var_def {
- lexid id;
- const char *name;
- type type;
- union {
-  struct bitenum_def *bitenum_def;
- };
-};
-struct obj_ref {
- struct obj_def *ref;
- int back_idx;
-};
-struct obj_def {
- lexid id;
- const char *name;
- struct { size_t n; struct var_def * *data; } vars;
- struct { size_t n; struct obj_ref *data; } uprefs;
- struct { size_t n; struct obj_ref *data; } downrefs;
-};
-struct lex {
- struct { size_t n; struct type_def *data; } types;
- struct { size_t n; struct var_def *data; } vars;
- struct { size_t n; struct obj_def *data; } objs;
-};
-struct lex *lex_create(size_t n_types, size_t n_vars, size_t n_objs);
-void lex_destroy(struct lex *lex);
-void lex_set_vars(struct lex *lex, lexid objid, size_t n, lexid *varids);
-void lex_set_uprefs(struct lex *lex, lexid objid, size_t n, lexid *objids);
-void lex_compute_refs(struct lex *lex);
-size_t lex_get_roots(struct lex *lex, struct obj_def **objs);
-const struct type_def *get_typedef(type t);
-size_t get_enum_size(uint64_t bit_mask);
-type get_enum_type(struct bitenum_def *ed);
-int unpackenum(uint64_t b);
-uint64_t packenum(int b);
-ptype tpromote(type t);
-pvalue promote(void *x, type t);
-void demote(void *x, type t, pvalue p);
-       
-typedef struct sim sim;
-typedef struct sim_vec sim_vec;
-enum {
- SIM_ITER_END = 0,
- SIM_ITER_NEXT = -1
-};
-enum {
- SIM_OK = 0,
- SIM_EOOM = 1,
- SIM_EDEPTH_LIMIT = 2,
- SIM_EINVALID_FRAME = 3
-};
-typedef struct sim_objref {
- sim_vec *vec;
- size_t idx;
-} sim_objref;
-typedef struct sim_slice {
- sim_vec *vec;
- size_t from;
- size_t to;
-} sim_slice;
-typedef struct sim_iter {
- sim_objref ref;
- int upref;
-} sim_iter;
-sim *sim_create(struct lex *lex);
-void sim_destroy(sim *sim);
-void sim_allocv(sim *sim, sim_slice *pos, lexid objid, sim_objref *uprefs, size_t n);
-int sim_first(sim *sim, sim_iter *it, lexid objid, sim_objref *upref, int uprefidx);
-int sim_next(sim_iter *it);
-sim_vec *sim_first_rv(sim *sim, lexid objid);
-sim_vec *sim_next_rv(sim_vec *prev);
-void sim_used(sim_vec *vec, sim_slice *slice);
-void *sim_varp(sim *sim, sim_objref *ref, lexid objid, lexid varid);
-void *sim_varp_base(sim_vec *vec, lexid varid);
-pvalue sim_read1p(sim *sim, sim_objref *ref, lexid objid, lexid varid);
-void sim_write1p(sim *sim, sim_objref *ref, lexid objid, lexid varid, pvalue value);
-sim_objref *sim_get_upref(sim_vec *vec, int uprefidx);
-int sim_enter(sim *sim);
-void sim_rollback(sim *sim);
-int sim_exit(sim *sim);
+static inline void vec_init(void **data, size_t *nalloc, size_t *nuse, size_t n, size_t s){
+ *data = malloc(n * s);
+ *nalloc = n;
+ *nuse = 0;
+}
+static inline void *vec_add(void **data, size_t *nalloc, size_t *nuse, size_t s){
+ if(*nuse >= *nalloc){
+  *nalloc *= 2;
+  *data = realloc(*data, s*(*nalloc));
+ }
+ return ((char *) *data) + s*(*nuse)++;
+}
        
        
 typedef uint8_t bm8 __attribute__((aligned(16)));
@@ -131,6 +30,135 @@ void bm_and2(bm8 *restrict a, const bm8 *restrict b, size_t n);
 void bm_or2(bm8 *restrict a, const bm8 *restrict b, size_t n);
 void bm_xor2(bm8 *restrict a, const bm8 *restrict b, size_t n);
 void bm_not(bm8 *bm, size_t n);
+typedef uint64_t gridpos;
+typedef uint32_t gridcoord;
+struct grid {
+ size_t order;
+ size_t stride;
+ void *data;
+};
+struct bitgrid {
+ size_t order;
+ bm8 *bs;
+};
+size_t grid_data_size(size_t order, size_t stride);
+void grid_init(struct grid *g, size_t order, size_t stride, void *data);
+void *grid_data(struct grid *g, gridpos z);
+gridpos grid_max(size_t order);
+gridpos grid_pos(gridcoord x, gridcoord y);
+gridpos grid_zoom_up(gridpos z, size_t from, size_t to);
+gridpos grid_zoom_down(gridpos z, size_t from, size_t to);
+gridpos grid_translate_mask(size_t from, size_t to);
+typedef enum type {
+ T_F32 = 0,
+ T_F64 = 1,
+ T_I8 = 2,
+ T_I16 = 3,
+ T_I32 = 4,
+ T_I64 = 5,
+ T_B8 = 6,
+ T_B16 = 7,
+ T_B32 = 8,
+ T_B64 = 9,
+ T_POSITION = 10,
+ T_USERDATA = 11
+} type;
+typedef enum ptype {
+ PT_REAL = 1,
+ PT_INT = 2,
+ PT_BIT = 3,
+ PT_POS = 4,
+ PT_UDATA = 5
+} ptype;
+typedef union pvalue {
+ double r;
+ int64_t i;
+ uint64_t b;
+ gridpos p;
+ void *u;
+} pvalue;
+
+struct tvec {
+ type type;
+ size_t stride;
+ void *data;
+};
+struct pvec {
+ type type;
+ size_t n;
+ void *data;
+};
+enum {
+ VARID_POSITION = 0
+};
+typedef unsigned lexid;
+struct var_def {
+ lexid id;
+ const char *name;
+ type type;
+};
+struct obj_def {
+ lexid id;
+ const char *name;
+ size_t resolution;
+ struct { size_t nalloc; size_t nuse; struct var_def *data; } vars;
+};
+struct env_def {
+ lexid id;
+ const char *name;
+ size_t resolution;
+ type type;
+};
+struct lex {
+ struct { size_t nalloc; size_t nuse; struct obj_def *data; } objs;
+ struct { size_t nalloc; size_t nuse; struct env_def *data; } envs;
+};
+struct lex *lex_create();
+void lex_destroy(struct lex *lex);
+struct obj_def *lex_add_obj(struct lex *lex);
+struct env_def *lex_add_env(struct lex *lex);
+struct var_def *lex_add_var(struct obj_def *obj);
+int unpackenum(uint64_t b);
+uint64_t packenum(int b);
+size_t tsize(type t);
+ptype tpromote(type t);
+pvalue promote(void *x, type t);
+void demote(void *x, type t, pvalue p);
+void tvec_init(struct tvec *v, type t);
+void *tvec_varp(struct tvec *v, size_t p);
+       
+typedef struct sim sim;
+typedef uint64_t sim_branchid;
+typedef struct sim_objvec {
+ unsigned n_alloc;
+ unsigned n_used;
+ unsigned n_bands;
+ struct tvec bands[];
+} sim_objvec;
+typedef struct sim_objref {
+ sim_objvec *vec;
+ size_t idx;
+} sim_objref;
+sim *sim_create(struct lex *lex);
+void sim_destroy(sim *sim);
+struct grid *sim_get_envgrid(sim *sim, lexid envid);
+struct grid *sim_get_objgrid(sim *sim, lexid objid);
+size_t sim_env_effective_order(sim *sim, lexid envid);
+void *S_obj_varp(sim_objref *ref, lexid varid);
+pvalue S_obj_read(sim_objref *ref, lexid varid);
+void *S_envp(sim *sim, lexid envid, gridpos pos);
+pvalue S_read_env(sim *sim, lexid envid, gridpos pos);
+void S_env_vec(sim *sim, struct pvec *v, lexid envid);
+void S_allocv(sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos);
+void S_allocvs(sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos);
+void S_allocb(sim *sim, struct tvec *v, sim_objvec *vec, lexid varid);
+void S_savepoint(sim *sim);
+void S_restore(sim *sim);
+void S_enter(sim *sim);
+void S_exit(sim *sim);
+sim_branchid S_branch(sim *sim, size_t n, sim_branchid *branches);
+sim_branchid S_next_branch(sim *sim);
+       
 enum fhk_ctype {
  FHK_RIVAL,
  FHK_IIVAL,
@@ -240,8 +268,8 @@ void fhk_graph_destroy(struct fhk_graph *G);
 void fhk_set_given(struct fhk_graph *G, struct fhk_var *x);
 void fhk_set_solve(struct fhk_graph *G, struct fhk_var *y);
 void fhk_reset(struct fhk_graph *G, int what);
-void fhk_sup(bm8 *vmask, bm8 *mmask, struct fhk_var *y);
-void fhk_inv_sup(struct fhk_graph *G, bm8 *vmask, bm8 *mmask, struct fhk_var *y);
+void fhk_supp(bm8 *vmask, bm8 *mmask, struct fhk_var *y);
+void fhk_inv_supp(struct fhk_graph *G, bm8 *vmask, bm8 *mmask, struct fhk_var *y);
 int fhk_solve(struct fhk_graph *G, struct fhk_var *y);
        
 typedef int (*ex_exec_f)(void *, pvalue *ret, pvalue *argv);
@@ -257,21 +285,34 @@ ex_func *ex_R_create(const char *fname, const char *func, int narg, ptype *argt,
   ptype *rett);
        
 typedef struct arena arena;
+typedef struct arena_ptr {
+ void *chunk;
+ void *ptr;
+} arena_ptr;
 arena *arena_create(size_t size);
 void arena_destroy(arena *arena);
 void arena_reset(arena *arena);
 void *arena_alloc(arena *arena, size_t size, size_t align);
 void *arena_malloc(arena *arena, size_t size);
+char *arena_salloc(arena *arena, size_t size);
+void arena_save(arena *arena, arena_ptr *p);
+void arena_restore(arena *arena, arena_ptr *p);
        
-typedef struct ufhk ufhk;
+typedef struct ugraph ugraph;
 typedef struct uset uset;
-ufhk *ufhk_create(struct lex *lex);
-void ufhk_destroy(ufhk *u);
-void ufhk_set_var(ufhk *u, lexid varid, struct fhk_var *x);
-void ufhk_set_model(ufhk *u, const char *name, ex_func *f, struct fhk_model *m);
-void ufhk_set_graph(ufhk *u, struct fhk_graph *G);
-int ufhk_update(ufhk *u, uset *s, sim *sim);
-int ufhk_update_slice(ufhk *u, uset *s, sim_slice *slice);
-uset *uset_create(ufhk *u, lexid objid, size_t nvars, lexid *vars);
+ugraph *u_create(sim *sim, struct lex *lex, struct fhk_graph *G);
+void u_destroy(ugraph *u);
+void u_link_var(ugraph *u, struct fhk_var *x, struct obj_def *obj, struct var_def *var);
+void u_link_env(ugraph *u, struct fhk_var *x, struct env_def *env);
+void u_link_computed(ugraph *u, struct fhk_var *x, const char *name);
+void u_link_model(ugraph *u, struct fhk_model *m, const char *name, ex_func *f);
+uset *uset_create_vars(ugraph *u, lexid objid, size_t nv, lexid *varids);
+uset *uset_create_envs(ugraph *u, size_t nv, lexid *envids);
 void uset_destroy(uset *s);
+void uset_update(ugraph *u, uset *s);
+       
+typedef float vf32 __attribute__((aligned(16)));
+typedef double vf64 __attribute__((aligned(16)));
+void vadd_f64(vf64 *a, size_t n, double c);
+void vadd2_f64(vf64 *restrict a, const vf64 *restrict b, size_t n);
 ]]

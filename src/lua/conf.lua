@@ -11,91 +11,121 @@ local builtin_types = {
 	b8  = C.T_B8,
 	b16 = C.T_B16,
 	b32 = C.T_B32,
-	b64 = C.T_B64
+	b64 = C.T_B64,
+	pos = C.T_POSITION
 }
 
 local function newconf()
-	-- XXX: this is a turbo hack, it relies on the C code putting this as the first thing
-	-- in search path
-	local conf_env = package.path:gsub("%?.lua;.*$", "conf_env.lua")
+	local conf_env = get_builtin_file("conf_env.lua")
 	local env, data = dofile(conf_env)
 	return env, data
 end
 
-local function resolve_types(data)
-	for _,v in pairs(data.vars) do
-		local dtype = v.type
+local function resolve_dt(xs)
+	for _,x in pairs(xs) do
+		local dtype = x.type
 		if not builtin_types[dtype] then
-			error(string.format("No definition found for type '%s' of variable '%s'",
-				dtype, v.name))
+			error(string.format("No definition found for type '%s' of '%s'",
+				dtype, x.name))
 		end
 
-		v.type = builtin_types[dtype]
+		x.type = builtin_types[dtype]
 		
 		-- TODO: non-builtins
 	end
 end
 
-local function link_graph(data)
-	for _,v in pairs(data.vars) do
-		v.models = {}
+local function resolve_types(data)
+	resolve_dt(data.envs)
+	resolve_dt(data.vars)
+	for _,o in pairs(data.objs) do
+		resolve_dt(o.vars)
 	end
+end
+
+local function link_graph(data)
+	local fhk_vars = setmetatable({}, {__index=function(self,k)
+		self[k] = { models={} }
+		return self[k]
+	end})
+
+	for _,o in pairs(data.objs) do
+		for _,v in pairs(o.vars) do
+			fhk_vars[v.name].src = v
+			fhk_vars[v.name].kind = "var"
+		end
+	end
+
+	for _,e in pairs(data.envs) do
+		fhk_vars[e.name].src = e
+		fhk_vars[e.name].kind = "env"
+	end
+
+	for _,v in pairs(data.vars) do
+		fhk_vars[v.name].src = v
+		fhk_vars[v.name].kind = "computed"
+	end
+
+	setmetatable(fhk_vars, nil)
 
 	for _,m in pairs(data.fhk_models) do
 		for i,p in ipairs(m.params) do
-			local v = data.vars[p]
-			if not v then
-				error(string.format("No var definition found for parameter '%s' of model '%s'",
+			local fv = fhk_vars[p]
+			if not fv then
+				error(string.format("No definition found for var '%s' (parameter of model '%s')",
 					p, m.name))
 			end
 
-			m.params[i] = v
+			m.params[i] = fv
 			-- delete named version, only used for dupe checking in conf_env
 			m.params[p] = nil
 		end
 
 		for i,c in ipairs(m.checks) do
-			local v = data.vars[c.var]
-			if not v then
-				error(string.format("No var definition '%s' found for check #%d of model '%s'",
-					c.var, i, m.name))
+			local fv = fhk_vars[c.var]
+			if not fv then
+				error(string.format("No definition found for var '%s' (constraint of model '%s')",
+					c.var, m.name))
 			end
 
-			c.var = v
+			c.var = fv
 		end
 
-		local v = data.vars[m.returns]
-		if not v then
-			error(string.format("No var definition '%s' for return value of model '%s'",
+		local rv = fhk_vars[m.returns]
+		if not rv then
+			error(string.format("No definition found for var '%s' (return value of model '%s')",
 				m.returns, m.name))
 		end
 
-		m.returns = v
-		table.insert(v.models, m)
+		m.returns = rv
+		table.insert(rv.models, m)
 	end
+
+	data.fhk_vars = fhk_vars
 end
 
-local function link_objects(data)
+local function verify_names(data)
+	local _used = {}
+	local used = setmetatable({}, {__newindex=function(_, k, v)
+		if _used[k] then
+			error(string.format("Duplicate definition of name '%s'", k))
+		end
+		_used[k] = v
+	end})
+
 	for _,o in pairs(data.objs) do
-		for i,f in ipairs(o.fields) do
-			local v = data.vars[f]
-			if not v then
-				error(string.format("No var definition found for field '%s' of obj '%s'",
-					f, o.name))
-			end
-
-			o.fields[i] = v
+		used[o.name] = true
+		for _,v in pairs(o.vars) do
+			used[v.name] = true
 		end
+	end
 
-		for i,u in ipairs(o.uprefs) do
-			local up = data.objs[u]
-			if not up then
-				error(string.format("No obj definition found for upref '%s' of obj '%s'",
-					u, o.name))
-			end
+	for _,e in pairs(data.envs) do
+		used[e.name] = true
+	end
 
-			o.uprefs[i] = up
-		end
+	for _,v in pairs(data.vars) do
+		used[v.name] = true
 	end
 end
 
@@ -117,70 +147,43 @@ local function read(...)
 
 	resolve_types(data)
 	link_graph(data)
-	link_objects(data)
+	verify_names(data)
 	verify_models(data)
 
 	return data
 end
 
-local function get_lexicon(data)
-	local types = {} -- TODO
-	local vars = {}
-	local objs = collect(data.objs)
-
-	-- only take actually referenced vars, the others are fhk computed vars/etc.
-	for _,o in ipairs(objs) do
-		for _,f in ipairs(o.fields) do
-			vars[f.name] = f
-		end
-	end
-
-	vars = collect(vars)
-
+local function create_lexicon(data)
 	local arena = C.arena_create(1024)
-	local lex = ffi.gc(C.lex_create(#types, #vars, #objs), function(lex)
-		C.lex_destroy(lex)
+	local lex = ffi.gc(C.lex_create(), function(lex)
 		C.arena_destroy(arena)
+		C.lex_destroy(lex)
 	end)
 
-	for i,v in ipairs(vars) do
-		v._lexid = i-1
-		v._ptr = lex.vars.data + v._lexid
-		v._ptr.name = arena_copystring(arena, v.name)
-		v._ptr.type = v.type
-	end
+	for _,o in pairs(data.objs) do
+		local lo = C.lex_add_obj(lex)
+		o.lexobj = lo
+		lo.name = arena_copystring(arena, o.name)
+		lo.resolution = o.resolution
 
-	for i,o in ipairs(objs) do
-		o._lexid = i-1
-		o._ptr = lex.objs.data + o._lexid
-		o._ptr.name = arena_copystring(arena, o.name)
-	end
-
-	for i,o in ipairs(objs) do
-		if #o.fields>0 then
-			local fs = ffi.new("lexid[?]", #o.fields)
-			for j,f in ipairs(o.fields) do
-				fs[j-1] = f._lexid
-			end
-			C.lex_set_vars(lex, o._lexid, #o.fields, fs)
-		end
-
-		if #o.uprefs>0 then
-			local us = ffi.new("lexid[?]", #o.uprefs)
-			for j,u in ipairs(o.uprefs) do
-				us[j-1] = u._lexid
-			end
-			C.lex_set_uprefs(lex, o._lexid, #o.uprefs, us)
+		for _,v in pairs(o.vars) do
+			local lv = C.lex_add_var(lo)
+			v.lexvar = lv
+			lv.name = arena_copystring(arena, v.name)
+			lv.type = v.type
 		end
 	end
 
-	C.lex_compute_refs(lex)
+	for _,e in pairs(data.envs) do
+		local le = C.lex_add_env(lex)
+		e.lexenv = le
+		le.name = arena_copystring(arena, e.name)
+		le.resolution = e.resolution
+		le.type = e.type
+	end
 
-	return {
-		lex=lex,
-		objs=objs,
-		vars=vars
-	}
+	data.lex = lex
+	return lex
 end
 
 local function copy_ival_cst(check, vdef, a, b)
@@ -238,32 +241,18 @@ local function create_checks(model, checks, arena)
 	for i=0, #checks-1 do
 		local c = model.checks+i
 		local check = checks[i+1]
-		c.var = check.var._ptr
+		c.var = check.var.fhk_var
 		c.costs[C.FHK_COST_IN] = check.cost_in
 		c.costs[C.FHK_COST_OUT] = check.cost_out
-		copy_cst(c, check.var, check.cst)
+		copy_cst(c, check.var.src, check.cst)
 	end
 end
 
-local function get_fhk_graph(data)
-	local models = collect(data.fhk_models)
-	local vars = {}
-
-	-- same as lex, only take vars that appear
-	for _,m in pairs(data.fhk_models) do
-		for _,p in ipairs(m.params) do
-			vars[p] = p
-		end
-		for _,c in ipairs(m.checks) do
-			vars[c.var] = c.var
-		end
-		vars[m.returns] = m.returns
-	end
-
-	vars = collect(vars)
-
+local function create_fhk_graph(data)
 	local arena = C.arena_create(4096)
 
+	local models = collect(data.fhk_models)
+	local vars = collect(data.fhk_vars)
 	local n_models = #models
 	local n_vars = #vars
 
@@ -273,40 +262,40 @@ local function get_fhk_graph(data)
 		ffi.sizeof("struct fhk_var[?]", n_vars)))
 
 	for i=0, n_models-1 do
-		models[i+1]._ptr = c_models+i
+		models[i+1].fhk_model = c_models+i
 		c_models[i].idx = i
 	end
 
 	for i=0, n_vars-1 do
-		vars[i+1]._ptr = c_vars+i
+		vars[i+1].fhk_var = c_vars+i
 		c_vars[i].idx = i
 	end
 
-	for _,src in ipairs(models) do
-		local m = src._ptr
+	for _,m in ipairs(models) do
+		local fm = m.fhk_model
 
-		m.k = src.k
-		m.c = src.c
+		fm.k = m.k
+		fm.c = m.c
 
-		create_checks(m, src.checks, arena)
+		create_checks(fm, m.checks, arena)
 
 		-- TODO
-		m.may_fail = 1
+		fm.may_fail = 1
 
-		m.n_param = #src.params
-		m.params = C.arena_malloc(arena, ffi.sizeof("struct fhk_var *[?]", m.n_param))
-		for i,p in ipairs(src.params) do
-			m.params[i-1] = p._ptr
+		fm.n_param = #m.params
+		fm.params = C.arena_malloc(arena, ffi.sizeof("struct fhk_var *[?]", fm.n_param))
+		for i,p in ipairs(m.params) do
+			fm.params[i-1] = p.fhk_var
 		end
 	end
 
-	for _,src in ipairs(vars) do
-		local v = src._ptr
+	for _,v in ipairs(vars) do
+		local fv = v.fhk_var
 
-		v.n_mod = #src.models
-		v.models = C.arena_malloc(arena, ffi.sizeof("struct fhk_model *[?]", v.n_mod))
-		for i,m in ipairs(src.models) do
-			v.models[i-1] = m._ptr
+		fv.n_mod = #v.models
+		fv.models = C.arena_malloc(arena, ffi.sizeof("struct fhk_model *[?]", fv.n_mod))
+		for i,m in ipairs(v.models) do
+			fv.models[i-1] = m.fhk_model
 		end
 	end
 
@@ -320,17 +309,11 @@ local function get_fhk_graph(data)
 
 	C.fhk_graph_init(G)
 
-	return {
-		G=G,
-		models=models,
-		c_models=c_models,
-		vars=vars,
-		c_vars=c_vars
-	}
+	return G
 end
 
 return {
 	read=read,
-	get_fhk_graph=get_fhk_graph,
-	get_lexicon=get_lexicon
+	create_lexicon=create_lexicon,
+	create_fhk_graph=create_fhk_graph
 }

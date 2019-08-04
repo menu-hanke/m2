@@ -8,6 +8,7 @@
 
 #define BITMAP_ALIGN   M2_VECTOR_SIZE
 #define BITMAP_SIZE(n) VS(n)
+#define BITSET_SIZE(n) BITMAP_SIZE(ALIGN((n), 8))
 
 typedef uint8_t bm8 __attribute__((aligned(BITMAP_ALIGN)));
 

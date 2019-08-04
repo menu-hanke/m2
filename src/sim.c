@@ -14,6 +14,9 @@
 
 #define VEC_ALIGN M2_VECTOR_SIZE
 
+static_assert((SIM_INIT_VEC_SIZE % M2_VECTOR_SIZE) == 0);
+static_assert((SIM_MAX_VAR % (8*BITMAP_ALIGN)) == 0);
+
 struct env {
 	type type;
 	size_t zoom_order;
@@ -52,6 +55,7 @@ struct sim {
 	unsigned depth;
 	struct frame stack[SIM_MAX_DEPTH];
 
+	// XXX: sim doesn't really need temp memory allocation so these can be removed?
 	arena *tmp_arena;
 	struct tmp_stackp *tmp_sp;
 };
@@ -141,6 +145,13 @@ void *S_envp(struct sim *sim, lexid envid, gridpos pos){
 
 pvalue S_read_env(struct sim *sim, lexid envid, gridpos pos){
 	return promote(S_envp(sim, envid, pos), sim->envs[envid].type);
+}
+
+void S_env_vec(struct sim *sim, struct pvec *v, lexid envid){
+	struct env *e = &sim->envs[envid];
+	v->type = e->type;
+	v->n = grid_max(e->grid.order);
+	v->data = e->grid.data;
 }
 
 void S_allocv(struct sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos){
@@ -272,6 +283,10 @@ static void init_envgrid(struct sim *sim, struct env *e, struct env_def *def){
 	size_t order = GRID_ORDER(def->resolution);
 	size_t stride = tsize(def->type);
 	size_t gsize = grid_data_size(order, stride);
+	// vmath funcions assume we have a multiple of vector size but order-0 grid allocates
+	// only 1 element so make sure we have enough
+	gsize = ALIGN(gsize, VEC_ALIGN);
+
 	dv("env grid[%s]: stride=%zu resolution=%zu (order %zu) grid size=%zu bytes\n",
 			def->name, stride, def->resolution, order, gsize);
 
@@ -348,6 +363,7 @@ static void v_ensure_cap(struct sim *sim, sim_objvec *v, size_t n){
 			memcpy(b->data, old_data, b->stride*v->n_used);
 	}
 
+	assert(na == ALIGN(na, VEC_ALIGN));
 	v->n_alloc = na;
 }
 
@@ -355,7 +371,7 @@ static size_t v_alloc(struct sim *sim, sim_objvec *v, size_t n){
 	v_ensure_cap(sim, v, n);
 	size_t ret = v->n_used;
 	v->n_used += n;
-	dv("alloc %zu entries [%zu-%zu] on vector %p (%zu/%zu used)\n",
+	dv("alloc %zu entries [%zu-%u] on vector %p (%u/%u used)\n",
 			n, ret, v->n_used, v, v->n_used, v->n_alloc);
 	return ret;
 }

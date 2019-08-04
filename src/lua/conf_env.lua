@@ -1,79 +1,50 @@
-local env = setmetatable({}, {__index={}})
-
-env.inf = math.huge
-
--- These affect the simulation core:
--- types are used to create vars and vars are used to compose objects
-local types = {}
-local vars = {}
-local objs = {}
-
--- These only affect the fhk graph:
--- virtual variables are usually aggregates etc. expensive to compute values that
--- may or may not be needed, models are used to compute values
-local fhk_models = {}
-local fhk_virtuals = {}
+local env_mt = {}
+local env = setmetatable({}, env_mt)
+local root = {}
 
 -- config file state
-local active_stack = {}
+local stack = {}
+local topidx = 0
 
-local function verify_stack(stack, elvl)
-	elvl = elvl and (elvl+1) or 1
-
-	for i,v in ipairs(stack) do
-		if not active_stack[i] then
-			error(string.format("Expected inside '%s'", v), elvl)
+function env_mt:__index(f)
+	for i=#stack, 1, -1 do
+		local s = stack[i]
+		local fd = s.def[f]
+		if fd then
+			return function(...)
+				topidx = i
+				local res, err = pcall(fd, ...)
+				if not res then
+					-- re-raise it here so traceback shows the correct line in config file
+					error(err, 2)
+				end
+			end
 		end
-		if active_stack[i].kind ~= v then
-			error(string.format("Expected inside '%s' but found '%s'", v, active_stack[i].kind),
-				elvl)
-		end
-	end
-end
-
-local function setactive(def, elvl, ...)
-	local stack = {...}
-	local idx = #stack
-	local kind = stack[idx]
-	stack[idx] = nil
-
-	verify_stack(stack, elvl+1)
-
-	active_stack[idx] = { def=def, kind=kind }
-	for i=idx+1, #active_stack do
-		active_stack[i] = nil
 	end
 
-	return def
+	error(string.format("Directive '%s' is not valid here", f), 2)
 end
 
-local function getactive(elvl, ...)
-	local stack = {...}
-	verify_stack(stack, elvl+1)
-	return active_stack[#stack].def
-end
-
-local function ac(...)
-	return getactive(2, ...)
-end
-
-local function new(tab, name, obj, tabname, elvl)
-	elvl = elvl or 3
-
-	if tab[name] then
-		error(string.format("Duplicate definition of %s '%s'", tabname or "", name), elvl)
+local function push(def, e)
+	for i=topidx+1, #stack do
+		stack[i] = nil
 	end
 
-	local ret = obj or {}
-	tab[name] = ret
-	return ret
+	stack[topidx+1] = {e=e, def=def}
+	return e
 end
 
-local function newactive(tab, name, obj, ...)
-	local kind = select(-1, ...)
-	local ret = new(tab, name, obj, kind, 4)
-	return setactive(ret, 2, ...)
+local function top(offset)
+	offset = offset or 0
+	return stack[topidx - offset].e
 end
+
+local function idx(offset)
+	return stack[offset].e
+end
+
+-- Expose some generic stuff
+env.inf = math.huge
 
 -- This is global, use it to read config files
 -- Note that this also works inside config files
@@ -106,6 +77,7 @@ function env.read_coeff(fname)
 	local decode = require "json.decode"
 
 	local coeffs = decode(data)
+	local fhk_models = idx(1).fhk_models
 
 	for k,v in pairs(coeffs) do
 		local m = fhk_models[k]
@@ -122,84 +94,112 @@ function env.read_coeff(fname)
 end
 
 -------------------
+-- util
+-------------------
+
+local function setter(name)
+	return function(x)
+		top()[name] = x
+	end
+end
+
+local function numeric_setter(name)
+	return function(x)
+		top()[name] = tonumber(x)
+	end
+end
+
+local nodup_mt = {
+	__index = function(self, k)
+		return rawget(self._tab, k)
+	end,
+	__newindex = function(self, k, v)
+		if self[k] then
+			error(string.format(self._mes, v))
+		end
+		rawset(self._tab, k, v)
+	end
+}
+
+local function nodup(tab, mes)
+	return setmetatable({_tab=tab, _mes=mes}, nodup_mt)
+end
+
+-------------------
 -- types
 -------------------
-function env.enum(name, def)
-	new(types, name, {
-		type = "enum",
+
+local type_ = {
+
+}
+
+function root.enum(name, def)
+	top()._types[name] = push(type_, {
 		name = name,
 		def = def
-	}, "type")
-end
-
--------------------
--- vars
--------------------
-
-function env.var(name)
-	newactive(vars, name, {
-		name = name
-	}, "var")
-end
-
-function env.dtype(type)
-	ac("var").type = type
-end
-
-function env.unit(name)
-	ac("var").unit = name
-end
-
-function env.desc(name)
-	ac("var").desc = name
+	})
 end
 
 -----------------------
 -- objects
 -----------------------
 
-function env.obj(name)
-	newactive(objs, name, {
+local obj_var = {
+	dtype = setter("type"),
+	unit = setter("unit")
+}
+
+local obj = {
+	resolution = numeric_setter("resolution"),
+	var = function(name)
+		top()._vars[name] = push(obj_var, {
+			name = name,
+			dtype = "f64",
+			obj = top()
+		})
+	end
+}
+
+function root.obj(name)
+	-- allow re-pushing defined obj to add more details e.g. from multiple config files
+	local o = top().objs[name]
+	if not o then
+		local vars = {}
+		o = {
+			name = name,
+			resolution = 0,
+			vars = vars,
+			_vars = nodup(vars, "Duplicate variable '%s'")
+		}
+		top().objs[name] = o
+	end
+
+	push(obj, o)
+end
+
+-----------------------
+-- envs
+-----------------------
+
+local env_ = {
+	dtype = setter("type"),
+	unit = setter("unit"),
+	resolution = numeric_setter("resolution")
+}
+
+function root.env(name)
+	top()._envs[name] = push(env_, {
 		name = name,
-		fields = {},
-		uprefs = {}
-	}, "obj")
-end
-
-function env.fields(...)
-	ac("obj").fields = {...}
-end
-
-function env.uprefs(...)
-	ac("obj").uprefs = {...}
+		resolution = 0,
+		dtype = "f64"
+	})
 end
 
 -----------------------
 -- models
 -----------------------
 
-function env.model(name)
-	newactive(fhk_models, name, {
-		name = name,
-		checks = {},
-		params = {}
-	}, "model")
-end
-
-function env.param(name)
-	local model = ac("model")
-	newactive(model.params, name, name, "model", "parameter")
-	-- Note: parameter order matters, use the integer indices
-	table.insert(model.params, name)
-end
-
-function env.check(cst, cost_in, cost_out, var)
-	var = var or ac("model", "parameter")
-
-	if not var then
-		error("No parameter specified for check", 2)
-	end
-
+local function make_check(cst, cost_in, cost_out, var)
 	cost_in = cost_in or 0
 	cost_out = cost_out or math.huge
 
@@ -209,32 +209,70 @@ function env.check(cst, cost_in, cost_out, var)
 		error(string.format("Expected cost_in<=cost_out but got %f>%f", cost_in, cost_out))
 	end
 
-	table.insert(ac("model").checks, {
+	return {
 		var=var,
 		cst=cst,
 		cost_in=cost_in,
 		cost_out=cost_out
-	})
+	}
 end
 
-function env.returns(var)
-	ac("model").returns = var
-end
-
-function env.impl(impl)
-	local lang, file, func = impl:match("([^:]+)::([^:]+)::(.+)$")
-	if not lang then
-		error("Invalid format")
+local param = {
+	check = function(cst, cost_in, cost_out)
+		table.insert(top(1).checks, make_check(cst, cost_in, cost_out, top()))
 	end
+}
 
-	ac("model").impl = { lang=lang, file=file, func=func }
+local model = {
+	param = function(name)
+		push(param, name)
+		top()._params[name] = true
+		table.insert(top().params, name)
+	end,
+	check = function(cst, cost_in, cost_out, var)
+		table.insert(top().checks, make_check(cst, cost_in, cost_out, var))
+	end,
+	impl = function(impl)
+		local lang, file, func = impl:match("([^:]+)::([^:]+)::(.+)$")
+		if not lang then
+			error(string.format("Invalid format: %s", impl))
+		end
+		top().impl = { lang=lang, file=file, func=func }
+	end,
+	returns = setter("returns")
+}
+
+function root.model(name)
+	local params = {}
+	top()._fhk_models[name] = push(model, {
+		name = name,
+		checks = {},
+		params = params,
+		_params = nodup(params, "Parameter '%s' specified twice")
+	})
 end
 
 --------------------
 -- virtuals
 --------------------
 
-function env.virtual(name)
+function root.virtual(name)
+end
+
+--------------------
+-- vars
+--------------------
+
+local var = {
+	dtype = setter("type"),
+	unit = setter("unit")
+}
+
+function root.var(name)
+	top()._vars[name] = push(var, {
+		name = name,
+		dtype = "f64"
+	})
 end
 
 --------------------
@@ -249,12 +287,26 @@ function env.ival(a, b)
 	return {type="ival", a=a, b=b}
 end
 
----------------------
+--------------------
 
-return env, {
-	types=types,
-	vars=vars,
-	objs=objs,
-	fhk_models=fhk_models,
-	fhk_virtuals=fhk_virtuals
-}
+local types = {}
+local objs = {}
+local envs = {}
+local fhk_models = {}
+local fhk_virtuals = {}
+local vars = {}
+
+return env, push(root, {
+	types = types,
+	objs = objs,
+	envs = envs,
+	fhk_models = fhk_models,
+	fhk_virtuals = fhk_virtuals,
+	vars = vars,
+	_types = nodup(types, "Redefinition of type '%s'"),
+	_objs = nodup(objs, "Redefinition of object '%s'"),
+	_envs = nodup(envs, "Redefinition of env '%s'"),
+	_fhk_models = nodup(fhk_models, "Redefinition of model '%s'"),
+	_fhk_virtuals = nodup(fhk_virtuals, "Redefinition of virtual '%s'"),
+	_vars = nodup(vars, "Redefinition of variable '%s'")
+})

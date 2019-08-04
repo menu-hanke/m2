@@ -30,6 +30,13 @@
 // round n to next multiple of m where m=2^k
 #define ALIGN(n, m) (((n) + (m) - 1) & ~((m) - 1))
 
+#define ASSUME_ALIGNED(x, m)\
+	do {\
+		assert((x) == ALIGN((x), (m)));\
+		if((x) != ALIGN((x), (m)))\
+			__builtin_unreachable();\
+	} while(0)
+
 // vector size for n bytes
 #define VS(n) ALIGN((n), M2_VECTOR_SIZE)
 
@@ -62,8 +69,15 @@
 #endif
 
 // init vector size for sim object vectors
+// Note: this must be a multiple of M2_VECTOR_SIZE!
 #ifndef SIM_INIT_VEC_SIZE
 #define SIM_INIT_VEC_SIZE 128
+#endif
+
+// max number of vars in an object
+// Note: this must be a multiple of 8*M2_VECTOR_SIZE!
+#ifndef SIM_MAX_VAR
+#define SIM_MAX_VAR (8*M2_VECTOR_SIZE)
 #endif
 
 // initial temp stack chunk size

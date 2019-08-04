@@ -9,6 +9,7 @@ grid.o: grid.c grid.h bitmap.h def.h
 save.o: save.c arena.h
 update.o: update.c fhk.h bitmap.h def.h lex.h list.h grid.h exec.h \
  arena.h sim.h
+vmath.o: vmath.c vmath.h def.h
 exec_R.o: exec_R.c lex.h def.h list.h grid.h bitmap.h exec.h
 lua/m2_cdef.lua: lua_exports.h lex.h def.h list.h grid.h bitmap.h sim.h \
- fhk.h exec.h arena.h update.h
+ fhk.h exec.h arena.h update.h vmath.h

@@ -1,13 +1,4 @@
 local ffi = require "ffi"
-local nogc_ref = {}
-
-function nogc(r)
-	nogc_ref[r] = true
-end
-
-function yesgc(r)
-	nogc_ref[r] = nil
-end
 
 function trim(str)
 	-- ignore second return val
@@ -46,8 +37,13 @@ function collect(tab)
 end
 
 function arena_copystring(a, s)
-	local ret = ffi.C.arena_malloc(a, #s+1)
+	local ret = ffi.C.arena_salloc(a, #s+1)
 	ffi.copy(ret, s)
 	return ret
 end
 
+function get_builtin_file(fname)
+	-- XXX: this is a turbo hack, it relies on the C code putting this as the first thing
+	-- in search path, this should be written in C and replace on M2_LUAPATH
+	return package.path:gsub("%?.lua;.*$", fname)
+end

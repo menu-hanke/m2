@@ -2,6 +2,7 @@
 
 #include "lex.h"
 #include "grid.h"
+#include "bitmap.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -12,9 +13,10 @@ typedef uint64_t sim_branchid;
 #define SIM_NO_BRANCH 0
 
 typedef struct sim_objvec {
-	size_t n_alloc;
-	size_t n_used;
-	size_t n_bands;
+	//uint8_t saved_bands[BITSET_SIZE(SIM_MAX_VAR)] __attribute__((aligned(BITMAP_ALIGN)));
+	unsigned n_alloc;
+	unsigned n_used;
+	unsigned n_bands;
 	struct tvec bands[];
 } sim_objvec;
 
@@ -34,6 +36,7 @@ void *S_obj_varp(sim_objref *ref, lexid varid);
 pvalue S_obj_read(sim_objref *ref, lexid varid);
 void *S_envp(sim *sim, lexid envid, gridpos pos);
 pvalue S_read_env(sim *sim, lexid envid, gridpos pos);
+void S_env_vec(sim *sim, struct pvec *v, lexid envid);
 void S_allocv(sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos);
 void S_allocvs(sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos);
 // TODO: S_deallocv

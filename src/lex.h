@@ -54,10 +54,18 @@ typedef union pvalue {
 /* don't put anything dumb there so it fits in a register */
 static_assert(sizeof(pvalue) == sizeof(uint64_t));
 
-/* typed vector */
+/* typed vector, this is mostly used internally by the simulator to store vars */
 struct tvec {
 	type type;
 	size_t stride;
+	void *data;
+};
+
+/* typed packed vector with length, this is useful for more complex calculations involving
+ * sim data with vmath.c */
+struct pvec {
+	type type;
+	size_t n;
 	void *data;
 };
 
