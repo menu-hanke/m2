@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdalign.h>
+#include <assert.h>
 
 struct chunk {
 	struct chunk *prev, *next;
@@ -79,6 +80,19 @@ void arena_restore(struct arena *arena, arena_ptr *p){
 	arena->chunk->ptr = p->ptr;
 }
 
+int arena_contains(struct arena *arena, void *p){
+	// Note: this is undefined behavior and only intended for debugging, don't use this
+	// for any actual logic
+	uintptr_t ip = (uintptr_t) p;
+	for(struct chunk *c=arena->first; c; c=c->next){
+		uintptr_t cp = (uintptr_t) c->data;
+		if(ip >= cp && ip < cp+c->size)
+			return 1;
+	}
+
+	return 0;
+}
+
 static struct chunk *alloc_chunk(size_t size){
 	// TODO: this doesn't have to be backed by malloc, support other allocators if needed
 	struct chunk *ret = malloc(sizeof(*ret) + size);
@@ -129,6 +143,8 @@ static void *bump_next_chunk(struct arena *arena, size_t size, size_t align){
 		newsz *= 2;
 
 	struct chunk *next = alloc_chunk(newsz);
+	assert(!c->next);
+	c->next = next;
 	next->prev = c;
 	next->next = NULL;
 	arena->chunk = next;

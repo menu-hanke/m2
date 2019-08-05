@@ -4,6 +4,8 @@
 #include "vmath.h"
 #include "def.h"
 
+#include <stddef.h>
+
 #define V(t, step)\
 	do {\
 		size_t vn = ALIGN(sizeof(t)*(n), M2_VECTOR_SIZE) / sizeof(t);\

@@ -1,19 +1,37 @@
 local ffi = require "ffi"
 
+on("grow#-1", function()
+	print("istutetaan puita")
+	local trees = sim:create_objs(id.tree, {0, 1, 2, 3, 4, 5})
+	for i=0, 5 do
+		sim.write1(trees[i], id.h, 0)
+	end
+end)
+
 on("grow", function()
 	print("kasvatetaan puita")
-end)
-
-on("grow#1", function()
-	print("kasvatetaan lisää puita?")
-end)
-
-on("grow#-100", function()
-	print("tämä tehdään ennen puiden kasvatusta")
+	sim:each_objvec(id.tree, function(v)
+		local old_h, new_h = sim:swap_band(v, id.h)
+		old_h:add(10.0, new_h)
+		print("puun[0] pituus:", new_h.data[0])
+	end)
 end)
 
 on("operation", function()
-	print("tehdään operaatioita")
+	return branch({
+		choice(0x1, "operation.1"),
+		choice(0x2, "operation.2")
+	})
+end)
+
+on("operation.1", function()
+	print("Tehdään operaatio 1: istutetaan yksi puu lisää")
+	local tree = sim:create_objs(id.tree, {0})
+	sim.write1(tree[0], id.h, 100.0)
+end)
+
+on("operation.2", function()
+	print("Tehdään operaatio 2 ?")
 end)
 
 on("report", function()
@@ -36,11 +54,4 @@ function grow1()
 	return sim:run("grow", operation1)
 end
 
---grow1()
-
-local year = sim:evec(env.year)
-year:set(0)
-print("year is:", year.data[0])
-print("increment!")
-year:add(1)
-print("now it is: ", year.data[0])
+grow1()

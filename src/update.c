@@ -203,11 +203,11 @@ static void update_cell(struct ugraph *u, struct uset *s, gridpos cell){
 	//   - since we just change the pointer, the old data doesn't need to be copied to safety
 	//   - we avoid overwriting old data since that could in theory change the results of some models
 	size_t nv = s->nv;
-	struct tvec bands[nv];
+	sim_vband bands[nv];
 	for(size_t i=0;i<nv;i++){
 		lexid varid = s->varids[i];
 		bands[i].type = v->bands[varid].type;
-		bands[i].stride = v->bands[varid].stride;
+		bands[i].stride_bits = v->bands[varid].stride_bits;
 		bands[i].data = sim_alloc_band(u->sim, v, varid);
 	}
 
@@ -229,13 +229,13 @@ static void update_cell(struct ugraph *u, struct uset *s, gridpos cell){
 		}
 
 		for(size_t j=0;j<nv;j++)
-			demote(tvec_varp(&bands[j], i), bands[j].type, x[j]->mark.value);
+			demote(sim_vb_varp(&bands[j], i), bands[j].type, x[j]->mark.value);
 	}
 
 	// (5) replace only the changed pointers, the old data is safe generally in the previous
 	// branch arena
 	for(size_t i=0;i<nv;i++)
-		sim_obj_swap(v, s->varids[i], bands[i].data);
+		sim_obj_swap(u->sim, v, s->varids[i], bands[i].data);
 }
 
 static void s_vars_init(struct ugraph *u, struct uset *s){

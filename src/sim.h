@@ -19,12 +19,19 @@ typedef struct sim_env {
 	struct grid grid;
 } sim_env;
 
+// XXX: the 'type' field is unsigned instead of type because luajit doesn't like enum bitfields
+typedef struct sim_vband {
+	unsigned stride_bits : 16;
+	unsigned type        : 16;
+	unsigned last_modify : 32;
+	void *data;
+} sim_vband;
+
 typedef struct sim_objvec {
-	//uint8_t saved_bands[BITSET_SIZE(SIM_MAX_VAR)] __attribute__((aligned(BITMAP_ALIGN)));
 	unsigned n_alloc;
 	unsigned n_used;
 	unsigned n_bands;
-	struct tvec bands[];
+	sim_vband bands[];
 } sim_objvec;
 
 // *Temporary* reference to a sim object. Don't hold on to these.
@@ -39,21 +46,23 @@ void sim_destroy(sim *sim);
 
 sim_env *sim_get_env(sim *sim, lexid envid);
 void sim_env_pvec(struct pvec *v, sim_env *e);
-void sim_env_swap(sim_env *e, void *data);
+void sim_env_swap(sim *sim, sim_env *e, void *data);
 size_t sim_env_orderz(sim_env *e);
 gridpos sim_env_posz(sim_env *e, gridpos pos);
 pvalue sim_env_readpos(sim_env *e, gridpos pos);
 
 struct grid *sim_get_objgrid(sim *sim, lexid objid);
 void sim_obj_pvec(struct pvec *v, sim_objvec *vec, lexid varid);
-void sim_obj_swap(sim_objvec *vec, lexid varid, void *data);
+void sim_obj_swap(sim *sim, sim_objvec *vec, lexid varid, void *data);
+void *sim_vb_varp(sim_vband *band, size_t idx);
+void *sim_stride_varp(void *data, unsigned stride_bits, size_t idx);
 pvalue sim_obj_read1(sim_objref *ref, lexid varid);
 void sim_obj_write1(sim_objref *ref, lexid varid, pvalue value);
 
 void sim_allocv(sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos);
 void sim_allocvs(sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos);
-void sim_deletev(size_t n, sim_objref *refs);
-void sim_deletevs(size_t n, sim_objref *refs);
+void sim_deletev(sim *sim, size_t n, sim_objref *refs);
+void sim_deletevs(sim *sim, size_t n, sim_objref *refs);
 void *sim_frame_alloc(sim *sim, size_t sz, size_t align);
 void *sim_alloc_band(sim *sim, sim_objvec *vec, lexid varid);
 void *sim_alloc_env(sim *sim, sim_env *e);

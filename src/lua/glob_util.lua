@@ -47,3 +47,12 @@ function get_builtin_file(fname)
 	-- in search path, this should be written in C and replace on M2_LUAPATH
 	return package.path:gsub("%?.lua;.*$", fname)
 end
+
+function copyarray(ct, src)
+	local n = #src
+	local ret = ffi.new(ct, n)
+	for i,v in ipairs(src) do
+		ret[i-1] = v
+	end
+	return ret, n
+end

@@ -145,16 +145,6 @@ void demote(void *x, type t, pvalue p){
 	}
 }
 
-void tvec_init(struct tvec *v, type t){
-	v->type = t;
-	v->stride = tsize(t);
-	v->data = NULL;
-}
-
-void *tvec_varp(struct tvec *v, size_t p){
-	return ((char *) v->data) + p*v->stride;
-}
-
 static void create_builtins(struct obj_def *obj){
 	struct var_def *pos = lex_add_var(obj);
 	pos->name = "builtin$pos";

@@ -54,13 +54,6 @@ typedef union pvalue {
 /* don't put anything dumb there so it fits in a register */
 static_assert(sizeof(pvalue) == sizeof(uint64_t));
 
-/* typed vector, this is mostly used internally by the simulator to store vars */
-struct tvec {
-	type type;
-	unsigned stride;
-	void *data;
-};
-
 /* typed packed vector with length, this is useful for more complex calculations involving
  * sim data with vmath.c */
 struct pvec {
@@ -74,6 +67,7 @@ enum {
 	VARID_POSITION = 0
 };
 
+#define BUILTIN_VARS_END    1
 #define POSITION_RESOLUTION 31
 #define POSITION_ORDER      GRID_ORDER(POSITION_RESOLUTION)
 
@@ -119,6 +113,3 @@ size_t tsize(type t);
 ptype tpromote(type t);
 pvalue promote(void *x, type t);
 void demote(void *x, type t, pvalue p);
-
-void tvec_init(struct tvec *v, type t);
-void *tvec_varp(struct tvec *v, size_t p);

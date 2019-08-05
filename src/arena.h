@@ -19,3 +19,5 @@ char *arena_salloc(arena *arena, size_t size);
 
 void arena_save(arena *arena, arena_ptr *p);
 void arena_restore(arena *arena, arena_ptr *p);
+
+int arena_contains(arena *arena, void *p);

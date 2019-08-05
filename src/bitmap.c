@@ -56,3 +56,22 @@ void bm_xor2(bm8 *restrict a, const bm8 *restrict b, size_t n){
 void bm_not(bm8 *bm, size_t n){
 	bm_xor(bm, n, 0xff);
 }
+
+void bs_zero(bm8 *bs, size_t n){
+	memset(bs, 0, BITSET_SIZE(n));
+}
+
+unsigned bs_get(bm8 *bs, size_t idx){
+	uint64_t *u = (uint64_t *) bs;
+	return (u[idx/64] >> (idx%64)) & ~1;
+}
+
+void bs_set(bm8 *bs, size_t idx){
+	uint64_t *u = (uint64_t *) bs;
+	u[idx/64] |= 1ULL << (idx%64);
+}
+
+void bs_clear(bm8 *bs, size_t idx){
+	uint64_t *u = (uint64_t *) bs;
+	u[idx/64] &= ~(1ULL << (idx%64));
+}

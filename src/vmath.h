@@ -2,6 +2,8 @@
 
 #include "def.h"
 
+#include <stddef.h>
+
 typedef float vf32 __attribute__((aligned(M2_VECTOR_SIZE)));
 typedef double vf64 __attribute__((aligned(M2_VECTOR_SIZE)));
 

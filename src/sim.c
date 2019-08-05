@@ -26,15 +26,10 @@ struct branchinfo {
 struct frame {
 	unsigned init : 1;
 	unsigned inside : 1; /* debug */
-
+	unsigned fid;
 	arena *arena;
 	save *save;
 	struct branchinfo *branches;
-};
-
-struct tmp_stackp {
-	struct tmp_stackp *prev;
-	arena_ptr ap;
 };
 
 struct sim {
@@ -45,12 +40,9 @@ struct sim {
 	size_t n_env;
 	sim_env *envs;
 
+	unsigned next_fid;
 	unsigned depth;
 	struct frame stack[SIM_MAX_DEPTH];
-
-	// XXX: sim doesn't really need temp memory allocation so these can be removed?
-	arena *tmp_arena;
-	struct tmp_stackp *tmp_sp;
 };
 
 static void init_objs(struct sim *sim, struct lex *lex);
@@ -62,27 +54,30 @@ static void init_frame(struct sim *sim);
 static void create_savepoint(struct sim *sim, save *sp);
 static size_t next_cell_allocvs(struct sim *sim, struct grid *g, size_t n, gridpos *pos,
 		sim_objref *refs);
-static size_t next_cell_deletevs(size_t n, sim_objref *refs);
+static size_t next_cell_deletevs(struct sim *sim, size_t n, sim_objref *refs);
 
 static void v_check_ref(sim_objref *ref);
-static struct tvec *v_check_band(sim_objvec *v, lexid varid);
+static sim_vband *v_check_band(sim_objvec *v, lexid varid);
+static void v_clear(struct sim *sim, sim_objvec *v);
 static void v_ensure_cap(struct sim *sim, sim_objvec *v, size_t n);
+static void v_init(sim_objvec *v, size_t idx, size_t n);
 static size_t v_alloc(struct sim *sim, sim_objvec *v, size_t n);
 
 static void destroy_stack(struct sim *sim);
 
 static void f_init(struct frame *f);
 static void f_destroy(struct frame *f);
-static void f_enter(struct frame *f);
+static void f_enter(struct frame *f, unsigned fid);
 static save *f_savepoint(struct frame *f);
 static void f_restore(struct frame *f);
 static void f_branch(struct frame *f, size_t n, sim_branchid *ids);
 static sim_branchid f_next_branch(struct frame *f);
+static int f_contains(struct frame *f, void *p);
 static void f_exit(struct frame *f);
 static void *f_alloc(struct frame *f, size_t size, size_t align);
 
 #define TOP(sim) (&((sim)->stack[(sim)->depth]))
-#define PREV(sim) (&((sim)->stack[(sim)->depth-1]))
+#define PREV(sim) (&((sim)->stack[({ assert((sim)->depth>0); (sim)->depth-1; })]))
 static void *static_malloc(struct sim *sim, size_t size);
 static int cmp_gridpos(const void *a, const void *b);
 static int cmp_objref(const void *a, const void *b);
@@ -91,7 +86,6 @@ struct sim *sim_create(struct lex *lex){
 	arena *static_arena = arena_create(SIM_STATIC_ARENA_SIZE);
 	struct sim *sim = arena_malloc(static_arena, sizeof(*sim));
 	sim->static_arena = static_arena;
-	sim->tmp_arena = arena_create(SIM_TMP_ARENA_SIZE);
 	init_objs(sim, lex);
 	init_envs(sim, lex);
 	init_frame(sim);
@@ -100,7 +94,6 @@ struct sim *sim_create(struct lex *lex){
 
 void sim_destroy(struct sim *sim){
 	destroy_stack(sim);
-	arena_destroy(sim->tmp_arena);
 	arena_destroy(sim->static_arena);
 }
 
@@ -115,7 +108,8 @@ void sim_env_pvec(struct pvec *v, sim_env *e){
 	v->data = e->grid.data;
 }
 
-void sim_env_swap(sim_env *e, void *data){
+void sim_env_swap(struct sim *sim, sim_env *e, void *data){
+	assert(f_contains(TOP(sim), data));
 	e->grid.data = data;
 }
 
@@ -137,33 +131,43 @@ pvalue sim_env_readpos(sim_env *e, gridpos pos){
 	return promote(grid_data(&e->grid, pos), e->type);
 }
 
-struct grid *sim_get_objgrid(sim *sim, lexid objid){
+struct grid *sim_get_objgrid(struct sim *sim, lexid objid){
 	assert(objid < sim->n_obj);
 	return &sim->objs[objid];
 }
 
 void sim_obj_pvec(struct pvec *v, sim_objvec *vec, lexid varid){
-	struct tvec *band = v_check_band(vec, varid);
+	sim_vband *band = v_check_band(vec, varid);
 	v->type = band->type;
 	v->n = vec->n_used;
 	v->data = band->data;
 }
 
-void sim_obj_swap(sim_objvec *vec, lexid varid, void *data){
-	struct tvec *band = v_check_band(vec, varid);
+void sim_obj_swap(struct sim *sim, sim_objvec *vec, lexid varid, void *data){
+	assert(!data || f_contains(TOP(sim), data));
+	sim_vband *band = v_check_band(vec, varid);
 	band->data = data;
+	band->last_modify = TOP(sim)->fid;
+}
+
+void *sim_vb_varp(sim_vband *band, size_t idx){
+	return sim_stride_varp(band->data, band->stride_bits, idx);
+}
+
+void *sim_stride_varp(void *data, unsigned stride_bits, size_t idx){
+	return ((char *) data) + (idx<<stride_bits);
 }
 
 pvalue sim_obj_read1(sim_objref *ref, lexid varid){
 	v_check_ref(ref);
-	struct tvec *band = v_check_band(ref->vec, varid);
-	return promote(tvec_varp(band, ref->idx), band->type);
+	sim_vband *band = v_check_band(ref->vec, varid);
+	return promote(sim_vb_varp(band, ref->idx), band->type);
 }
 
 void sim_obj_write1(sim_objref *ref, lexid varid, pvalue value){
 	v_check_ref(ref);
-	struct tvec *band = v_check_band(ref->vec, varid);
-	demote(tvec_varp(band, ref->idx), band->type, value);
+	sim_vband *band = v_check_band(ref->vec, varid);
+	demote(sim_vb_varp(band, ref->idx), band->type, value);
 }
 
 void sim_allocv(struct sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos){
@@ -186,17 +190,20 @@ void sim_allocvs(struct sim *sim, sim_objref *refs, lexid objid, size_t n, gridp
 	}
 }
 
-void sim_deletev(size_t n, sim_objref *refs){
+void sim_deletev(struct sim *sim, size_t n, sim_objref *refs){
 	// same as allocv, a better sort here would be good
 	// (though this function is probably called less often since objects can be just left
 	// to die with the branch)
+	// TODO: the full vector must be saved when calling this so a better implementation
+	// would be to copy the remaining data in a new frame allocated vector?
+	// Another possibility is to autosave each run+tail in next_cell_deletev
 	qsort(refs, n, sizeof(*refs), cmp_objref);
-	sim_deletevs(n, refs);
+	sim_deletevs(sim, n, refs);
 }
 
-void sim_deletevs(size_t n, sim_objref *refs){
+void sim_deletevs(struct sim *sim, size_t n, sim_objref *refs){
 	while(n){
-		size_t nv = next_cell_deletevs(n, refs);
+		size_t nv = next_cell_deletevs(sim, n, refs);
 		n -= nv;
 		refs += nv;
 	}
@@ -207,8 +214,8 @@ void *sim_frame_alloc(struct sim *sim, size_t sz, size_t align){
 }
 
 void *sim_alloc_band(struct sim *sim, sim_objvec *vec, lexid varid){
-	struct tvec *band = v_check_band(vec, varid);
-	return sim_frame_alloc(sim, band->stride*vec->n_alloc, VEC_ALIGN);
+	sim_vband *band = v_check_band(vec, varid);
+	return sim_frame_alloc(sim, vec->n_alloc<<band->stride_bits, VEC_ALIGN);
 }
 
 void *sim_alloc_env(struct sim *sim, sim_env *e){
@@ -228,12 +235,15 @@ void sim_enter(struct sim *sim){
 	// TODO error handling
 	assert(sim->depth+1 < SIM_MAX_DEPTH);
 	sim->depth++;
-	f_enter(TOP(sim));
+	dv("==== [%u] enter frame @ %u ====\n", sim->depth, sim->next_fid);
+	f_enter(TOP(sim), sim->next_fid++);
 }
 
 void sim_exit(struct sim *sim){
 	assert(sim->depth > 0);
-	f_exit(TOP(sim));
+	struct frame *f = TOP(sim);
+	f_exit(f);
+	dv("---- [%u] exit frame @ %u ----\n", sim->depth, f->fid);
 	sim->depth--;
 }
 
@@ -260,7 +270,7 @@ sim_branchid sim_branch(struct sim *sim, size_t n, sim_branchid *branches){
 }
 
 sim_branchid sim_next_branch(struct sim *sim){
-	sim_branchid ret = f_next_branch(TOP(sim));
+	sim_branchid ret = f_next_branch(PREV(sim));
 
 	if(ret != SIM_NO_BRANCH){
 		sim_exit(sim);
@@ -280,7 +290,7 @@ static void init_objs(struct sim *sim, struct lex *lex){
 
 static void init_objgrid(struct sim *sim, struct grid *g, struct obj_def *obj){
 	size_t order = GRID_ORDER(obj->resolution);
-	size_t vecsize = sizeof(sim_objvec) + VECN(obj->vars)*sizeof(struct tvec);
+	size_t vecsize = sizeof(sim_objvec) + VECN(obj->vars)*sizeof(sim_vband);
 
 	sim_objvec *v = alloca(vecsize);
 	v->n_alloc = 0;
@@ -289,9 +299,11 @@ static void init_objgrid(struct sim *sim, struct grid *g, struct obj_def *obj){
 
 	for(lexid i=0;i<VECN(obj->vars);i++){
 		struct var_def *var = &VECE(obj->vars, i);
-		struct tvec *band = &v->bands[i];
+		sim_vband *band = &v->bands[i];
 		band->type = var->type;
-		band->stride = tsize(var->type);
+		band->stride_bits = __builtin_ffs(tsize(var->type)) - 1;
+		assert(tsize(var->type) == (1ULL<<band->stride_bits));
+		band->last_modify = 0;
 		band->data = NULL;
 	}
 
@@ -331,8 +343,10 @@ static void init_envgrid(struct sim *sim, sim_env *e, struct env_def *def){
 }
 
 static void init_frame(struct sim *sim){
+	sim->next_fid = 1;
 	sim->depth = 0;
-	f_enter(TOP(sim));
+	dv("==== [%u] enter root frame @ %u ====\n", sim->depth, sim->next_fid);
+	f_enter(TOP(sim), sim->next_fid++);
 }
 
 static void create_savepoint(struct sim *sim, save *sp){
@@ -363,7 +377,8 @@ static size_t next_cell_allocvs(struct sim *sim, struct grid *g, size_t n, gridp
 
 	sim_objvec *v = grid_data(g, vcell);
 	size_t vpos = v_alloc(sim, v, nv);
-	void *varp = tvec_varp(&v->bands[VARID_POSITION], vpos);
+	v_init(v, vpos, nv);
+	void *varp = sim_vb_varp(&v->bands[VARID_POSITION], vpos);
 	memcpy(varp, pos, nv*sizeof(gridpos));
 
 	for(size_t i=0;i<nv;i++){
@@ -376,127 +391,70 @@ static size_t next_cell_allocvs(struct sim *sim, struct grid *g, size_t n, gridp
 	return nv;
 }
 
-static size_t next_cell_deletevs(size_t n, sim_objref *refs){
-	// There are a few possibilities for implementing deletion:
-	// (a) mark objects "dead" in a bitmap
-	//   + fast and simple
-	//   - requires an extra bitmap per vector
-	//   - alloc is more complicated
-	//   - more useless copying when saving branch state
-	//   - requires skipping dead elements when iterating (really bad for simd operations)
-	// (b) move live objects over dead spots
-	//   + no extra bookkeeping
-	//   + keeps arrays sequential - no worrying about dead elements in between
-	//   + allocation is fast and simple
-	//   - requires moving each band if not deleting list tail
-	// (c) bucket arrays (aka unrolled linked list)
-	//   * this was the first version implemented
-	//   + fast and simple allocation and deallocation
-	//   - extra rituals when iterating/copying
-	//   - no sequential vectors (this also causes extra rituals in the lua side)
-	//
-	// Since deallocation is rarer than allocation, since allocations naturally die when
-	// the branch exits, deletion is done using algorithm (b) in two steps:
-	//
-	// (1) precalculate needed memcpy indices (move from list tail to deletion pos)
-	// (2) replay on all bands
-
+static size_t next_cell_deletevs(struct sim *sim, size_t n, sim_objref *refs){
+	// "delete" objrefs by copying surviving data into new vector
+	
 	sim_objvec *v = refs[0].vec;
-	size_t run_start[n];
-	size_t run_end[n];
-	run_start[0] = refs[0].idx;
-	size_t nr = 0, rlen = 1;
-	size_t nd = 1;
+	size_t idx = refs[0].idx;
+	size_t cpy_dst[n];
+	size_t cpy_src[n];
+	size_t cpy_num[n];
+	size_t nc = 0, nd = 0;
+	size_t cpos = 0;
+
+	if(idx > 0){
+		cpy_dst[nc] = 0;
+		cpy_src[nc] = 0;
+		cpy_num[nc] = idx;
+		nc++;
+		cpos = idx;
+	}
 
 	for(;nd<n&&refs[nd].vec==v;nd++){
-		if(refs[nd].idx == run_start[nr]+rlen){
-			rlen++;
-			continue;
+		size_t i = refs[nd].idx;
+		if(i > idx+1){
+			cpy_dst[nc] = cpos;
+			cpy_src[nc] = idx+1;
+			cpy_num[nc] = i - (idx+1);
+			cpos += cpy_num[nc];
+			nc++;
 		}
+		idx = i;
+	}
 
-		run_end[nr] = run_start[nr] + rlen;
-		nr++;
-		run_start[nr] = refs[nd].idx;
-		rlen = 1;
+	if(idx+1 < v->n_used){
+		cpy_dst[nc] = cpos;
+		cpy_src[nc] = idx+1;
+		cpy_num[nc] = v->n_used - (idx+1);
+		nc++;
+	}
+
+	if(nc > 0){
+		dv("delete %zu entries by copying %zu runs:\n", nd, nc);
+		for(size_t j=0;j<nc;j++)
+			dv("* (%zu): %zu-%zu -> %zu-%zu (%zu entries)\n", j,
+					cpy_src[j], cpy_src[j]+cpy_num[j],
+					cpy_dst[j], cpy_dst[j]+cpy_num[j],
+					cpy_num[j]
+			);
+
+		for(lexid i=0;i<v->n_bands;i++){
+			sim_vband *band = &v->bands[i];
+			void *data = sim_alloc_band(sim, v, i);
+			for(size_t j=0;j<nc;j++){
+				memcpy(
+					sim_stride_varp(data, band->stride_bits, cpy_dst[j]),
+					sim_stride_varp(band->data, band->stride_bits, cpy_src[j]),
+					cpy_num[j]<<band->stride_bits
+				);
+			}
+			sim_obj_swap(sim, v, i, data);
+		}
+	}else{
+		v_clear(sim, v);
 	}
 
 	assert(nd <= v->n_used);
-
-	run_end[nr] = run_start[nr] + rlen;
-	nr++;
-
-	dv("%zu runs to delete\n", nr);
-	for(size_t i=0;i<nr;i++)
-		dv("\t[%zu]: %zu - %zu (%zu elements)\n",
-				i, run_start[i], run_end[i], run_end[i]-run_start[i]);
-
-	size_t move_dst[nr];
-	size_t move_src[nr];
-	size_t move_num[nr];
-
-	size_t nmv = 0;
-	size_t run = 0, tail_run = nr-1;
-	size_t ptr = run_start[0], tail = v->n_used;
-
-	// doesn't matter if tail_run underflows here, since in that case the while loop
-	// will never run
-	if(tail == run_end[tail_run])
-		tail = run_start[tail_run--];
-
-	// (1)
-	while(run_end[run] < tail){
-		assert(nmv < nr);
-
-		size_t need = run_end[run] - ptr;
-		size_t avail = tail - run_end[tail_run];
-		size_t num = avail < need ? avail : need;
-
-		move_dst[nmv] = ptr;
-		move_src[nmv] = tail - num;
-		move_num[nmv] = num;
-		/*
-		dv("%zu->%zu (%zu) ptr=%zu tail=%zu need=%zu avail=%zu\n",
-				move_src[nmv], move_dst[nmv], num, ptr, tail, need, avail);
-		*/
-		nmv++;
-
-		assert(ptr+num <= run_end[run]);
-		assert(tail-num >= run_end[tail_run]);
-
-		if(ptr+num == run_end[run]){
-			if(++run == nr)
-				break;
-			ptr = run_start[run];
-		}else{
-			ptr += num;
-		}
-
-		if(tail-num == run_end[tail_run]){
-			assert(tail_run > 0);
-			tail = run_start[tail_run--];
-		}else{
-			tail -= num;
-		}
-	}
-
-	dv("deleting with %zu moves\n", nmv);
-	for(size_t i=0;i<nmv;i++)
-		dv("\t[%zu]: %zu -> %zu (%zu elements)\n", i, move_src[i], move_dst[i], move_num[i]);
-
-	// (2)
-	if(nmv){
-		for(size_t i=0;i<v->n_bands;i++){
-			struct tvec *band = &v->bands[i];
-			for(size_t j=0;j<nmv;j++){
-				memcpy(
-					tvec_varp(band, move_dst[j]),
-					tvec_varp(band, move_src[j]),
-					band->stride * move_num[j]
-				);
-			}
-		}
-	}
-
 	v->n_used -= nd;
 
 	return nd;
@@ -506,9 +464,14 @@ static void v_check_ref(sim_objref *ref){
 	assert(ref->idx < ref->vec->n_used);
 }
 
-static struct tvec *v_check_band(sim_objvec *v, lexid varid){
+static sim_vband *v_check_band(sim_objvec *v, lexid varid){
 	assert(varid < v->n_bands);
 	return &v->bands[varid];
+}
+
+static void v_clear(struct sim *sim, sim_objvec *v){
+	for(lexid i=0;i<v->n_bands;i++)
+		sim_obj_swap(sim, v, i, NULL);
 }
 
 static void v_ensure_cap(struct sim *sim, sim_objvec *v, size_t n){
@@ -525,15 +488,22 @@ static void v_ensure_cap(struct sim *sim, sim_objvec *v, size_t n){
 	// frame-alloc new bands, no need to free old ones since they were frame-alloced as well
 	// NOTE: this will not work if we some day do interleaved bands!
 	for(size_t i=0;i<v->n_bands;i++){
-		struct tvec *b = &v->bands[i];
+		sim_vband *b = &v->bands[i];
 		void *old_data = b->data;
-		b->data = f_alloc(TOP(sim), b->stride*na, VEC_ALIGN);
+		b->data = f_alloc(TOP(sim), na<<b->stride_bits, VEC_ALIGN);
 		if(v->n_used)
-			memcpy(b->data, old_data, b->stride*v->n_used);
+			memcpy(b->data, old_data, v->n_used<<b->stride_bits);
 	}
 
 	assert(na == ALIGN(na, VEC_ALIGN));
 	v->n_alloc = na;
+}
+
+static void v_init(sim_objvec *v, size_t idx, size_t n){
+	for(lexid i=BUILTIN_VARS_END;i<v->n_bands;i++){
+		sim_vband *b = &v->bands[i];
+		memset(sim_vb_varp(b, idx), 0, n<<b->stride_bits);
+	}
 }
 
 static size_t v_alloc(struct sim *sim, sim_objvec *v, size_t n){
@@ -563,8 +533,9 @@ static void f_destroy(struct frame *f){
 	arena_destroy(f->arena);
 }
 
-static void f_enter(struct frame *f){
+static void f_enter(struct frame *f, unsigned fid){
 	assert(!f->inside);
+	f->fid = fid;
 	f->inside = 1;
 	f->branches = NULL;
 	f->save = NULL;
@@ -606,12 +577,18 @@ static sim_branchid f_next_branch(struct frame *f){
 	return SIM_NO_BRANCH;
 }
 
+static int f_contains(struct frame *f, void *p){
+	// ONLY for debugging
+	return arena_contains(f->arena, p);
+}
+
 static void f_exit(struct frame *f){
 	assert(f->inside);
 	f->inside = 0;
 }
 
 static void *f_alloc(struct frame *f, size_t size, size_t align){
+	assert(f->inside);
 	return arena_alloc(f->arena, size, align);
 }
 

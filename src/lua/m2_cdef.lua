@@ -30,6 +30,10 @@ void bm_and2(bm8 *restrict a, const bm8 *restrict b, size_t n);
 void bm_or2(bm8 *restrict a, const bm8 *restrict b, size_t n);
 void bm_xor2(bm8 *restrict a, const bm8 *restrict b, size_t n);
 void bm_not(bm8 *bm, size_t n);
+void bs_zero(bm8 *bs, size_t n);
+unsigned bs_get(bm8 *bs, size_t idx);
+void bs_set(bm8 *bs, size_t idx);
+void bs_clear(bm8 *bs, size_t idx);
 typedef uint64_t gridpos;
 typedef uint32_t gridcoord;
 struct grid {
@@ -78,11 +82,6 @@ typedef union pvalue {
  void *u;
 } pvalue;
 
-struct tvec {
- type type;
- unsigned stride;
- void *data;
-};
 struct pvec {
  type type;
  size_t n;
@@ -124,8 +123,6 @@ size_t tsize(type t);
 ptype tpromote(type t);
 pvalue promote(void *x, type t);
 void demote(void *x, type t, pvalue p);
-void tvec_init(struct tvec *v, type t);
-void *tvec_varp(struct tvec *v, size_t p);
        
 typedef struct sim sim;
 typedef uint64_t sim_branchid;
@@ -135,11 +132,17 @@ typedef struct sim_env {
  gridpos zoom_mask;
  struct grid grid;
 } sim_env;
+typedef struct sim_vband {
+ unsigned stride_bits : 16;
+ unsigned type : 16;
+ unsigned last_modify : 32;
+ void *data;
+} sim_vband;
 typedef struct sim_objvec {
  unsigned n_alloc;
  unsigned n_used;
  unsigned n_bands;
- struct tvec bands[];
+ sim_vband bands[];
 } sim_objvec;
 typedef struct sim_objref {
  sim_objvec *vec;
@@ -149,19 +152,21 @@ sim *sim_create(struct lex *lex);
 void sim_destroy(sim *sim);
 sim_env *sim_get_env(sim *sim, lexid envid);
 void sim_env_pvec(struct pvec *v, sim_env *e);
-void sim_env_swap(sim_env *e, void *data);
+void sim_env_swap(sim *sim, sim_env *e, void *data);
 size_t sim_env_orderz(sim_env *e);
 gridpos sim_env_posz(sim_env *e, gridpos pos);
 pvalue sim_env_readpos(sim_env *e, gridpos pos);
 struct grid *sim_get_objgrid(sim *sim, lexid objid);
 void sim_obj_pvec(struct pvec *v, sim_objvec *vec, lexid varid);
-void sim_obj_swap(sim_objvec *vec, lexid varid, void *data);
+void sim_obj_swap(sim *sim, sim_objvec *vec, lexid varid, void *data);
+void *sim_vb_varp(sim_vband *band, size_t idx);
+void *sim_stride_varp(void *data, unsigned stride_bits, size_t idx);
 pvalue sim_obj_read1(sim_objref *ref, lexid varid);
 void sim_obj_write1(sim_objref *ref, lexid varid, pvalue value);
 void sim_allocv(sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos);
 void sim_allocvs(sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos);
-void sim_deletev(size_t n, sim_objref *refs);
-void sim_deletevs(size_t n, sim_objref *refs);
+void sim_deletev(sim *sim, size_t n, sim_objref *refs);
+void sim_deletevs(sim *sim, size_t n, sim_objref *refs);
 void *sim_frame_alloc(sim *sim, size_t sz, size_t align);
 void *sim_alloc_band(sim *sim, sim_objvec *vec, lexid varid);
 void *sim_alloc_env(sim *sim, sim_env *e);
@@ -310,6 +315,7 @@ void *arena_malloc(arena *arena, size_t size);
 char *arena_salloc(arena *arena, size_t size);
 void arena_save(arena *arena, arena_ptr *p);
 void arena_restore(arena *arena, arena_ptr *p);
+int arena_contains(arena *arena, void *p);
        
 typedef struct ugraph ugraph;
 typedef struct uset uset;
