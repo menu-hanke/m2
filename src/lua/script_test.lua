@@ -1,11 +1,16 @@
 local ffi = require "ffi"
 
+local tree_tpl = template(id.tree, {
+	[id.h] = 3.14
+})
+
+local bigtree_tpl = template(id.tree, {
+	[id.h] = 100.0
+})
+
 on("grow#-1", function()
 	print("istutetaan puita")
-	local trees = sim:create_objs(id.tree, {0, 1, 2, 3, 4, 5})
-	for i=0, 5 do
-		sim.write1(trees[i], id.h, 0)
-	end
+	local trees = sim:create_objs(tree_tpl, {0, 1, 2, 3, 4, 5})
 end)
 
 on("grow", function()
@@ -26,8 +31,8 @@ end)
 
 on("operation.1", function()
 	print("Tehdään operaatio 1: istutetaan yksi puu lisää")
-	local tree = sim:create_objs(id.tree, {0})
-	sim.write1(tree[0], id.h, 100.0)
+	local tree = sim:create_objs(bigtree_tpl, {0})
+	--sim.write1(tree[0], id.h, 100.0)
 end)
 
 on("operation.2", function()

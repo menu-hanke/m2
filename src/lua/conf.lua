@@ -1,15 +1,6 @@
+local typing = require "typing"
 local ffi = require "ffi"
 local C = ffi.C
-
-local builtin_types = {
-	f32 = C.T_F32,
-	f64 = C.T_F64,
-	b8  = C.T_B8,
-	b16 = C.T_B16,
-	b32 = C.T_B32,
-	b64 = C.T_B64,
-	pos = C.T_POSITION
-}
 
 local function newconf()
 	local conf_env = get_builtin_file("conf_env.lua")
@@ -20,12 +11,12 @@ end
 local function resolve_dt(xs)
 	for _,x in pairs(xs) do
 		local dtype = x.type
-		if not builtin_types[dtype] then
+		if not typing.builtin_types[dtype] then
 			error(string.format("No definition found for type '%s' of '%s'",
 				dtype, x.name))
 		end
 
-		x.type = builtin_types[dtype]
+		x.type = typing.builtin_types[dtype]
 		
 		-- TODO: non-builtins
 	end

@@ -27,6 +27,17 @@ typedef enum type {
 	T_USERDATA = 7
 } type;
 
+typedef union tvalue {
+	float    f32;
+	double   f64;
+	uint8_t  b8;
+	uint16_t b16;
+	uint32_t b32;
+	uint64_t b64;
+	gridpos  z;
+	void    *u;
+} tvalue;
+
 /* promoted types, mostly used with fhk */
 typedef enum ptype {
 	PT_REAL    = 1, // F*
@@ -37,13 +48,14 @@ typedef enum ptype {
 
 /* promoted values */
 typedef union pvalue {
-	double r;   // F*
-	uint64_t b; // B*
-	gridpos p;  // POSITION
-	void *u;    // USERDATA
+	double   r;   // F*
+	uint64_t b;   // B*
+	gridpos  z;   // POSITION
+	void    *u;   // USERDATA
 } pvalue;
 
 /* don't put anything dumb there so it fits in a register */
+static_assert(sizeof(tvalue) == sizeof(uint64_t));
 static_assert(sizeof(pvalue) == sizeof(uint64_t));
 
 /* typed packed vector with length, this is useful for more complex calculations involving
@@ -56,10 +68,10 @@ struct pvec {
 
 /* builtin vars, created automatically for each object */
 enum {
-	VARID_POSITION = 0
+	VARID_POSITION = 0,
+	BUILTIN_VARS_END
 };
 
-#define BUILTIN_VARS_END    1
 #define POSITION_RESOLUTION 31
 #define POSITION_ORDER      GRID_ORDER(POSITION_RESOLUTION)
 
@@ -103,5 +115,8 @@ uint64_t packenum(int b);
 
 size_t tsize(type t);
 ptype tpromote(type t);
-pvalue promote(void *x, type t);
-void demote(void *x, type t, pvalue p);
+pvalue vpromote(tvalue v, type t);
+tvalue vdemote(pvalue v, type t);
+void vcopy(void *dest, tvalue v, type t);
+tvalue vbroadcast(tvalue v, type t);
+uint64_t broadcast64(uint64_t x, unsigned b);

@@ -1,7 +1,14 @@
 local ffi = require "ffi"
-local lex = require "lex"
+local typing = require "typing"
 local vmath = require "vmath"
 local C = ffi.C
+
+ffi.cdef [[
+	void *malloc(size_t size);
+	void free(void *ptr);
+]]
+
+-------------------------
 
 local function vecn(v)
 	return tonumber(v.nuse)
@@ -106,6 +113,23 @@ local function create_env_lex(env, _sim, lex)
 	env.env = env_
 end
 
+local function tplidx(varid)
+	return varid - C.BUILTIN_VARS_END
+end
+
+local function create_template(_sim, _lex, objid, values)
+	local sz = C.sim_tpl_size(_sim, objid)
+	local tpl = ffi.cast("sim_objtpl *", ffi.gc(C.malloc(sz), C.free))
+	ffi.fill(tpl, sz)
+	local obj = vece(_lex.objs, objid)
+	for varid,val in pairs(values) do
+		local var = vece(obj.vars, varid)
+		tpl.defaults[tplidx(varid)] = typing.lua2tvalue(val, var.type)
+	end
+	C.sim_tpl_create(_sim, objid, tpl)
+	return tpl
+end
+
 local function create_sim(lex)
 	local env = setmetatable({}, {__index=envf})
 	local chains = setmetatable({}, chaintable_mt)
@@ -120,6 +144,7 @@ local function create_sim(lex)
 
 	env.sim = sim
 	env.on = delegate(sim, sim.on)
+	env.template = function(objid, values) return create_template(_sim, lex, objid, values) end
 
 	return sim
 end
@@ -234,10 +259,10 @@ function chaintable_mt:__index(k)
 	return ret
 end
 
-function sim:create_objs(objid, pos)
+function sim:create_objs(tpl, pos)
 	local c_pos, n = copyarray("gridpos[?]", pos)
 	local refs = ffi.new("sim_objref[?]", n)
-	C.sim_allocv(self._sim, refs, objid, n, c_pos)
+	C.sim_allocv(self._sim, refs, tpl, n, c_pos)
 	return refs
 end
 
@@ -259,14 +284,13 @@ function sim:each_objvec(objid, f)
 end
 
 function sim.read1(ref, varid)
-	local pv = C.sim_obj_read1(ref, varid)
 	local t = ref.vec.bands[varid].type
-	return lex.frompvalue_s(pv, t)
+	return typing.tvalue2lua(C.sim_obj_read1(ref, varid), t)
 end
 
 function sim.write1(ref, varid, value)
 	local t = ref.vec.bands[varid].type
-	C.sim_obj_write1(ref, varid, lex.topvalue_s(value, t))
+	C.sim_obj_write1(ref, varid, typing.lua2tvalue(value, t))
 end
 
 -------------------------

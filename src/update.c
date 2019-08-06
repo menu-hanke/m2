@@ -228,8 +228,10 @@ static void update_cell(struct ugraph *u, struct uset *s, gridpos cell){
 			assert(!res); // TODO error handling goes here
 		}
 
-		for(size_t j=0;j<nv;j++)
-			demote(sim_vb_varp(&bands[j], i), bands[j].type, x[j]->mark.value);
+		for(size_t j=0;j<nv;j++){
+			tvalue v = vdemote(x[j]->mark.value, bands[j].type);
+			sim_vb_vcopy(&bands[j], i, v);
+		}
 	}
 
 	// (5) replace only the changed pointers, the old data is safe generally in the previous
@@ -360,13 +362,15 @@ static int G_resolve_virtual(struct fhk_graph *G, void *udata, pvalue *value){
 	struct var *v = udata;
 	
 	switch(v->type){
-		case V_VAR: 
-			*value = sim_obj_read1(&u->u_objref, v->varid);
+		case V_VAR: {
+			type t = u->u_objref.vec->bands[u->u_objref.idx].type;
+			*value = vpromote(sim_obj_read1(&u->u_objref, v->varid), t);
 			break;
+		}
 
 		case V_ENV: {
-			gridpos pos = sim_obj_read1(&u->u_objref, VARID_POSITION).p;
-			*value = sim_env_readpos(v->senv, pos);
+			gridpos pos = sim_obj_read1(&u->u_objref, VARID_POSITION).z;
+			*value = vpromote(sim_env_readpos(v->senv, pos), v->senv->type);
 			break;
 		}
 

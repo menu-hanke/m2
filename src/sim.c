@@ -53,15 +53,16 @@ static void init_frame(struct sim *sim);
 
 static void create_savepoint(struct sim *sim, save *sp);
 static size_t next_cell_allocvs(struct sim *sim, struct grid *g, size_t n, gridpos *pos,
-		sim_objref *refs);
+		sim_objref *refs, tvalue *tpl);
 static size_t next_cell_deletevs(struct sim *sim, size_t n, sim_objref *refs);
 
 static void v_check_ref(sim_objref *ref);
 static sim_vband *v_check_band(sim_objvec *v, lexid varid);
 static void v_clear(struct sim *sim, sim_objvec *v);
 static void v_ensure_cap(struct sim *sim, sim_objvec *v, size_t n);
-static void v_init(sim_objvec *v, size_t idx, size_t n);
-static size_t v_alloc(struct sim *sim, sim_objvec *v, size_t n);
+static void v_init(sim_objvec *v, size_t idx, size_t n, tvalue *tpl);
+static void v_init_band(sim_vband *band, size_t idx, size_t n, tvalue value);
+static size_t v_alloc(struct sim *sim, sim_objvec *v, size_t n, size_t m);
 
 static void destroy_stack(struct sim *sim);
 
@@ -126,9 +127,9 @@ gridpos sim_env_posz(sim_env *e, gridpos pos){
 	return pos;
 }
 
-pvalue sim_env_readpos(sim_env *e, gridpos pos){
+tvalue sim_env_readpos(sim_env *e, gridpos pos){
 	pos = sim_env_posz(e, pos);
-	return promote(grid_data(&e->grid, pos), e->type);
+	return *((tvalue *) grid_data(&e->grid, pos));
 }
 
 struct grid *sim_get_objgrid(struct sim *sim, lexid objid){
@@ -154,36 +155,68 @@ void *sim_vb_varp(sim_vband *band, size_t idx){
 	return sim_stride_varp(band->data, band->stride_bits, idx);
 }
 
+void sim_vb_vcopy(sim_vband *band, size_t idx, tvalue v){
+	memcpy(sim_vb_varp(band, idx), &v, 1<<band->stride_bits);
+}
+
 void *sim_stride_varp(void *data, unsigned stride_bits, size_t idx){
 	return ((char *) data) + (idx<<stride_bits);
 }
 
-pvalue sim_obj_read1(sim_objref *ref, lexid varid){
+tvalue sim_obj_read1(sim_objref *ref, lexid varid){
 	v_check_ref(ref);
 	sim_vband *band = v_check_band(ref->vec, varid);
-	return promote(sim_vb_varp(band, ref->idx), band->type);
+	return *((tvalue *) sim_vb_varp(band, ref->idx));
 }
 
-void sim_obj_write1(sim_objref *ref, lexid varid, pvalue value){
+void sim_obj_write1(sim_objref *ref, lexid varid, tvalue value){
 	v_check_ref(ref);
 	sim_vband *band = v_check_band(ref->vec, varid);
-	demote(sim_vb_varp(band, ref->idx), band->type, value);
+	sim_vb_vcopy(band, ref->idx, value);
 }
 
-void sim_allocv(struct sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos){
+size_t sim_tpl_size(struct sim *sim, lexid objid){
+	// XXX: this is a bit hacky, since we don't store the lex objects we just get the needed info
+	// by reading the first vector in the grid
+	struct grid *g = sim_get_objgrid(sim, objid);
+	sim_objvec *v = grid_data(g, 0);
+	return sizeof(sim_objtpl) + (v->n_bands - BUILTIN_VARS_END) * sizeof(tvalue);
+}
+
+void sim_tpl_create(struct sim *sim, lexid objid, sim_objtpl *tpl){
+	// make all defaults in tpl 64-bit values by repeating if they are smaller.
+	// this is done so during object creation we don't need to mind the size but can just
+	// spay 8 byte values in the allocated vector.
+	// this results in simpler code and gcc will vectorize it for us.
+	// (this is also what memset does, but we can't use memset since we need to handle
+	// 1,2,4 or 8 byte values)
+
+	tpl->objid = objid;
+	struct grid *g = sim_get_objgrid(sim, objid);
+	sim_objvec *v = grid_data(g, 0);
+
+	for(lexid i=BUILTIN_VARS_END;i<v->n_bands;i++){
+		tvalue *t = &tpl->defaults[SIM_TPL_IDX(i)];
+		*t = vbroadcast(*t, v->bands[i].type);
+	}
+}
+
+void sim_allocv(struct sim *sim, sim_objref *refs, sim_objtpl *tpl, size_t n, gridpos *pos){
 	// NOTE: this modifies pos!
 	// TODO: a better sort here is a good idea
 	qsort(pos, n, sizeof(gridpos), cmp_gridpos);
-	sim_allocvs(sim, refs, objid, n, pos);
+	sim_allocvs(sim, refs, tpl, n, pos);
 }
 
-void sim_allocvs(struct sim *sim, sim_objref *refs, lexid objid, size_t n, gridpos *pos){
+void sim_allocvs(struct sim *sim, sim_objref *refs, sim_objtpl *tpl, size_t n,
+		gridpos *pos){
+
 	// entries going in the same cell are now guaranteed to be sequential due to Z-ordering
 	
-	struct grid *g = &sim->objs[objid];
+	struct grid *g = &sim->objs[tpl->objid];
 
 	while(n){
-		size_t nv = next_cell_allocvs(sim, g, n, pos, refs);
+		size_t nv = next_cell_allocvs(sim, g, n, pos, refs, tpl->defaults);
 		n -= nv;
 		pos += nv;
 		refs += nv;
@@ -366,7 +399,7 @@ static void create_savepoint(struct sim *sim, save *sp){
 }
 
 static size_t next_cell_allocvs(struct sim *sim, struct grid *g, size_t n, gridpos *pos,
-		sim_objref *refs){
+		sim_objref *refs, tvalue *tpl){
 
 	gridpos vcell = grid_zoom_up(*pos, POSITION_ORDER, g->order);
 
@@ -376,8 +409,10 @@ static size_t next_cell_allocvs(struct sim *sim, struct grid *g, size_t n, gridp
 		nv++;
 
 	sim_objvec *v = grid_data(g, vcell);
-	size_t vpos = v_alloc(sim, v, nv);
-	v_init(v, vpos, nv);
+	// ensure we have enough space to handle the initialization
+	// so we don't need to care about overruning the vector in the init code
+	size_t vpos = v_alloc(sim, v, nv, ALIGN(nv, sizeof(tvalue)));
+	v_init(v, vpos, nv, tpl);
 	void *varp = sim_vb_varp(&v->bands[VARID_POSITION], vpos);
 	memcpy(varp, pos, nv*sizeof(gridpos));
 
@@ -499,15 +534,53 @@ static void v_ensure_cap(struct sim *sim, sim_objvec *v, size_t n){
 	v->n_alloc = na;
 }
 
-static void v_init(sim_objvec *v, size_t idx, size_t n){
-	for(lexid i=BUILTIN_VARS_END;i<v->n_bands;i++){
-		sim_vband *b = &v->bands[i];
-		memset(sim_vb_varp(b, idx), 0, n<<b->stride_bits);
-	}
+static void v_init(sim_objvec *v, size_t idx, size_t n, tvalue *tpl){
+	for(lexid i=BUILTIN_VARS_END;i<v->n_bands;i++)
+		v_init_band(&v->bands[i], idx, n, tpl[SIM_TPL_IDX(i)]);
 }
 
-static size_t v_alloc(struct sim *sim, sim_objvec *v, size_t n){
-	v_ensure_cap(sim, v, n);
+static void v_init_band(sim_vband *band, size_t idx, size_t n, tvalue value){
+	// init the interval from n to n+idx in band with the requested value.
+	// we can't use memset here because we need to handle values larger than 1 byte.
+	// on the other hand we can make some assumptions memset can't:
+	//   * data pointer is aligned on the size of the value to write
+	//   * we can overrun n up to the next alignment to sizeof(tvalue) (ie. 8),
+	//     since the caller helpfully made sure that memory is available to use
+	//   * our value parameter contains the value we want, extended to 64 bits by repeating
+	// This means that after we get the data pointer aligned to 8, we can just spray the
+	// 64 bit value without worries :>
+	// memset (non-asm version) for reference:
+	// https://github.com/lattera/glibc/blob/master/string/memset.c
+
+	size_t sb = band->stride_bits;
+	n <<= sb;
+	uintptr_t data = (uintptr_t) band->data;
+	data += idx << sb;
+	uintptr_t end = data + n;
+
+	// align data to 8, this loop works because data is aligned to 1,2,4 or 8 and
+	// the value in val is repeated accordingly, so we don't copy anything stupid here
+	// another way to this is in 3 steps: first align to 2, then 4 and finally 8,
+	// this is probably faster because most allocations will be aligned to 8 bytes anyway
+	uint64_t val = value.b64;
+	while(data%8){
+		*((uint8_t *) data) = val & 0xff;
+		val >>= 8;
+		data++;
+	}
+
+	// now we can spray our value all we want
+	// this could probably be vectorized but generally allocations probably aren't
+	// large enough to benefit much from that
+	for(;data<end;data+=8)
+		*((uint64_t *) data) = value.b64;
+}
+
+static size_t v_alloc(struct sim *sim, sim_objvec *v, size_t n, size_t m){
+	// alloc n entries but ensure we have space for at least m
+	// this is done because the object allocator will not init the objects (at most) 8 bytes
+	// at a time, so we need to be careful not to overwrite something important
+	v_ensure_cap(sim, v, m);
 	size_t ret = v->n_used;
 	v->n_used += n;
 	dv("alloc %zu entries [%zu-%u] on vector %p (%u/%u used)\n",
