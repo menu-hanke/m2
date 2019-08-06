@@ -412,9 +412,6 @@ static int check_cst(struct fhk_cst *cst, pvalue v){
 		case FHK_RIVAL:
 			return v.r >= cst->rival.min && v.r <= cst->rival.max;
 
-		case FHK_IIVAL:
-			return v.i >= cst->iival.min && v.i <= cst->iival.max;
-
 		case FHK_BITSET:
 			//dv("check bitset b=%#lx mask=0%#lx\n", v.b, cst->setmask);
 			return !!(v.b & cst->setmask);
@@ -464,9 +461,8 @@ static void resolve_given(struct state *s, struct fhk_var *x){
 			if(s->G->resolve_virtual(s->G, x->udata, &x->mark.value))
 				FAIL(FHK_RESOLVE_FAILED, NULL, x);
 
-			dv("-> %f / %ld / %#lx\n",
+			dv("-> %f / %#lx\n",
 					x->mark.value.r,
-					x->mark.value.i,
 					x->mark.value.b
 			);
 		}

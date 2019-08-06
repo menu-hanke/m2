@@ -183,7 +183,6 @@ static SEXPTYPE get_sexp_type(ptype t){
 		case PT_REAL:
 			return REALSXP;
 
-		case PT_INT: /* XXX: R doesn't have 64-bit integers so this may cause problems */
 		case PT_BIT:
 			return INTSXP;
 
@@ -234,10 +233,6 @@ static void copy_args(struct ex_R_func *X, pvalue *argv){
 				*REAL(v) = argv->r;
 				break;
 
-			case PT_INT:
-				*INTEGER(v) = argv->i;
-				break;
-
 			case PT_BIT:
 				/* XXX: could also have separately bit enum types that are passed
 				 * as bit masks, and bit enum types that are passed as integer values,
@@ -256,10 +251,6 @@ static void copy_sexp(pvalue *v, ptype type, SEXP s){
 	switch(type){
 		case PT_REAL:
 			v->r = *REAL(s);
-			break;
-
-		case PT_INT:
-			v->i = *INTEGER(s);
 			break;
 
 		case PT_BIT:

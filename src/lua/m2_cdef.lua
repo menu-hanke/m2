@@ -56,27 +56,21 @@ gridpos grid_translate_mask(size_t from, size_t to);
 typedef enum type {
  T_F32 = 0,
  T_F64 = 1,
- T_I8 = 2,
- T_I16 = 3,
- T_I32 = 4,
- T_I64 = 5,
- T_B8 = 6,
- T_B16 = 7,
- T_B32 = 8,
- T_B64 = 9,
- T_POSITION = 10,
- T_USERDATA = 11
+ T_B8 = 2,
+ T_B16 = 3,
+ T_B32 = 4,
+ T_B64 = 5,
+ T_POSITION = 6,
+ T_USERDATA = 7
 } type;
 typedef enum ptype {
  PT_REAL = 1,
- PT_INT = 2,
- PT_BIT = 3,
- PT_POS = 4,
- PT_UDATA = 5
+ PT_BIT = 2,
+ PT_POS = 3,
+ PT_UDATA = 4
 } ptype;
 typedef union pvalue {
  double r;
- int64_t i;
  uint64_t b;
  gridpos p;
  void *u;
@@ -179,22 +173,16 @@ sim_branchid sim_next_branch(sim *sim);
        
 enum fhk_ctype {
  FHK_RIVAL,
- FHK_IIVAL,
  FHK_BITSET
 };
 struct fhk_rival {
  double min;
  double max;
 };
-struct fhk_iival {
- int64_t min;
- int64_t max;
-};
 struct fhk_cst {
  enum fhk_ctype type;
  union {
   struct fhk_rival rival;
-  struct fhk_iival iival;
   uint64_t setmask;
  };
 };

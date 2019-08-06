@@ -15,37 +15,29 @@ typedef enum type {
 	T_F32      = 0,
 	T_F64      = 1,
 
-	/* integers */
-	T_I8       = 2,
-	T_I16      = 3,
-	T_I32      = 4,
-	T_I64      = 5,
-
 	/* bit-enums, implemented as a mask */
-	T_B8       = 6,
-	T_B16      = 7,
-	T_B32      = 8,
-	T_B64      = 9,
+	T_B8       = 2,
+	T_B16      = 3,
+	T_B32      = 4,
+	T_B64      = 5,
 
 	// TODO: is a complex type needed?
 	
-	T_POSITION = 10,
-	T_USERDATA = 11
+	T_POSITION = 6,
+	T_USERDATA = 7
 } type;
 
 /* promoted types, mostly used with fhk */
 typedef enum ptype {
 	PT_REAL    = 1, // F*
-	PT_INT     = 2, // I*
-	PT_BIT     = 3, // B*
-	PT_POS     = 4, // POSITION
-	PT_UDATA   = 5  // USERDATA
+	PT_BIT     = 2, // B*
+	PT_POS     = 3, // POSITION
+	PT_UDATA   = 4  // USERDATA
 } ptype;
 
 /* promoted values */
 typedef union pvalue {
 	double r;   // F*
-	int64_t i;  // I*
 	uint64_t b; // B*
 	gridpos p;  // POSITION
 	void *u;    // USERDATA

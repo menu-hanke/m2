@@ -9,7 +9,6 @@
 
 enum fhk_ctype {
 	FHK_RIVAL,
-	FHK_IIVAL,
 	FHK_BITSET
 };
 
@@ -18,16 +17,10 @@ struct fhk_rival {
 	double max;
 };
 
-struct fhk_iival {
-	int64_t min;
-	int64_t max;
-};
-
 struct fhk_cst {
 	enum fhk_ctype type;
 	union {
 		struct fhk_rival rival;
-		struct fhk_iival iival;
 		uint64_t setmask;
 	};
 };

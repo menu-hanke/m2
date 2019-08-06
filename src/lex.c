@@ -62,10 +62,6 @@ size_t tsize(type t){
 	static const uint8_t sizes[] = {
 		[T_F32] = 4,
 		[T_F64] = 8,
-		[T_I8]  = 1,
-		[T_I16] = 2,
-		[T_I32] = 4,
-		[T_I64] = 8,
 		[T_B8]  = 1,
 		[T_B16] = 2,
 		[T_B32] = 4,
@@ -82,12 +78,6 @@ ptype tpromote(type t){
 		case T_F32:
 		case T_F64:
 			return PT_REAL;
-
-		case T_I8:
-		case T_I16:
-		case T_I32:
-		case T_I64:
-			return PT_INT;
 
 		case T_B8:
 		case T_B16:
@@ -111,10 +101,6 @@ pvalue promote(void *x, type t){
 	switch(t){
 		case T_F32:      ret.r = *((float *)    x); break;
 		case T_F64:      ret.r = *((double *)   x); break;
-		case T_I8:       ret.i = *((int8_t *)   x); break;
-		case T_I16:      ret.i = *((int16_t *)  x); break;
-		case T_I32:      ret.i = *((int32_t *)  x); break;
-		case T_I64:      ret.i = *((int64_t *)  x); break;
 		case T_B8:       ret.b = *((uint8_t *)  x); break;
 		case T_B16:      ret.b = *((uint16_t *) x); break;
 		case T_B32:      ret.b = *((uint32_t *) x); break;
@@ -131,10 +117,6 @@ void demote(void *x, type t, pvalue p){
 	switch(t){
 		case T_F32:      *((float *)    x) = p.r; break;
 		case T_F64:      *((double *)   x) = p.r; break;
-		case T_I8:       *((int8_t *)   x) = p.i; break;
-		case T_I16:      *((int16_t *)  x) = p.i; break;
-		case T_I32:      *((int32_t *)  x) = p.i; break;
-		case T_I64:      *((int64_t *)  x) = p.i; break;
 		case T_B8:       *((uint8_t *)  x) = p.b; break;
 		case T_B16:      *((uint16_t *) x) = p.b; break;
 		case T_B32:      *((uint32_t *) x) = p.b; break;
