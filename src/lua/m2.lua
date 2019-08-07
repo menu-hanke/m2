@@ -1,49 +1,84 @@
 require "m2_cdef"
 require "glob_util"
 
-local function parse_args(args)
-	local idx = 2
-	local ret = {}
-
-	while idx <= #args do
-		if args[idx] == "-F" then
-			ret.mode = "fill"
-		elseif args[idx] == "-S" then
-			ret.simulate = true
-		elseif args[idx] == "-c" then
-			idx = idx+1
-			ret.config = args[idx]
-		elseif args[idx] == "-i" then
-			idx = idx+1
-			ret.input = args[idx]
-		elseif args[idx] == "-b" then
-			ret.batch = true
-		elseif args[idx] == "-f" then
-			idx = idx+1
-			local obj,fields = args[idx]:match("^([^:]+):(.+)$")
-			fields = map(split(fields), trim)
-			ret.fill = { obj=obj, fields=fields }
-		else
-			io.stderr:write("Ignored unknown argument '" .. args[idx] .. "'\n")
-		end
-
-		idx = idx+1
+local function opt(name)
+	return function(ret, n)
+		ret[name] = n()
 	end
-
-	return ret
 end
 
-function main(args)
-	local args = parse_args(args)
+local function flag(name)
+	return function(ret)
+		ret[name] = true
+	end
+end
 
-	--if args.mode == "fill" then
-	if args.fill then
-		(require "fill").main(args)
-	elseif args.simulate then
-		(require "simulate").main(args)
+local argdef = {
+
+	simulate = {
+		c = opt("config")
+	},
+
+	fhkdbg= {
+		c = opt("config"),
+		i = opt("input"),
+		f = function(ret, n) ret.vars = map(split(n()), trim) end
+	}
+
+}
+
+-------------------------
+
+local function parse_args(args)
+	-- skip first arg (program name)
+	local idx = 1
+	local iter = function()
+		idx = idx + 1
+		return args[idx]
 	end
 
-	collectgarbage() --debug
+	local cmd
+	if #args<2 or args[2]:sub(1, 1) == "-" then
+		cmd = "simulate"
+	else
+		cmd = args[2]
+		iter()
+	end
 
+	local ad = argdef[cmd]
+
+	if not ad then
+		error(string.format("Unknown command '%s'", cmd))
+	end
+
+	local ret = {}
+
+	while true do
+		local flag = iter()
+		if not flag then
+			break
+		end
+
+		if flag:sub(1, 1) ~= "-" then
+			error(string.format("Invalid argument: '%s'", flag))
+		end
+
+		local cb = ad[flag:sub(2)]
+		if not cb then
+			error(string.format("Unknown flag: '%s'", flag))
+		end
+
+		cb(ret, iter)
+	end
+
+	return cmd, ret
+end
+
+-------------------------
+
+function main(args)
+	local cmd, args = parse_args(args)
+	require(cmd).main(args)
+	collectgarbage() --debug
 	return 0
 end

@@ -32,8 +32,7 @@ env "x"
 
 env "c"
 	resolution(4)
-	--dtype "b16"
-	dtype "f64"
+	dtype "b16"
 
 -- These are computed vars only in fhk graph but they must still be declared here
 -- because typing info is needed to call the models.

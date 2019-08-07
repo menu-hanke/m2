@@ -14,6 +14,10 @@ local function destroy(f)
 	f.impl.destroy(f)
 end
 
+local function exec(f, ret, args)
+	return f.impl.exec(f, ret, args)
+end
+
 local function create(impl, argt, rett)
 	if impl.lang ~= "R" then
 		error("sorry only R")
@@ -41,7 +45,8 @@ local function from_model(m)
 end
 
 return {
-	create=create,
-	from_model=from_model,
-	destroy=destroy
+	create     = create,
+	from_model = from_model,
+	destroy    = destroy,
+	exec       = exec
 }
