@@ -54,7 +54,7 @@
 
 // max branching depth for the simulator
 #ifndef SIM_MAX_DEPTH
-#define SIM_MAX_DEPTH 8
+#define SIM_MAX_DEPTH 16
 #endif
 
 // size for the initial chunk for the sims memory arena
@@ -63,9 +63,17 @@
 #define SIM_ARENA_SIZE 8096
 #endif
 
+// max size for save stack
+#ifndef SIM_VSTACK_SIZE
+#define SIM_VSTACK_SIZE (1 << 16)
+#endif
+
 // size for initial chunk of static arena
+// this should be a few times bigger than SIM_SAVE_STACK_SIZE since the save stack
+// and each frame's copy of the save stack is allocated on the static arena
+// (Note: 2^20 = around 1 Mb)
 #ifndef SIM_STATIC_ARENA_SIZE
-#define SIM_STATIC_ARENA_SIZE (1 << 16)
+#define SIM_STATIC_ARENA_SIZE (1 << 20)
 #endif
 
 // init vector size for sim object vectors

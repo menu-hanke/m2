@@ -13,14 +13,6 @@ typedef uint64_t sim_branchid;
 #define SIM_NO_BRANCH 0
 #define SIM_TPL_IDX(varid) ((varid) - BUILTIN_VARS_END)
 
-typedef struct sim_env {
-	type type;
-	size_t zoom_order;
-	gridpos zoom_mask;
-	struct grid grid;
-} sim_env;
-
-// XXX: the 'type' field is unsigned instead of type because luajit doesn't like enum bitfields
 typedef struct sim_vband {
 	unsigned stride_bits : 16;
 	unsigned type        : 16;
@@ -35,6 +27,20 @@ typedef struct sim_objvec {
 	sim_vband bands[];
 } sim_objvec;
 
+typedef struct sim_obj {
+	size_t vsize;
+	sim_objvec *vtemplate;
+	struct grid grid;
+} sim_obj;
+
+// XXX: the 'type' field is unsigned instead of type because luajit doesn't like enum bitfields
+typedef struct sim_env {
+	unsigned type       : 32;
+	unsigned zoom_order : 32;
+	gridpos zoom_mask;
+	struct grid grid;
+} sim_env;
+
 // *Temporary* reference to a sim object. Don't hold on to these.
 // The ref stays valid (inside branch) until a call to sim_deletev() moves or deletes it.
 typedef struct sim_objref {
@@ -43,7 +49,7 @@ typedef struct sim_objref {
 } sim_objref;
 
 typedef struct sim_objtpl {
-	lexid objid;
+	sim_obj *obj;
 	tvalue defaults[];
 } sim_objtpl;
 
@@ -57,7 +63,7 @@ size_t sim_env_orderz(sim_env *e);
 gridpos sim_env_posz(sim_env *e, gridpos pos);
 tvalue sim_env_readpos(sim_env *e, gridpos pos);
 
-struct grid *sim_get_objgrid(sim *sim, lexid objid);
+sim_obj *sim_get_obj(sim *sim, lexid objid);
 void sim_obj_pvec(struct pvec *v, sim_objvec *vec, lexid varid);
 void sim_obj_swap(sim *sim, sim_objvec *vec, lexid varid, void *data);
 void *sim_vb_varp(sim_vband *band, size_t idx);
@@ -66,8 +72,8 @@ void *sim_stride_varp(void *data, unsigned stride_bits, size_t idx);
 tvalue sim_obj_read1(sim_objref *ref, lexid varid);
 void sim_obj_write1(sim_objref *ref, lexid varid, tvalue value);
 
-size_t sim_tpl_size(sim *sim, lexid objid);
-void sim_tpl_create(sim *sim, lexid objid, sim_objtpl *tpl);
+size_t sim_tpl_size(sim_obj *obj);
+void sim_tpl_create(sim_obj *obj, sim_objtpl *tpl);
 
 void sim_allocv(sim *sim, sim_objref *refs, sim_objtpl *tpl, size_t n, gridpos *pos);
 void sim_allocvs(sim *sim, sim_objref *refs, sim_objtpl *tpl, size_t n, gridpos *pos);

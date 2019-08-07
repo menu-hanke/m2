@@ -118,15 +118,16 @@ local function tplidx(varid)
 end
 
 local function create_template(_sim, _lex, objid, values)
-	local sz = C.sim_tpl_size(_sim, objid)
+	local obj = C.sim_get_obj(_sim, objid)
+	local sz = C.sim_tpl_size(obj)
 	local tpl = ffi.cast("sim_objtpl *", ffi.gc(C.malloc(sz), C.free))
 	ffi.fill(tpl, sz)
-	local obj = vece(_lex.objs, objid)
+	local def = vece(_lex.objs, objid)
 	for varid,val in pairs(values) do
-		local var = vece(obj.vars, varid)
+		local var = vece(def.vars, varid)
 		tpl.defaults[tplidx(varid)] = typing.lua2tvalue(val, var.type)
 	end
-	C.sim_tpl_create(_sim, objid, tpl)
+	C.sim_tpl_create(obj, tpl)
 	return tpl
 end
 
@@ -272,11 +273,12 @@ function sim:del_objs(refs)
 end
 
 function sim:each_objvec(objid, f)
-	local grid = C.sim_get_objgrid(self._sim, objid)
+	local grid = C.sim_get_obj(self._sim, objid).grid
+	local vecs = ffi.cast("sim_objvec **", grid.data)
 	local max = C.grid_max(grid.order)
 
 	for i=0, tonumber(max)-1 do
-		local vec = ffi.cast("sim_objvec *", C.grid_data(grid, i))
+		local vec = vecs[i]
 		if vec.n_used > 0 then
 			f(vec)
 		end

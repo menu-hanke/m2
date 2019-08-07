@@ -36,6 +36,16 @@ function collect(tab)
 	return ret
 end
 
+function make_set(tab)
+	local ret = {}
+
+	for _,v in pairs(tab) do
+		ret[v] = true
+	end
+
+	return ret
+end
+
 function arena_copystring(a, s)
 	local ret = ffi.C.arena_salloc(a, #s+1)
 	ffi.copy(ret, s)

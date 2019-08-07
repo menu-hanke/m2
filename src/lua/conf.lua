@@ -1,4 +1,6 @@
 local typing = require "typing"
+local exec = require "exec"
+local fhk = require "fhk"
 local ffi = require "ffi"
 local C = ffi.C
 
@@ -173,68 +175,6 @@ local function create_lexicon(data)
 	return lex
 end
 
-local function copy_ival_cst(check, vdef, a, b)
-	local ptype = C.tpromote(vdef.type)
-
-	if ptype == C.PT_REAL then
-		check.cst.type = C.FHK_RIVAL
-		check.cst.rival.min = a
-		check.cst.rival.max = b
-	elseif ptype == C.PT_INT then
-		check.cst.type = C.FHK_IIVAL
-		check.cst.iival.min = a
-		check.cst.iival.max = b
-	else
-		error(string.format("invalid ptype for interval constraint: %d", tonumber(ptype)))
-	end
-end
-
-local function copy_set_cst(check, values)
-	local mask = 0
-
-	for _,v in ipairs(values) do
-		if v<0 or v>63 then
-			error(string.format("invalid bitset value: %d", v))
-		end
-
-		-- XXX: not sure if lua actually has 64-bit integers,
-		-- maybe this should be done in C
-		mask = bit.bor(mask, tonumber(C.packenum(v)))
-	end
-
-	check.cst.type = C.FHK_BITSET
-	check.cst.setmask = mask
-end
-
-local function copy_cst(check, vdef, cst)
-	if cst.type == "ival" then
-		copy_ival_cst(check, vdef, cst.a, cst.b)
-	elseif cst.type == "set" then
-		copy_set_cst(check, cst.values)
-	else
-		error(string.format("invalid cst type '%s'", cst.type))
-	end
-end
-
-local function create_checks(model, checks, arena)
-	model.n_check = #checks
-
-	if #checks == 0 then
-		return
-	end
-
-	model.checks = C.arena_malloc(arena, ffi.sizeof("struct fhk_check[?]", model.n_check))
-
-	for i=0, #checks-1 do
-		local c = model.checks+i
-		local check = checks[i+1]
-		c.var = check.var.fhk_var
-		c.costs[C.FHK_COST_IN] = check.cost_in
-		c.costs[C.FHK_COST_OUT] = check.cost_out
-		copy_cst(c, check.var.src, check.cst)
-	end
-end
-
 local function create_fhk_graph(data)
 	local arena = C.arena_create(4096)
 
@@ -250,40 +190,13 @@ local function create_fhk_graph(data)
 
 	for i=0, n_models-1 do
 		models[i+1].fhk_model = c_models+i
+		models[i+1].ex_func = exec.from_model(models[i+1])
 		c_models[i].idx = i
 	end
 
 	for i=0, n_vars-1 do
 		vars[i+1].fhk_var = c_vars+i
 		c_vars[i].idx = i
-	end
-
-	for _,m in ipairs(models) do
-		local fm = m.fhk_model
-
-		fm.k = m.k
-		fm.c = m.c
-
-		create_checks(fm, m.checks, arena)
-
-		-- TODO
-		fm.may_fail = 1
-
-		fm.n_param = #m.params
-		fm.params = C.arena_malloc(arena, ffi.sizeof("struct fhk_var *[?]", fm.n_param))
-		for i,p in ipairs(m.params) do
-			fm.params[i-1] = p.fhk_var
-		end
-	end
-
-	for _,v in ipairs(vars) do
-		local fv = v.fhk_var
-
-		fv.n_mod = #v.models
-		fv.models = C.arena_malloc(arena, ffi.sizeof("struct fhk_model *[?]", fv.n_mod))
-		for i,m in ipairs(v.models) do
-			fv.models[i-1] = m.fhk_model
-		end
 	end
 
 	local G = ffi.gc(C.arena_malloc(arena, ffi.sizeof("struct fhk_graph")), function()
@@ -295,6 +208,8 @@ local function create_fhk_graph(data)
 	G.n_mod = n_models
 
 	C.fhk_graph_init(G)
+
+	fhk.init_fhk_graph(G, data, function(sz) return C.arena_malloc(arena, sz) end)
 
 	return G
 end

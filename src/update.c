@@ -2,6 +2,7 @@
 #include "exec.h"
 #include "arena.h"
 #include "sim.h"
+#include "update.h"
 #include "def.h"
 
 #include <stddef.h>
@@ -60,10 +61,16 @@ struct uset {
 	bm8 *reset_v, *reset_m;
 	lexid objid;
 	size_t nv;
+
+	// often we are interested in the chosen model chains, so they can be logged/etc.
+	// with this hook
+	u_solver_cb solver_cb;
+	void *solver_cb_udata;
+
 	lexid varids[];
 };
 
-static void update_cell(struct ugraph *u, struct uset *s, gridpos cell);
+static void update_vec(struct ugraph *u, struct uset *s, sim_objvec *v);
 
 static void s_vars_init(struct ugraph *u, struct uset *s);
 static void s_vars_reset(struct ugraph *u, struct uset *s);
@@ -168,6 +175,15 @@ struct uset *uset_create_envs(struct ugraph *u, size_t nv, lexid *envids){
 	return s;
 }
 
+void uset_init_flag(struct uset *s, int xidx, fhk_vbmap flag){
+	s->init_v[xidx] = flag.u8;
+}
+
+void uset_solver_cb(struct uset *s, u_solver_cb cb, void *udata){
+	s->solver_cb = cb;
+	s->solver_cb_udata = udata;
+}
+
 void uset_destroy(struct uset *s){
 	bm_free(s->init_v);
 	bm_free(s->reset_v);
@@ -176,19 +192,19 @@ void uset_destroy(struct uset *s){
 }
 
 void uset_update(struct ugraph *u, struct uset *s){
-	struct grid *objgrid = sim_get_objgrid(u->sim, s->objid);
-	gridpos max = grid_max(objgrid->order);
+	sim_obj *obj = sim_get_obj(u->sim, s->objid);
+	struct grid *g = &obj->grid;
+	sim_objvec **data = g->data;
+	gridpos max = grid_max(g->order);
 
-	for(gridpos i=0;i<max;i++)
-		update_cell(u, s, i);
+	for(gridpos i=0;i<max;i++){
+		if(data[i])
+			update_vec(u, s, data[i]);
+	}
 }
 
-static void update_cell(struct ugraph *u, struct uset *s, gridpos cell){
+static void update_vec(struct ugraph *u, struct uset *s, sim_objvec *v){
 	// TODO: update for envs, that should loop over gridpos instead of vector elements
-
-	struct grid *objgrid = sim_get_objgrid(u->sim, s->objid);
-	sim_objvec *v = grid_data(objgrid, cell);
-
 	if(!v->n_used)
 		return;
 
@@ -218,6 +234,7 @@ static void update_cell(struct ugraph *u, struct uset *s, gridpos cell){
 
 	// (4) solve!
 	size_t n = v->n_used;
+	u_solver_cb cb = s->solver_cb;
 	for(size_t i=0;i<n;i++){
 		bm_and2((bm8 *) G->v_bitmaps, s->reset_v, G->n_var);
 		bm_and2((bm8 *) G->m_bitmaps, s->reset_m, G->n_mod);
@@ -232,6 +249,9 @@ static void update_cell(struct ugraph *u, struct uset *s, gridpos cell){
 			tvalue v = vdemote(x[j]->mark.value, bands[j].type);
 			sim_vb_vcopy(&bands[j], i, v);
 		}
+
+		if(cb)
+			cb(s->solver_cb_udata, G, nv, x);
 	}
 
 	// (5) replace only the changed pointers, the old data is safe generally in the previous
@@ -286,7 +306,7 @@ static void s_vars_reset(struct ugraph *u, struct uset *s){
 	}
 
 	// (2)
-	size_t order = sim_get_objgrid(u->sim, s->objid)->order;
+	size_t order = sim_get_obj(u->sim, s->objid)->grid.order;
 	for(lexid i=0;i<VECN(u->lex->envs);i++){
 		// Note: if the zoom is changed this mask needs to be recalculated (TODO)
 		struct fhk_var *x = u->envs[i];
@@ -332,6 +352,7 @@ static void s_envs_reset(struct ugraph *u, struct uset *s){
 static struct uset *s_create_uset(struct ugraph *u, size_t nv, lexid *varids){
 	// use malloc here instead of arena since uset lifetime can be shorter than ugraph
 	struct uset *s = malloc(sizeof(*s) + nv*sizeof(lexid));
+	s->solver_cb = NULL;
 	s->nv = nv;
 	memcpy(s->varids, varids, nv*sizeof(*varids));
 	s->init_v = bm_alloc(u->G->n_var);

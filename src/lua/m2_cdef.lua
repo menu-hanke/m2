@@ -135,12 +135,6 @@ uint64_t broadcast64(uint64_t x, unsigned b);
        
 typedef struct sim sim;
 typedef uint64_t sim_branchid;
-typedef struct sim_env {
- type type;
- size_t zoom_order;
- gridpos zoom_mask;
- struct grid grid;
-} sim_env;
 typedef struct sim_vband {
  unsigned stride_bits : 16;
  unsigned type : 16;
@@ -153,12 +147,23 @@ typedef struct sim_objvec {
  unsigned n_bands;
  sim_vband bands[];
 } sim_objvec;
+typedef struct sim_obj {
+ size_t vsize;
+ sim_objvec *vtemplate;
+ struct grid grid;
+} sim_obj;
+typedef struct sim_env {
+ unsigned type : 32;
+ unsigned zoom_order : 32;
+ gridpos zoom_mask;
+ struct grid grid;
+} sim_env;
 typedef struct sim_objref {
  sim_objvec *vec;
  size_t idx;
 } sim_objref;
 typedef struct sim_objtpl {
- lexid objid;
+ sim_obj *obj;
  tvalue defaults[];
 } sim_objtpl;
 sim *sim_create(struct lex *lex);
@@ -169,7 +174,7 @@ void sim_env_swap(sim *sim, sim_env *e, void *data);
 size_t sim_env_orderz(sim_env *e);
 gridpos sim_env_posz(sim_env *e, gridpos pos);
 tvalue sim_env_readpos(sim_env *e, gridpos pos);
-struct grid *sim_get_objgrid(sim *sim, lexid objid);
+sim_obj *sim_get_obj(sim *sim, lexid objid);
 void sim_obj_pvec(struct pvec *v, sim_objvec *vec, lexid varid);
 void sim_obj_swap(sim *sim, sim_objvec *vec, lexid varid, void *data);
 void *sim_vb_varp(sim_vband *band, size_t idx);
@@ -177,8 +182,8 @@ void sim_vb_vcopy(sim_vband *band, size_t idx, tvalue v);
 void *sim_stride_varp(void *data, unsigned stride_bits, size_t idx);
 tvalue sim_obj_read1(sim_objref *ref, lexid varid);
 void sim_obj_write1(sim_objref *ref, lexid varid, tvalue value);
-size_t sim_tpl_size(sim *sim, lexid objid);
-void sim_tpl_create(sim *sim, lexid objid, sim_objtpl *tpl);
+size_t sim_tpl_size(sim_obj *obj);
+void sim_tpl_create(sim_obj *obj, sim_objtpl *tpl);
 void sim_allocv(sim *sim, sim_objref *refs, sim_objtpl *tpl, size_t n, gridpos *pos);
 void sim_allocvs(sim *sim, sim_objref *refs, sim_objtpl *tpl, size_t n, gridpos *pos);
 void sim_deletev(sim *sim, size_t n, sim_objref *refs);
@@ -329,6 +334,7 @@ int arena_contains(arena *arena, void *p);
        
 typedef struct ugraph ugraph;
 typedef struct uset uset;
+typedef void (*u_solver_cb)(void *udata, struct fhk_graph *G, size_t nv, struct fhk_var **xs);
 ugraph *u_create(sim *sim, struct lex *lex, struct fhk_graph *G);
 void u_destroy(ugraph *u);
 void u_link_var(ugraph *u, struct fhk_var *x, struct obj_def *obj, struct var_def *var);
@@ -337,6 +343,8 @@ void u_link_computed(ugraph *u, struct fhk_var *x, const char *name);
 void u_link_model(ugraph *u, struct fhk_model *m, const char *name, ex_func *f);
 uset *uset_create_vars(ugraph *u, lexid objid, size_t nv, lexid *varids);
 uset *uset_create_envs(ugraph *u, size_t nv, lexid *envids);
+void uset_init_flag(uset *s, int xidx, fhk_vbmap flag);
+void uset_solver_cb(uset *s, u_solver_cb, void *udata);
 void uset_destroy(uset *s);
 void uset_update(ugraph *u, uset *s);
        
