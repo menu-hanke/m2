@@ -66,3 +66,10 @@ function copyarray(ct, src)
 	end
 	return ret, n
 end
+
+function delegate(owner, f)
+	return function(...)
+		return f(owner, ...)
+	end
+end
+

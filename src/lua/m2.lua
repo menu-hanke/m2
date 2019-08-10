@@ -7,19 +7,33 @@ local function opt(name)
 	end
 end
 
+local function addopt(name)
+	return function(ret, n)
+		ret[name] = ret[name] or {}
+		table.insert(ret[name], n())
+	end
+end
+
 local function flag(name)
 	return function(ret)
 		ret[name] = true
 	end
 end
 
-local argdef = {
+local m2args = {
+	jv = flag("jit_v"),
+	jp = flag("jit_p"),
+	jP = opt("jit_p")
+}
+
+local subargs = {
 
 	simulate = {
-		c = opt("config")
+		c = opt("config"),
+		s = addopt("scripts")
 	},
 
-	fhkdbg= {
+	fhkdbg = {
 		c = opt("config"),
 		i = opt("input"),
 		f = function(ret, n) ret.vars = map(split(n()), trim) end
@@ -45,7 +59,7 @@ local function parse_args(args)
 		iter()
 	end
 
-	local ad = argdef[cmd]
+	local ad = subargs[cmd]
 
 	if not ad then
 		error(string.format("Unknown command '%s'", cmd))
@@ -63,7 +77,7 @@ local function parse_args(args)
 			error(string.format("Invalid argument: '%s'", flag))
 		end
 
-		local cb = ad[flag:sub(2)]
+		local cb = ad[flag:sub(2)] or m2args[flag:sub(2)]
 		if not cb then
 			error(string.format("Unknown flag: '%s'", flag))
 		end
@@ -78,7 +92,23 @@ end
 
 function main(args)
 	local cmd, args = parse_args(args)
+
+	if args.jit_v then
+		(require "jit.v").on()
+	end
+
+	if args.jit_p then
+		local opt = type(args.jit_p) ~= "boolean" and args.jit_p or nil
+		(require "jit.p").start(opt)
+	end
+
 	require(cmd).main(args)
+
 	collectgarbage() --debug
+
+	if args.jit_p then
+		(require "jit.p").stop()
+	end
+
 	return 0
 end

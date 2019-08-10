@@ -1,28 +1,5 @@
 local ffi = require "ffi"
-local typing = require "typing"
-local vmath = require "vmath"
 local C = ffi.C
-
-ffi.cdef [[
-	void *malloc(size_t size);
-	void free(void *ptr);
-]]
-
--------------------------
-
-local function vecn(v)
-	return tonumber(v.nuse)
-end
-
-local function vece(v, i)
-	return v.data+i
-end
-
-local function delegate(owner, f)
-	return function(...)
-		return f(owner, ...)
-	end
-end
 
 -------------------------
 
@@ -57,26 +34,138 @@ end
 
 -------------------------
 
-local objvec = {}
+local frame = {}
+local frame_mt = { __index = frame }
 
-function objvec:pvec(varid)
-	local ret = ffi.new("struct pvec")
-	C.sim_obj_pvec(ret, self, varid)
-	return vmath.vec(ret)
+local function create_frame(instr, ip)
+	return setmetatable({instr=instr, ip=ip}, frame_mt)
 end
 
-ffi.metatype("sim_objvec", {__index=objvec})
+local function xunpack(args, i, max)
+	if i <= max then
+		return args[i], xunpack(args, i+1, max)
+	end
+end
+
+function frame:exec()
+	while self.ip <= #self.instr do
+		local instr = self.instr[self.ip]
+		self.ip = self.ip + 1
+		instr()
+
+		if self.exit then
+			return
+		end
+	end
+end
+
+function frame:continue()
+	self:run_stack()
+	if self.exit then return end
+	self:exec()
+end
+
+function frame:mark_exit()
+	self.exit = true
+end
+
+function frame:push(chain, args, narg)
+	local ret = {
+		chain = chain,
+		narg = narg,
+		args = args,
+		next = 1
+	}
+	table.insert(self, ret)
+	return ret
+end
+
+function frame:pop()
+	self[#self] = nil
+end
+
+function frame:top()
+	return self[#self]
+end
+
+function frame:copy()
+	local ret = create_frame(self.instr, self.ip)
+
+	for i,v in ipairs(self) do
+		ret[i] = {
+			chain = v.chain,
+			narg = v.narg,
+			args = v.args,
+			next = v.next
+		}
+	end
+
+	return ret
+end
+
+function frame:run_top(chain, args, narg)
+	local sf = self:push(chain, args, narg)
+	self:_run_subframe(sf)
+
+	if self.exit then
+		return
+	end
+
+	self:pop()
+end
+
+function frame:run_stack()
+	while #self > 0 do
+		local sub = self:top()
+		self:_run_subframe(sub)
+
+		if self.exit then
+			return
+		end
+
+		self:pop()
+	end
+end
+
+function frame:_run_subframe(sf)
+	self:_call_subframe(sf, xunpack(sf.args, 1, sf.narg))
+end
+
+function frame:_call_subframe(sf, ...)
+	local chain = sf.chain
+	local n = #chain
+
+	while sf.next <= n do
+		local c = chain[sf.next]
+		sf.next = sf.next + 1
+		c(...)
+
+		if self.exit then
+			return
+		end
+	end
+end
 
 -------------------------
 
-local envf = setmetatable({}, {__index=_G})
+local record_mt = {}
 
-function envf.choice(id, chain, ...)
-	return {id=id, chain=chain, args={...}}
+function record_mt:__index(f)
+	return function(...)
+		table.insert(self.__recorded, {
+			f = f,
+			args = {...},
+			narg = select("#", ...)
+		})
+	end
 end
 
-function envf.branch(choices)
-	return "branch", choices
+local function record()
+	return setmetatable({__recorded={}}, record_mt)
+end
+
+local function getrecord(r)
+	return r.__recorded
 end
 
 -------------------------
@@ -85,126 +174,45 @@ local sim = {}
 local sim_mt = { __index = sim }
 local chaintable_mt = {}
 
-local function create_env_lex(env, _sim, lex)
-	local id = setmetatable({}, {__index=function(id, name)
-		error(string.format("No id matching name '%s'", name))
-	end})
-
-	local env_ = setmetatable({}, {__index=function(env_, name)
-		error(string.format("No env matching name '%s'", name))
-	end})
-
-	for i=0, vecn(lex.objs)-1 do
-		local o = vece(lex.objs, i)
-		id[ffi.string(o.name)] = o.id
-
-		for j=0, vecn(o.vars)-1 do
-			local v = vece(o.vars, j)
-			id[ffi.string(v.name)] = v.id
-		end
-	end
-
-	for i=0, vecn(lex.envs)-1 do
-		local e = vece(lex.envs, i)
-		env_[ffi.string(e.name)] = C.sim_get_env(_sim, i)
-	end
-
-	env.id = id
-	env.env = env_
-end
-
-local function tplidx(varid)
-	return varid - C.BUILTIN_VARS_END
-end
-
-local function create_template(_sim, _lex, objid, values)
-	local obj = C.sim_get_obj(_sim, objid)
-	local sz = C.sim_tpl_size(obj)
-	local tpl = ffi.cast("sim_objtpl *", ffi.gc(C.malloc(sz), C.free))
-	ffi.fill(tpl, sz)
-	local def = vece(_lex.objs, objid)
-	for varid,val in pairs(values) do
-		local var = vece(def.vars, varid)
-		tpl.defaults[tplidx(varid)] = typing.lua2tvalue(val, var.type)
-	end
-	C.sim_tpl_create(obj, tpl)
-	return tpl
-end
-
-local function create_sim(lex)
-	local env = setmetatable({}, {__index=envf})
+local function create_sim()
 	local chains = setmetatable({}, chaintable_mt)
-	local _sim = ffi.gc(C.sim_create(lex), C.sim_destroy)
-	create_env_lex(env, _sim, lex)
+	local _sim = ffi.gc(C.sim_create(), C.sim_destroy)
 
-	local sim = setmetatable({
-		env=env,
+	return setmetatable({
 		chains=chains,
 		_sim=_sim
 	}, sim_mt)
+end
 
+local function choice(id, param)
+	return {id=id, param=param}
+end
+
+local function inject(env, sim)
 	env.sim = sim
+	env.record = record
+	env.choice = choice
+	-- shortcuts
 	env.on = delegate(sim, sim.on)
-	env.template = function(objid, values) return create_template(_sim, lex, objid, values) end
-
-	return sim
+	env.branch = delegate(sim, sim.branch)
+	env.event = delegate(sim, sim.event)
+	env.simulate = delegate(sim, sim.simulate)
 end
 
-local function chain_branch(S, choices)
-	local ids = ffi.new("sim_branchid[?]", #choices)
-	local chains = {}
-	for i,v in ipairs(choices) do
-		chains[v.id] = {chain=S.chains[v.chain]}
-		ids[i-1] = v.id
+local function make_instr(sim, rec)
+	local instr = {}
+
+	for i,v in ipairs(rec) do
+		local chain = sim.chains[v.f]
+		local narg = v.narg
+		local args = v.args
+
+		instr[i] = function()
+			return sim:eventv(chain, args, narg)
+		end
 	end
 
-	local _sim = S._sim
-	local first = C.sim_branch(_sim, #choices, ids)
-	return function()
-		local ret
-
-		if first then
-			ret = first
-			first = nil
-		else
-			ret = C.sim_next_branch(_sim)
-		end
-
-		if ret ~= 0 then
-			return chains[tonumber(ret)]
-		end
-
-		C.sim_exit(_sim)
-	end
-end
-
-local function invoke_next_chain(S, chain, idx, continue)
-	if not chain[idx] then
-		return continue()
-	end
-
-	local ctl, info = chain[idx]()
-	
-	if ctl == "branch" then
-		local cont = function()
-			invoke_next_chain(S, chain, idx+1, continue)
-		end
-
-		for c in chain_branch(S, info) do
-			invoke_next_chain(S, c.chain, 1, cont)
-		end
-
-		return
-	else
-		assert(not ctl)
-	end
-
-	invoke_next_chain(S, chain, idx+1, continue)
-end
-
-function sim:run_script(fname)
-	local f, err = loadfile(fname, nil, self.env)
-	f()
+	return instr
 end
 
 function sim:on(event, f, prio)
@@ -222,36 +230,54 @@ function sim:on(event, f, prio)
 	self.chains[event]:add(create_callback(f, prio))
 end
 
-function sim:run(event, continue, ...)
-	return invoke_next_chain(self, self.chains[event], 1, continue, ...)
+function sim:simulate(rec)
+	self:simulate_instr(make_instr(self, getrecord(rec)))
 end
 
-function sim:evec(env)
-	local pvec = ffi.new("struct pvec")
-	C.sim_env_pvec(pvec, env)
-	return vmath.vec(pvec)
+function sim:simulate_instr(instr)
+	assert(not self._frame)
+	self._frame = create_frame(instr, 1)
+	self._frame:exec()
+	self._frame = nil
 end
 
-function sim:swap_env(env)
-	local pvec old = ffi.new("struct pvec")
-	local pvec new = ffi.new("struct pvec")
-	C.sim_env_pvec(old. env)
-	new.type = old.type
-	new.n = old.n
-	new.data = C.sim_alloc_env(self._sim, env)
-	C.sim_env_swap(self._sim, env, new.data)
-	return vmath.vec(old), vmath.vec(new)
+function sim:branch(instr, branches)
+	local f = self._frame
+	if f.exit then
+		error("Can't branch on exiting frame")
+	end
+
+	-- TODO: this alloc is NYI, maybe use arena?
+	local ids = ffi.new("sim_branchid[?]", #branches)
+	local params = {}
+	for i,v in ipairs(branches) do
+		ids[i-1] = v.id
+		params[tonumber(v.id)] = v.param
+	end
+
+	local id = C.sim_branch(self._sim, #branches, ids)
+
+	if id ~= 0 then
+		while id ~= 0 do
+			self._frame = f:copy()
+			instr(params[tonumber(id)])
+			self._frame:continue()
+			id = C.sim_next_branch(self._sim)
+		end
+
+		C.sim_exit(self._sim)
+	end
+
+	f:mark_exit()
+	self._frame = f
 end
 
-function sim:swap_band(vec, varid)
-	local pvec old = ffi.new("struct pvec")
-	local pvec new = ffi.new("struct pvec")
-	C.sim_obj_pvec(old, vec, varid)
-	new.type = old.type
-	new.n = old.n
-	new.data = C.sim_alloc_band(self._sim, vec, varid)
-	C.sim_obj_swap(self._sim, vec, varid, new.data)
-	return vmath.vec(old), vmath.vec(new)
+function sim:event(event, ...)
+	return self:eventv(self.chains[event], {...}, select("#", ...))
+end
+
+function sim:eventv(chain, args, narg)
+	self._frame:run_top(chain, args, narg)
 end
 
 function chaintable_mt:__index(k)
@@ -260,43 +286,11 @@ function chaintable_mt:__index(k)
 	return ret
 end
 
-function sim:create_objs(tpl, pos)
-	local c_pos, n = copyarray("gridpos[?]", pos)
-	local refs = ffi.new("sim_objref[?]", n)
-	C.sim_allocv(self._sim, refs, tpl, n, c_pos)
-	return refs
-end
-
-function sim:del_objs(refs)
-	local r, n = copyarray("sim_objref[?]", refs)
-	C.sim_deletev(self._sim, n, r)
-end
-
-function sim:each_objvec(objid, f)
-	local grid = C.sim_get_obj(self._sim, objid).grid
-	local vecs = ffi.cast("sim_objvec **", grid.data)
-	local max = C.grid_max(grid.order)
-
-	for i=0, tonumber(max)-1 do
-		local vec = vecs[i]
-		if vec.n_used > 0 then
-			f(vec)
-		end
-	end
-end
-
-function sim.read1(ref, varid)
-	local t = ref.vec.bands[varid].type
-	return typing.tvalue2lua(C.sim_obj_read1(ref, varid), t)
-end
-
-function sim.write1(ref, varid, value)
-	local t = ref.vec.bands[varid].type
-	C.sim_obj_write1(ref, varid, typing.lua2tvalue(value, t))
-end
-
 -------------------------
 
 return {
-	create=create_sim
+	create = create_sim,
+	inject = inject,
+	record = record,
+	choice = choice
 }

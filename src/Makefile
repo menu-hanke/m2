@@ -27,7 +27,8 @@ debug: CCOPT = -g3 -fopenmp
 debug: CCDEBUG = -DDEBUG
 debug: default
 
-M2_O = main.o bitmap.o fhk_graph.o fhk_solve.o lex.o arena.o sim.o grid.o save.o update.o vmath.o
+M2_O = main.o bitmap.o fhk_graph.o fhk_solve.o lex.o arena.o sim.o grid.o save.o update.o vmath.o\
+	   world.o
 
 # TODO: test these features from EXEC_LANG
 # R support

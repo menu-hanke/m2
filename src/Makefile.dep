@@ -4,12 +4,13 @@ fhk_graph.o: fhk_graph.c bitmap.h def.h fhk.h lex.h list.h grid.h
 fhk_solve.o: fhk_solve.c def.h fhk.h bitmap.h lex.h list.h grid.h
 lex.o: lex.c lex.h def.h list.h grid.h bitmap.h
 arena.o: arena.c def.h arena.h
-sim.o: sim.c lex.h def.h list.h grid.h bitmap.h arena.h sim.h
+sim.o: sim.c arena.h def.h sim.h
 grid.o: grid.c grid.h bitmap.h def.h
 save.o: save.c arena.h
 update.o: update.c fhk.h bitmap.h def.h lex.h list.h grid.h exec.h \
- arena.h sim.h update.h
+ arena.h world.h sim.h update.h
 vmath.o: vmath.c vmath.h def.h
+world.o: world.c world.h lex.h def.h list.h grid.h bitmap.h sim.h
 exec_R.o: exec_R.c lex.h def.h list.h grid.h bitmap.h exec.h
 lua/m2_cdef.lua: lua_exports.h lex.h def.h list.h grid.h bitmap.h sim.h \
- fhk.h exec.h arena.h update.h vmath.h
+ world.h fhk.h exec.h arena.h update.h vmath.h

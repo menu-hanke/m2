@@ -7,7 +7,7 @@ typedef struct ugraph ugraph;
 typedef struct uset uset;
 typedef void (*u_solver_cb)(void *udata, struct fhk_graph *G, size_t nv, struct fhk_var **xs);
 
-ugraph *u_create(sim *sim, struct lex *lex, struct fhk_graph *G);
+ugraph *u_create(world *world, struct lex *lex, struct fhk_graph *G);
 void u_destroy(ugraph *u);
 
 void u_link_var(ugraph *u, struct fhk_var *x, struct obj_def *obj, struct var_def *var);

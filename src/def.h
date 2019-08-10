@@ -76,12 +76,6 @@
 #define SIM_STATIC_ARENA_SIZE (1 << 20)
 #endif
 
-// init vector size for sim object vectors
-// Note: this must be a multiple of M2_VECTOR_SIZE!
-#ifndef SIM_INIT_VEC_SIZE
-#define SIM_INIT_VEC_SIZE 128
-#endif
-
 // max number of vars in an object
 // Note: this must be a multiple of 8*M2_VECTOR_SIZE!
 #ifndef SIM_MAX_VAR
@@ -91,4 +85,10 @@
 // initial temp stack chunk size
 #ifndef SIM_TMP_ARENA_SIZE
 #define SIM_TMP_ARENA_SIZE 8096
+#endif
+
+// init vector size for object vectors
+// Note: this must be a multiple of M2_VECTOR_SIZE!
+#ifndef WORLD_INIT_VEC_SIZE
+#define WORLD_INIT_VEC_SIZE 128
 #endif

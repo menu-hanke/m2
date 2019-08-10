@@ -135,68 +135,76 @@ uint64_t broadcast64(uint64_t x, unsigned b);
        
 typedef struct sim sim;
 typedef uint64_t sim_branchid;
-typedef struct sim_vband {
- unsigned stride_bits : 16;
- unsigned type : 16;
- unsigned last_modify : 32;
- void *data;
-} sim_vband;
-typedef struct sim_objvec {
- unsigned n_alloc;
- unsigned n_used;
- unsigned n_bands;
- sim_vband bands[];
-} sim_objvec;
-typedef struct sim_obj {
- size_t vsize;
- sim_objvec *vtemplate;
- struct grid grid;
-} sim_obj;
-typedef struct sim_env {
- unsigned type : 32;
- unsigned zoom_order : 32;
- gridpos zoom_mask;
- struct grid grid;
-} sim_env;
-typedef struct sim_objref {
- sim_objvec *vec;
- size_t idx;
-} sim_objref;
-typedef struct sim_objtpl {
- sim_obj *obj;
- tvalue defaults[];
-} sim_objtpl;
-sim *sim_create(struct lex *lex);
+sim *sim_create();
 void sim_destroy(sim *sim);
-sim_env *sim_get_env(sim *sim, lexid envid);
-void sim_env_pvec(struct pvec *v, sim_env *e);
-void sim_env_swap(sim *sim, sim_env *e, void *data);
-size_t sim_env_orderz(sim_env *e);
-gridpos sim_env_posz(sim_env *e, gridpos pos);
-tvalue sim_env_readpos(sim_env *e, gridpos pos);
-sim_obj *sim_get_obj(sim *sim, lexid objid);
-void sim_obj_pvec(struct pvec *v, sim_objvec *vec, lexid varid);
-void sim_obj_swap(sim *sim, sim_objvec *vec, lexid varid, void *data);
-void *sim_vb_varp(sim_vband *band, size_t idx);
-void sim_vb_vcopy(sim_vband *band, size_t idx, tvalue v);
-void *sim_stride_varp(void *data, unsigned stride_bits, size_t idx);
-tvalue sim_obj_read1(sim_objref *ref, lexid varid);
-void sim_obj_write1(sim_objref *ref, lexid varid, tvalue value);
-size_t sim_tpl_size(sim_obj *obj);
-void sim_tpl_create(sim_obj *obj, sim_objtpl *tpl);
-void sim_allocv(sim *sim, sim_objref *refs, sim_objtpl *tpl, size_t n, gridpos *pos);
-void sim_allocvs(sim *sim, sim_objref *refs, sim_objtpl *tpl, size_t n, gridpos *pos);
-void sim_deletev(sim *sim, size_t n, sim_objref *refs);
-void sim_deletevs(sim *sim, size_t n, sim_objref *refs);
+void *sim_static_alloc(sim *sim, size_t sz, size_t align);
+void *sim_vstack_alloc(sim *sim, size_t sz, size_t align);
 void *sim_frame_alloc(sim *sim, size_t sz, size_t align);
-void *sim_alloc_band(sim *sim, sim_objvec *vec, lexid varid);
-void *sim_alloc_env(sim *sim, sim_env *e);
+int sim_is_frame_owned(sim *sim, void *p);
+unsigned sim_frame_id(sim *sim);
 void sim_savepoint(sim *sim);
 void sim_restore(sim *sim);
 void sim_enter(sim *sim);
 void sim_exit(sim *sim);
 sim_branchid sim_branch(sim *sim, size_t n, sim_branchid *branches);
 sim_branchid sim_next_branch(sim *sim);
+       
+typedef struct world world;
+typedef struct w_vband {
+ unsigned stride_bits : 16;
+ unsigned type : 16;
+ unsigned last_modify : 32;
+ void *data;
+} w_vband;
+typedef struct w_objvec {
+ unsigned n_alloc;
+ unsigned n_used;
+ unsigned n_bands;
+ w_vband bands[];
+} w_objvec;
+typedef struct w_obj {
+ size_t vsize;
+ w_objvec *vtemplate;
+ struct grid grid;
+} w_obj;
+typedef struct w_env {
+ unsigned type : 32;
+ unsigned zoom_order : 32;
+ gridpos zoom_mask;
+ struct grid grid;
+} w_env;
+typedef struct w_objref {
+ w_objvec *vec;
+ size_t idx;
+} w_objref;
+typedef struct w_objtpl {
+ w_obj *obj;
+ tvalue defaults[];
+} w_objtpl;
+world *w_create(sim *sim, struct lex *lex);
+void w_destroy(world *w);
+w_env *w_get_env(world *w, lexid envid);
+void w_env_pvec(struct pvec *v, w_env *e);
+void w_env_swap(world *w, w_env *e, void *data);
+size_t w_env_orderz(w_env *e);
+gridpos w_env_posz(w_env *e, gridpos pos);
+tvalue w_env_readpos(w_env *e, gridpos pos);
+w_obj *w_get_obj(world *w, lexid objid);
+void w_obj_pvec(struct pvec *v, w_objvec *vec, lexid varid);
+void w_obj_swap(world *w, w_objvec *vec, lexid varid, void *data);
+void *w_vb_varp(w_vband *band, size_t idx);
+void w_vb_vcopy(w_vband *band, size_t idx, tvalue v);
+void *w_stride_varp(void *data, unsigned stride_bits, size_t idx);
+tvalue w_obj_read1(w_objref *ref, lexid varid);
+void w_obj_write1(w_objref *ref, lexid varid, tvalue value);
+size_t w_tpl_size(w_obj *obj);
+void w_tpl_create(w_obj *obj, w_objtpl *tpl);
+void w_allocv(world *w, w_objref *refs, w_objtpl *tpl, size_t n, gridpos *pos);
+void w_allocvs(world *w, w_objref *refs, w_objtpl *tpl, size_t n, gridpos *pos);
+void w_deletev(world *w, size_t n, w_objref *refs);
+void w_deletevs(world *w, size_t n, w_objref *refs);
+void *w_alloc_band(world *w, w_objvec *vec, lexid varid);
+void *w_alloc_env(world *w, w_env *e);
        
 enum fhk_ctype {
  FHK_RIVAL,
@@ -335,7 +343,7 @@ int arena_contains(arena *arena, void *p);
 typedef struct ugraph ugraph;
 typedef struct uset uset;
 typedef void (*u_solver_cb)(void *udata, struct fhk_graph *G, size_t nv, struct fhk_var **xs);
-ugraph *u_create(sim *sim, struct lex *lex, struct fhk_graph *G);
+ugraph *u_create(world *world, struct lex *lex, struct fhk_graph *G);
 void u_destroy(ugraph *u);
 void u_link_var(ugraph *u, struct fhk_var *x, struct obj_def *obj, struct var_def *var);
 void u_link_env(ugraph *u, struct fhk_var *x, struct env_def *env);
