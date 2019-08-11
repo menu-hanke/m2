@@ -4,18 +4,6 @@ ffi.cdef [[
        
        
        
-static inline void vec_init(void **data, size_t *nalloc, size_t *nuse, size_t n, size_t s){
- *data = malloc(n * s);
- *nalloc = n;
- *nuse = 0;
-}
-static inline void *vec_add(void **data, size_t *nalloc, size_t *nuse, size_t s){
- if(*nuse >= *nalloc){
-  *nalloc *= 2;
-  *data = realloc(*data, s*(*nalloc));
- }
- return ((char *) *data) + s*(*nuse)++;
-}
        
        
 typedef uint8_t bm8 __attribute__((aligned(16)));

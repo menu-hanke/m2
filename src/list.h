@@ -14,6 +14,8 @@
 #define VEC_ADD(v) ((typeof(v.data)) vec_add((void**)&(v).data, &(v).nalloc, &(v).nuse, sizeof(*(v).data)))
 #define VEC_FREE(v) free((v).data)
 
+#ifndef EXPORT_LUA_CDEF
+
 static inline void vec_init(void **data, size_t *nalloc, size_t *nuse, size_t n, size_t s){
 	*data = malloc(n * s);
 	*nalloc = n;
@@ -28,3 +30,5 @@ static inline void *vec_add(void **data, size_t *nalloc, size_t *nuse, size_t s)
 
 	return ((char *) *data) + s*(*nuse)++;
 }
+
+#endif
