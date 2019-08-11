@@ -4,6 +4,26 @@
 -- TODO: mela uses weird units, like cm for diameter but m for height,
 --       maybe we should not use scaled units here (ie. m for every length, m^2 for area, etc.)
 
+-- Note: you can have multiple names for a value
+enum("species", {
+	pine                 = 1,
+	["Pinus sylvestris"] = 1,
+	spruce               = 2,
+	["Picea abies"]      = 2,
+	silver_birch         = 3,
+	["Betula pendula"]   = 3,
+	white_birch          = 4,
+	["Betula pubescens"] = 4,
+	aspen                = 5,
+	["Populus tremula"]  = 5,
+	grey_alder           = 6,
+	["Alnus incana"]     = 6,
+	black_alder          = 7,
+	["Alnus glutinosa"]  = 7,
+	misc_coniferous      = 8,
+	misc_decidious       = 9
+})
+
 obj "tree"
 	resolution(0)
 
@@ -14,8 +34,7 @@ obj "tree"
 		dtype "f64"
 	
 	var "species"
-		-- TODO: this will be an actual enum but enums are not implemented yet
-		dtype "b16"
+		dtype "species"
 	
 	var "d"
 		-- diameter

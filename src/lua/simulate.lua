@@ -4,6 +4,17 @@ local sim = require "sim"
 local world = require "world"
 local fhk = require "fhk"
 
+local function inject_types(env, cfg)
+	local enum = {}
+	env.enum = enum
+
+	for name,t in pairs(cfg.types) do
+		if t.kind == "enum" then
+			enum[name] = t.def
+		end
+	end
+end
+
 local function main(args)
 	if not args.scripts then
 		error("No scripts given, give some with -s")
@@ -16,6 +27,7 @@ local function main(args)
 	local _sim = sim.create()
 	local _world = world.create(_sim._sim, lex)
 	local env = setmetatable({}, {__index=_G})
+	inject_types(env, data)
 	sim.inject(env, _sim)
 	world.inject(env, _world)
 

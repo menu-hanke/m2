@@ -115,7 +115,7 @@ local nodup_mt = {
 	end,
 	__newindex = function(self, k, v)
 		if self[k] then
-			error(string.format(self._mes, v))
+			error(string.format(self._mes, k))
 		end
 		rawset(self._tab, k, v)
 	end
@@ -136,7 +136,8 @@ local type_ = {
 function root.enum(name, def)
 	top()._types[name] = push(type_, {
 		name = name,
-		def = def
+		def  = def,
+		kind = "enum"
 	})
 end
 

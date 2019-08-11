@@ -58,6 +58,20 @@ uint64_t packenum(int bit){
 	return 1ULL << bit;
 }
 
+type tfitenum(unsigned max){
+	if(max < 8)
+		return T_B8;
+	if(max < 16)
+		return T_B16;
+	if(max < 32)
+		return T_B32;
+	if(max < 64)
+		return T_B64;
+
+	assert(0);
+	return T_B64;
+}
+
 size_t tsize(type t){
 	static const uint8_t sizes[] = {
 		[T_F32] = 4,

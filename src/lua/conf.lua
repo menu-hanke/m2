@@ -10,25 +10,51 @@ local function newconf()
 	return env, data
 end
 
-local function resolve_dt(xs)
+local function patch_enum_values(data)
+	for name,t in pairs(data.types) do
+		if t.kind == "enum" then
+			local maxv = 0
+
+			for _,i in pairs(t.def) do
+				if i > maxv then
+					maxv = i
+				end
+			end
+
+			if maxv >= 64 then
+				error(string.format("%s: enum values >64 not yet implemented", name))
+			end
+
+			t.type = C.tfitenum(maxv)
+
+			for k,i in pairs(t.def) do
+				t.def[k] = C.packenum(i)
+			end
+		end
+	end
+end
+
+local function resolve_dt(data, xs)
 	for _,x in pairs(xs) do
 		local dtype = x.type
-		if not typing.builtin_types[dtype] then
+
+		if typing.builtin_types[dtype] then
+			x.type = typing.builtin_types[dtype]
+		elseif data.types[dtype] then
+			x.type = data.types[dtype].type
+		else
 			error(string.format("No definition found for type '%s' of '%s'",
 				dtype, x.name))
 		end
-
-		x.type = typing.builtin_types[dtype]
-		
-		-- TODO: non-builtins
 	end
 end
 
 local function resolve_types(data)
-	resolve_dt(data.envs)
-	resolve_dt(data.vars)
+	patch_enum_values(data)
+	resolve_dt(data, data.envs)
+	resolve_dt(data, data.vars)
 	for _,o in pairs(data.objs) do
-		resolve_dt(o.vars)
+		resolve_dt(data, o.vars)
 	end
 end
 

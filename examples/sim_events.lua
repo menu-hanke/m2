@@ -1,9 +1,11 @@
 local tree_tpl = template(id.tree, {
-	[id.h] = 3.14
+	[id.species] = enum.species.spruce,
+	[id.h]       = 3.14
 })
 
 local bigtree_tpl = template(id.tree, {
-	[id.h] = 100.0
+	[id.species] = enum.species.pine,
+	[id.h]       = 100.0
 })
 
 local function do_operation(op)
@@ -25,6 +27,9 @@ on("grow#1", function()
 		local old_h, new_h = world:swap_band(v, id.h)
 		old_h:add(10.0, new_h)
 		print("puun[0] pituus:", new_h.data[0])
+
+		local spe = v:pvec(id.species)
+		print("puun[1] laji:", spe.data[1], spe.data[1] == enum.species.spruce)
 	end
 end)
 

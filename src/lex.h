@@ -113,6 +113,7 @@ struct var_def *lex_add_var(struct obj_def *obj);
 int unpackenum(uint64_t b);
 uint64_t packenum(int b);
 
+type tfitenum(unsigned max);
 size_t tsize(type t);
 ptype tpromote(type t);
 pvalue vpromote(tvalue v, type t);
