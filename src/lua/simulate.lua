@@ -15,6 +15,19 @@ local function inject_types(env, cfg)
 	end
 end
 
+local function inject_fhk(env, cfg, world)
+	local G = conf.create_fhk_graph(cfg)
+	local u = fhk.create_ugraph(G, cfg)
+	u:add_world(cfg, world)
+	local _world = world._world
+
+	env.uset_obj = function(objname, varids)
+		return u:obj_uset(u.obj[objname], _world, varids)
+	end
+
+	env.fhk_update = delegate(u, u.update)
+end
+
 local function main(args)
 	if not args.scripts then
 		error("No scripts given, give some with -s")
@@ -22,12 +35,11 @@ local function main(args)
 
 	local data = conf.read(get_builtin_file("builtin_lex.lua"), args.config)
 	local lex = conf.create_lexicon(data)
-	--local G = conf.create_fhk_graph(data)
-	--fhk.init_fhk_graph(G)
 	local _sim = sim.create()
 	local _world = world.create(_sim._sim, lex)
 	local env = setmetatable({}, {__index=_G})
 	inject_types(env, data)
+	inject_fhk(env, data, _world)
 	sim.inject(env, _sim)
 	world.inject(env, _world)
 

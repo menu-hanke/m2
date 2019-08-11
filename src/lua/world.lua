@@ -32,26 +32,40 @@ ffi.metatype("w_objvec", {__index=objvec})
 
 -------------------------
 
+local env = {}
+
+function env:pvec()
+	local pvec = ffi.new("struct pvec")
+	C.w_env_pvec(pvec, self)
+	return vmath.vec(pvec)
+end
+
+ffi.metatype("w_env", {__index=env})
+
+-------------------------
+
 local function tplidx(varid)
 	return varid - C.BUILTIN_VARS_END
 end
 
-local function create_env_lex(_world, lex)
-	local id = setmetatable({}, {__index=function(id, name)
-		error(string.format("No id matching name '%s'", name))
+local function envtable(mes)
+	return setmetatable({}, {__index=function(_, name)
+		error(string.format(mes, name))
 	end})
+end
 
-	local env = setmetatable({}, {__index=function(env_, name)
-		error(string.format("No env matching name '%s'", name))
-	end})
+local function create_env_lex(_world, lex)
+	local obj = envtable("No obj matching name '%s'")
+	local var = envtable("No var matching name '%s'")
+	local env = envtable("No env matching name '%s'")
 
 	for i=0, vecn(lex.objs)-1 do
 		local o = vece(lex.objs, i)
-		id[ffi.string(o.name)] = o.id
+		obj[ffi.string(o.name)] = C.w_get_obj(_world, i)
 
 		for j=0, vecn(o.vars)-1 do
 			local v = vece(o.vars, j)
-			id[ffi.string(v.name)] = v.id
+			var[ffi.string(v.name)] = v.id
 		end
 	end
 
@@ -60,7 +74,7 @@ local function create_env_lex(_world, lex)
 		env[ffi.string(e.name)] = C.w_get_env(_world, i)
 	end
 
-	return id, env
+	return obj, var, env
 end
 
 -------------------------
@@ -70,12 +84,13 @@ local world_mt = {__index=world}
 
 local function create_world(sim, lex)
 	local _world = C.w_create(sim, lex)
-	local id, env = create_env_lex(_world, lex)
+	local obj, var, env = create_env_lex(_world, lex)
 	return setmetatable({
 		_world=_world,
 		_sim=sim,
 		_lex=lex,
-		id=id,
+		obj=obj,
+		var=var,
 		env=env
 	}, world_mt)
 end
@@ -83,29 +98,22 @@ end
 local function inject(env, world)
 	env.world = world
 	-- shortcuts
-	env.id = world.id
+	env.obj = world.obj
+	env.var = world.var
 	env.env = world.env
 	env.template = delegate(world, world.template)
 end
 
-function world:template(objid, values)
-	local obj = C.w_get_obj(self._world, objid)
+function world:template(obj, values)
 	local sz = C.w_tpl_size(obj)
 	local tpl = ffi.gc(ffi.cast("w_objtpl *", C.malloc(sz)), C.free)
 	ffi.fill(tpl, sz)
-	local def = vece(self._lex.objs, objid)
+	local vt = obj.vtemplate
 	for varid,val in pairs(values) do
-		local var = vece(def.vars, varid)
-		tpl.defaults[tplidx(varid)] = typing.lua2tvalue(val, var.type)
+		tpl.defaults[tplidx(varid)] = typing.lua2tvalue(val, vt.bands[varid].type)
 	end
 	C.w_tpl_create(obj, tpl)
 	return tpl
-end
-
-function world:evec(env)
-	local pvec = ffi.new("struct pvec")
-	C.w_env_pvec(pvec, env)
-	return vmath.vec(pvec)
 end
 
 function world:swap_env(env)
@@ -151,8 +159,8 @@ local function next_objvec(iter)
 	return iter.vecs[iter.idx], iter.idx
 end
 
-function world:objvecs(objid)
-	local grid = C.w_get_obj(self._world, objid).grid
+function world:objvecs(obj)
+	local grid = obj.grid
 	local vecs = ffi.cast("w_objvec **", grid.data)
 	local max = C.grid_max(grid.order)
 

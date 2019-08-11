@@ -86,33 +86,73 @@ end
 
 -------------------------
 
-local function create_ugraph(_sim, _lex, G)
-	local u = C.u_create(_sim, _lex, G)
+local ugraph = {}
+local ugraph_mt = {__index=ugraph}
 
-	for _,fv in pairs(data.fhk_vars) do
-		if fv.kind == "var" then
-			C.u_link_var(u, fv.fhk_var, fv.src.obj.lexobj, fv.src.lexvar)
-		elseif fv.kind == "env" then
-			C.u_link_env(u, fv.fhk_var, fv.src.lexenv)
-		elseif fv.kind == "computed" then
-			C.u_link_computed(u, fv.fhk_var, fv.src.name)
+local function create_ugraph(G, cfg)
+	local u = ffi.gc(C.u_create(G), C.u_destroy)
+
+	for _,fv in pairs(cfg.fhk_vars) do
+		if fv.kind == "computed" then
+			C.u_add_comp(u, fv.fhk_var, fv.src.name)
 		end
 	end
 
-	for _,fm in pairs(data.fhk_models) do
-		C.u_link_model(u, fm.fhk_model, fm.name, fm.ex_func)
+	for _,fm in pairs(cfg.fhk_models) do
+		C.u_add_model(u, fm.ex_func, fm.fhk_model, fm.name)
 	end
 
-	return u
+	return setmetatable({ _u=u }, ugraph_mt)
 end
 
-local function create_uset(ugraph, objid, varids)
-	local c_varids = copyarray("lexid[?]", #varids)
-	return C.uset_create_vars(u, objid, #varids, varids)
+function ugraph:add_world(cfg, world)
+	self.obj = {}
+	self.env = {}
+
+	for name,obj in pairs(cfg.objs) do
+		local wobj = world.obj[name]
+		local uobj = C.u_add_obj(self._u, wobj, name)
+		self.obj[name] = uobj
+
+		for vname,_ in pairs(obj.vars) do
+			local fv = cfg.fhk_vars[vname]
+			if fv then
+				C.u_add_var(self._u, uobj, world.var[vname], fv.fhk_var, vname)
+			end
+		end
+	end
+
+	for name,wenv in pairs(world.env) do
+		local fv = cfg.fhk_vars[name]
+		if fv then
+			self.env[name] = C.u_add_env(self._u, wenv, fv.fhk_var, name)
+		end
+	end
 end
+
+function ugraph:obj_uset(uobj, _world, varids)
+	local c_varids = copyarray("lexid[?]", varids)
+	return C.uset_create_obj(self._u, uobj, _world, #varids, c_varids)
+end
+
+function ugraph:update(s)
+	s:update(self._u)
+end
+
+-------------------------
+
+local uset_obj = {}
+local uset_obj_mt = {__index=uset_obj, __gc=C.uset_destroy_obj}
+
+function uset_obj:update(_u)
+	C.uset_update_obj(_u, self)
+end
+
+ffi.metatype("uset_obj", uset_obj_mt)
+
+-------------------------
 
 return {
 	init_fhk_graph = init_fhk_graph,
-	create_upgrah  = create_ugraph,
-	create_uset    = create_uset
+	create_ugraph  = create_ugraph
 }

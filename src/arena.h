@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stddef.h>
+#include <stdarg.h>
 
 typedef struct arena arena;
 
@@ -21,3 +22,6 @@ void arena_save(arena *arena, arena_ptr *p);
 void arena_restore(arena *arena, arena_ptr *p);
 
 int arena_contains(arena *arena, void *p);
+char *arena_vasprintf(arena *arena, const char *fmt, va_list arg);
+char *arena_asprintf(arena *arena, const char *fmt, ...);
+char *arena_strcpy(arena *arena, const char *src);

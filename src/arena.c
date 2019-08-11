@@ -7,7 +7,10 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdalign.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <assert.h>
+#include <string.h>
 
 struct chunk {
 	struct chunk *prev, *next;
@@ -91,6 +94,32 @@ int arena_contains(struct arena *arena, void *p){
 	}
 
 	return 0;
+}
+
+char *arena_vasprintf(struct arena *arena, const char *fmt, va_list arg){
+	va_list v;
+	va_copy(v, arg);
+	int size = vsnprintf(NULL, 0, fmt, v);
+	va_end(v);
+	if(size < 0)
+		return NULL;
+	char *ret = arena_salloc(arena, size+1);
+	vsprintf(ret, fmt, arg);
+	return ret;
+}
+
+char *arena_asprintf(struct arena *arena, const char *fmt, ...){
+	va_list arg;
+	va_start(arg, fmt);
+	char *ret = arena_vasprintf(arena, fmt, arg);
+	va_end(arg);
+	return ret;
+}
+
+char *arena_strcpy(struct arena *arena, const char *src){
+	char *ret = arena_salloc(arena, strlen(src)+1);
+	strcpy(ret, src);
+	return ret;
 }
 
 static struct chunk *alloc_chunk(size_t size){

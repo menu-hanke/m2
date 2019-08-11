@@ -2,23 +2,32 @@
 
 #include "fhk.h"
 #include "lex.h"
+#include "world.h"
 
 typedef struct ugraph ugraph;
-typedef struct uset uset;
+typedef struct u_obj u_obj;
+typedef struct u_var u_var;
+typedef struct u_env u_env;
+typedef struct u_comp u_comp;
+typedef struct u_glob u_glob;
+typedef struct u_model u_model;
+typedef struct uset_header uset;
+typedef struct uset_obj uset_obj;
 typedef void (*u_solver_cb)(void *udata, struct fhk_graph *G, size_t nv, struct fhk_var **xs);
 
-ugraph *u_create(world *world, struct lex *lex, struct fhk_graph *G);
+struct ugraph *u_create(struct fhk_graph *G);
 void u_destroy(ugraph *u);
 
-void u_link_var(ugraph *u, struct fhk_var *x, struct obj_def *obj, struct var_def *var);
-void u_link_env(ugraph *u, struct fhk_var *x, struct env_def *env);
-void u_link_computed(ugraph *u, struct fhk_var *x, const char *name);
-void u_link_model(ugraph *u, struct fhk_model *m, const char *name, ex_func *f);
+u_obj *u_add_obj(ugraph *u, w_obj *obj, const char *name);
+u_var *u_add_var(ugraph *u, u_obj *obj, lexid varid, struct fhk_var *x, const char *name);
+u_env *u_add_env(ugraph *u, w_env *env, struct fhk_var *x, const char *name);
+// u_glob *u_add_glob(ugraph *u, ???)
+u_comp *u_add_comp(ugraph *u, struct fhk_var *x, const char *name);
+u_model *u_add_model(ugraph *u, ex_func *f, struct fhk_model *m, const char *name);
 
-uset *uset_create_vars(ugraph *u, lexid objid, size_t nv, lexid *varids);
-uset *uset_create_envs(ugraph *u, size_t nv, lexid *envids);
+uset_obj *uset_create_obj(ugraph *u, u_obj *obj, world *world, size_t nv, lexid *varids);
+void uset_update_obj(ugraph *u, uset_obj *s);
+void uset_destroy_obj(uset_obj *s);
+
 void uset_init_flag(uset *s, int xidx, fhk_vbmap flag);
-void uset_solver_cb(uset *s, u_solver_cb, void *udata);
-void uset_destroy(uset *s);
-
-void uset_update(ugraph *u, uset *s);
+void uset_solver_cb(uset *s, u_solver_cb cb, void *udata);
