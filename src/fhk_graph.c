@@ -41,8 +41,8 @@ void fhk_reset(struct fhk_graph *G, int what){
 		.solve = !(what & FHK_RESET_SOLVE)
 	};
 
-	bm_and((bm8 *) G->v_bitmaps, G->n_var, reset_mask_v.u8);
-	bm_and((bm8 *) G->m_bitmaps, G->n_mod, reset_mask_m.u8);
+	bm_and8((bm8 *) G->v_bitmaps, G->n_var, reset_mask_v.u8);
+	bm_and8((bm8 *) G->m_bitmaps, G->n_mod, reset_mask_m.u8);
 }
 
 // Compute support of y, ie. all variables that can cause y to change

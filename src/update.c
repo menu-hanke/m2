@@ -246,8 +246,8 @@ static void s_init_G(struct uset_header *s, struct fhk_graph *G){
 }
 
 static void s_reset_G(struct uset_header *s, struct fhk_graph *G){
-	bm_and2((bm8 *) G->v_bitmaps, s->reset_v, G->n_var);
-	bm_and2((bm8 *) G->m_bitmaps, s->reset_m, G->n_mod);
+	bm_and((bm8 *) G->v_bitmaps, s->reset_v, G->n_var);
+	bm_and((bm8 *) G->m_bitmaps, s->reset_m, G->n_mod);
 }
 
 static void s_cb_G(struct uset_header *s, struct fhk_graph *G, size_t nv, struct fhk_var **xs){
@@ -331,7 +331,7 @@ static void s_obj_compute_reset(struct ugraph *u, struct uset_obj *s){
 
 	// finally, don't mask out given and solve bits
 	fhk_vbmap keep = { .given=1, .solve=1 };
-	bm_or(reset_v, nv, keep.u8);
+	bm_or8(reset_v, nv, keep.u8);
 }
 
 static void s_obj_update_vec(struct ugraph *u, struct uset_obj *s, w_objvec *v){

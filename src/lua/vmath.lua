@@ -16,6 +16,9 @@ ffi.cdef [[
 ]]
 
 for b,t in pairs(bitmap_types) do
+	-- Note: don't access bm8 in lua code, luajit has strict aliasing.
+	-- Using bm8 for C calls is safe since luajit shouldn't be able to reorder accesses
+	-- across C call boundaries.
 	ffi.cdef(string.format([[
 		struct Lbitmap_%s {
 			size_t n;
@@ -70,33 +73,37 @@ local function bitmapop(maskf, bitmapf)
 	end
 end
 
-------------------------
+local function maskf(f, xmask)
+	if xmask then
+		return function(bm8, n8, x)
+			return f(bm8, n8, xmask(x))
+		end
+	else
+		return f
+	end
+end
 
-local bitmap_size = {
-	[tonumber(ffi.C.T_B8)]  = 1,
-	[tonumber(ffi.C.T_B16)] = 2,
-	[tonumber(ffi.C.T_B32)] = 3,
-	[tonumber(ffi.C.T_B64)] = 4
-}
+local function bitmapind(size, xmask)
+	local set = maskf(C.bm_set64, xmask)
+	return {
+		init = function(self, pvec) self.n8 = self.n*size end,
+		set  = function(self, x) set(self.bm8, self.n8, x) end,
+		zero = function(self) C.bm_zero(self.bm8, self.n8) end,
+		copy = function(self, other)
+			assert(other.n8 == self.n8 and other ~= self)
+			C.bm_copy(self.bm8, other.bm8, self.n8)
+		end,
+		not_ = function(self) C.bm_not(self.bm8, self.n8) end,
+		and_ = bitmapop(maskf(C.bm_and64, xmask), C.bm_and),
+		or_  = bitmapop(maskf(C.bm_or64, xmask),  C.bm_or),
+		xor  = bitmapop(maskf(C.bm_xor64, xmask), C.bm_xor)
+	}
+end
 
-local bitmap = {
-	init = function(self, pvec) self.n8 = self.n*bitmap_size[tonumber(pvec.type)] end,
-	zero = function(self) C.bm_zero(self.bm8, self.n8) end,
-	copy = function(self, other)
-		assert(other.n8 == self.n8 and other ~= self)
-		C.bm_copy(self.bm8, other.bm8, self.n8)
-	end,
-	not_ = function(self) C.bm_not(self.bm8, self.n8) end,
-	and_ = bitmapop(C.bm_and, C.bm_and2),
-	or_  = bitmapop(C.bm_or,  C.bm_or2),
-	xor  = bitmapop(C.bm_xor, C.bm_xor2)
-}
-
-local bitmap_mt = {__index=bitmap}
-ffi.metatype("struct Lbitmap_b8", bitmap_mt)
-ffi.metatype("struct Lbitmap_b16", bitmap_mt)
-ffi.metatype("struct Lbitmap_b32", bitmap_mt)
-ffi.metatype("struct Lbitmap_b64", bitmap_mt)
+ffi.metatype("struct Lbitmap_b8",  {__index=bitmapind(1, C.bmask8)})
+ffi.metatype("struct Lbitmap_b16", {__index=bitmapind(2, C.bmask16)})
+ffi.metatype("struct Lbitmap_b32", {__index=bitmapind(4, C.bmask32)})
+ffi.metatype("struct Lbitmap_b64", {__index=bitmapind(8)})
 
 ------------------------
 
