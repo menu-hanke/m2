@@ -52,6 +52,7 @@ struct sim *sim_create(){
 	arena *static_arena = arena_create(SIM_STATIC_ARENA_SIZE);
 	struct sim *sim = arena_alloc(static_arena, sizeof(*sim), alignof(*sim));
 	sim->static_arena = static_arena;
+	memset(sim->fstack, 0, sizeof(sim->fstack));
 	init_frame(sim);
 	return sim;
 }
