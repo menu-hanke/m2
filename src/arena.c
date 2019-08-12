@@ -137,6 +137,7 @@ static void reset_chunk(struct chunk *c){
 
 static void *bump(struct chunk *c, size_t size, size_t align){
 	uintptr_t p = ALIGN((uintptr_t) c->ptr, align);
+	void *r = (void *) p;
 	p += size;
 
 	if(p >= ((uintptr_t)(c->data + c->size))){
@@ -145,9 +146,8 @@ static void *bump(struct chunk *c, size_t size, size_t align){
 		return NULL;
 	}
 
-	void *ret = c->ptr;
 	c->ptr = (void *) p;
-	return ret;
+	return r;
 }
 
 static void *bump_next_chunk(struct arena *arena, size_t size, size_t align){
