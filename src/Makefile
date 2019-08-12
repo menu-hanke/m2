@@ -27,6 +27,12 @@ debug: CCOPT = -g3 -fopenmp
 debug: CCDEBUG = -DDEBUG
 debug: default
 
+ubsan: CC = clang
+ubsan: CCOPT = -g3 -O3 -march=native -fopenmp -flto -ffast-math -fsanitize=undefined -fsanitize=address
+ubsan: CCWARN += -Wno-c++17-extensions -Wno-gnu-alignof-expression
+ubsan: CCDEBUG = -DDEBUG
+ubsan: default
+
 M2_O = main.o bitmap.o fhk_graph.o fhk_solve.o lex.o arena.o sim.o grid.o save.o update.o vmath.o\
 	   world.o
 
