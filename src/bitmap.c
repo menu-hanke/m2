@@ -16,7 +16,13 @@ typedef uint64_t alias64 __attribute__((may_alias, aligned(BITMAP_ALIGN)));
 		}\
 	} while(0)
 
-#define BITMAP_OP64(n, step) BITMAP_OP(ALIGN((n), sizeof(uint64_t)/sizeof(uint64_t)), step)
+#define BITMAP_OP64(n, step)\
+	do{\
+		size_t vs = BITMAP_SIZE(n)/sizeof(uint64_t);\
+		for(size_t i=0;i<vs;i++){\
+			step;\
+		}\
+	} while(0)
 
 bm8 *bm_alloc(size_t n){
 	return aligned_alloc(BITMAP_ALIGN, BITMAP_SIZE(n));
