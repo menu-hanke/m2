@@ -230,6 +230,10 @@ local model = {
 		top()._params[name] = true
 		table.insert(top().params, name)
 	end,
+	returns = function(name)
+		top()._returns[name] = true
+		table.insert(top().returns, name)
+	end,
 	check = function(cst, cost_in, cost_out, var)
 		table.insert(top().checks, make_check(cst, cost_in, cost_out, var))
 	end,
@@ -239,17 +243,19 @@ local model = {
 			error(string.format("Invalid format: %s", impl))
 		end
 		top().impl = { lang=lang, file=file, func=func }
-	end,
-	returns = setter("returns")
+	end
 }
 
 function root.model(name)
 	local params = {}
+	local returns = {}
 	top()._fhk_models[name] = push(model, {
 		name = name,
 		checks = {},
 		params = params,
-		_params = nodup(params, "Parameter '%s' specified twice")
+		returns = returns,
+		_params = nodup(params, "Parameter '%s' specified twice"),
+		_returns = nodup(returns, "Return value '%s' specified twice")
 	})
 end
 

@@ -106,14 +106,17 @@ local function link_graph(data)
 			c.var = fv
 		end
 
-		local rv = fhk_vars[m.returns]
-		if not rv then
-			error(string.format("No definition found for var '%s' (return value of model '%s')",
-				m.returns, m.name))
-		end
+		for i,r in ipairs(m.returns) do
+			local fv = fhk_vars[r]
+			if not fv then
+				error(string.format("No definition found for var '%s' (return value of model '%s')",
+					r, m.name))
+			end
 
-		m.returns = rv
-		table.insert(rv.models, m)
+			m.returns[i] = fv
+			m.returns[r] = nil
+			table.insert(fv.models, m)
+		end
 	end
 
 	data.fhk_vars = fhk_vars
@@ -206,36 +209,19 @@ local function create_fhk_graph(data)
 
 	local models = collect(data.fhk_models)
 	local vars = collect(data.fhk_vars)
-	local n_models = #models
-	local n_vars = #vars
+	local G = ffi.gc(C.fhk_alloc_graph(arena, #vars, #models),
+		function() C.arena_destroy(arena) end)
 
-	local c_models = ffi.cast("struct fhk_model *", C.arena_malloc(arena,
-		ffi.sizeof("struct fhk_model[?]", n_models)))
-	local c_vars = ffi.cast("struct fhk_var *", C.arena_malloc(arena,
-		ffi.sizeof("struct fhk_var[?]", n_vars)))
-
-	for i=0, n_models-1 do
-		models[i+1].fhk_model = c_models+i
-		models[i+1].ex_func = exec.from_model(models[i+1])
-		c_models[i].idx = i
+	for i,m in ipairs(models) do
+		m.fhk_model = C.fhk_get_model(G, i-1)
+		m.ex_func = exec.from_model(m)
 	end
 
-	for i=0, n_vars-1 do
-		vars[i+1].fhk_var = c_vars+i
-		c_vars[i].idx = i
+	for i,v in ipairs(vars) do
+		v.fhk_var = C.fhk_get_var(G, i-1)
 	end
 
-	local G = ffi.gc(C.arena_malloc(arena, ffi.sizeof("struct fhk_graph")), function()
-		C.arena_destroy(arena)
-	end)
-
-	G = ffi.cast("struct fhk_graph *", G)
-	G.n_var = n_vars
-	G.n_mod = n_models
-
-	C.fhk_graph_init(G)
-
-	fhk.init_fhk_graph(G, data, function(sz) return C.arena_malloc(arena, sz) end)
+	fhk.init_fhk_graph(arena, data)
 
 	return G
 end

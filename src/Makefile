@@ -33,8 +33,8 @@ ubsan: CCWARN += -Wno-c++17-extensions -Wno-gnu-alignof-expression
 ubsan: CCDEBUG = -DDEBUG
 ubsan: default
 
-M2_O = main.o bitmap.o fhk_graph.o fhk_solve.o lex.o arena.o sim.o grid.o save.o update.o vmath.o\
-	   world.o
+M2_O = main.o bitmap.o fhk_graph.o fhk_solve.o fhk_aux.o lex.o arena.o sim.o grid.o save.o\
+	   update.o vmath.o world.o
 
 # TODO: test these features from EXEC_LANG
 # R support

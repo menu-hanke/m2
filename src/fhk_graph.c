@@ -6,43 +6,9 @@ static void mark_supp_m(bm8 *vmask, bm8 *mmask, struct fhk_model *m);
 static int mark_isupp_v(struct fhk_graph *G, bm8 *vmask, bm8 *mmask, struct fhk_var *y);
 static int mark_isupp_m(struct fhk_graph *G, bm8 *vmask, bm8 *mmask, struct fhk_model *m);
 
-void fhk_graph_init(struct fhk_graph *G){
-	G->v_bitmaps = (fhk_vbmap *) bm_alloc(G->n_var);
-	G->m_bitmaps = (fhk_mbmap *) bm_alloc(G->n_mod);
-
-	fhk_reset(G, FHK_RESET_ALL);
-
-	// TODO: precompute dependencies for resetting dependent variables of a set
-}
-
-void fhk_graph_destroy(struct fhk_graph *G){
-	bm_free((bm8 *) G->v_bitmaps);
-	bm_free((bm8 *) G->m_bitmaps);
-}
-
-void fhk_set_given(struct fhk_graph *G, struct fhk_var *x){
-	fhk_vbmap given_mask = { .given = 1 };
-	G->v_bitmaps[x->idx] = given_mask;
-	x->mark.min_cost = 0;
-	x->mark.max_cost = 0;
-}
-
-void fhk_set_solve(struct fhk_graph *G, struct fhk_var *y){
-	fhk_vbmap solve_mask = { .solve = 1 };
-	G->v_bitmaps[y->idx] = solve_mask;
-}
-
-void fhk_reset(struct fhk_graph *G, int what){
-	// TODO: resetting a subset of the variables is usually needed in simulation
-
-	fhk_mbmap reset_mask_m = {0};
-	fhk_vbmap reset_mask_v = {
-		.given = !(what & FHK_RESET_GIVEN),
-		.solve = !(what & FHK_RESET_SOLVE)
-	};
-
-	bm_and8((bm8 *) G->v_bitmaps, G->n_var, reset_mask_v.u8);
-	bm_and8((bm8 *) G->m_bitmaps, G->n_mod, reset_mask_m.u8);
+void fhk_reset(struct fhk_graph *G, fhk_vbmap vmask, fhk_mbmap mmask){
+	bm_and8((bm8 *) G->v_bitmaps, G->n_var, vmask.u8);
+	bm_and8((bm8 *) G->m_bitmaps, G->n_mod, mmask.u8);
 }
 
 // Compute support of y, ie. all variables that can cause y to change
@@ -56,7 +22,9 @@ void fhk_supp(bm8 *vmask, bm8 *mmask, struct fhk_var *y){
 // and then following those, so we just use the simpler implementation to avoid
 // memory allocation rituals.
 void fhk_inv_supp(struct fhk_graph *G, bm8 *vmask, bm8 *mmask, struct fhk_var *y){
-	fhk_reset(G, 0);
+	fhk_vbmap reset_v = { .solving=1 };
+	reset_v.u8 = ~reset_v.u8;
+	fhk_reset(G, reset_v, (fhk_mbmap) (uint8_t) ~0);
 	mark_isupp_v(G, vmask, mmask, y);
 }
 

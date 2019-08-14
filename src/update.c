@@ -115,8 +115,8 @@ struct ugraph *u_create(struct fhk_graph *G){
 	memset(u->xs, 0, sizeof(*u->xs)*G->n_var);
 
 	u->G = G;
-	G->model_exec = G_model_exec;
-	G->resolve_virtual = G_resolve_virtual;
+	G->exec_model = G_model_exec;
+	G->resolve_var = G_resolve_virtual;
 	G->debug_desc_var = G_ddv;
 	G->debug_desc_model = G_ddm;
 
@@ -146,7 +146,6 @@ struct u_var *u_add_var(struct ugraph *u, struct u_obj *obj, lexid varid, struct
 	var->varid = varid;
 	var->x = x;
 	x->udata = var;
-	x->is_virtual = 1;
 	u->xs[x->idx] = (struct xheader *) var;
 	dv("fhk var[%d] = var %p %s [lexid=%d]\n", x->idx, var, vname(var), varid);
 	return var;
@@ -159,7 +158,6 @@ struct u_env *u_add_env(struct ugraph *u, w_env *env, struct fhk_var *x, const c
 	ret->x = x;
 	ret->wenv = env;
 	x->udata = ret;
-	x->is_virtual = 1;
 	u->xs[x->idx] = (struct xheader *) ret;
 	dv("fhk var[%d] = env %p %s\n", x->idx, ret, name);
 	return ret;
@@ -170,7 +168,6 @@ struct u_comp *u_add_comp(struct ugraph *u, struct fhk_var *x, const char *name)
 	vname(ret) = arena_strcpy(u->arena, name);
 	vtype(ret) = V_COMP;
 	x->udata = ret;
-	x->is_virtual = 0;
 	u->xs[x->idx] = (struct xheader *) ret;
 	dv("fhk var[%d] = computed %p %s\n", x->idx, ret, name);
 	return ret;
@@ -280,6 +277,10 @@ static void s_obj_compute_init(struct ugraph *u, struct uset_obj *s){
 		struct u_var *v = s->vars[i];
 		init_v[v->x->idx] = solve.u8;
 	}
+
+	// currently all vars here are stable
+	fhk_vbmap stable = { .stable=1 };
+	bm_or8(init_v, nv, stable.u8);
 }
 
 static void s_obj_compute_reset(struct ugraph *u, struct uset_obj *s){
@@ -329,8 +330,9 @@ static void s_obj_compute_reset(struct ugraph *u, struct uset_obj *s){
 	bm_not(reset_v, nv);
 	bm_not(reset_m, nm);
 
-	// finally, don't mask out given and solve bits
-	fhk_vbmap keep = { .given=1, .solve=1 };
+	// finally, don't mask out given/solve/stable bits.
+	// Note: if unstable vars are added then the stable bit needs to be cleared for those
+	fhk_vbmap keep = { .given=1, .solve=1, .stable=1 };
 	bm_or8(reset_v, nv, keep.u8);
 }
 
@@ -372,7 +374,7 @@ static void s_obj_update_vec(struct ugraph *u, struct uset_obj *s, w_objvec *v){
 		}
 
 		for(size_t j=0;j<nv;j++){
-			tvalue v = vdemote(xs[j]->mark.value, bands[j].type);
+			tvalue v = vdemote(xs[j]->value, bands[j].type);
 			w_vb_vcopy(&bands[j], i, v);
 		}
 

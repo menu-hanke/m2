@@ -7,6 +7,8 @@ model "Mb_1"
 
 	returns "y"
 	impl "R::examples/models1.r::Mb_1"
+	returns "y2"
+	impl "R::examples/models1.r::Mb_1"
 
 model "Mb_2"
 	param "c"
@@ -27,6 +29,8 @@ model "Mb_3"
 	param "z" check(ival(0, inf))
 
 	returns "y"
+	impl "R::examples/models1.r::Mb_3"
+	returns "y2"
 	impl "R::examples/models1.r::Mb_3"
 
 model "Mb_4"

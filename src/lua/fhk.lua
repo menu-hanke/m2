@@ -35,53 +35,90 @@ local function copy_cst(check, cst)
 	end
 end
 
-local function create_checks(model, checks, malloc)
-	model.n_check = #checks
-
+local function create_checks(checks)
 	if #checks == 0 then
 		return
 	end
 
-	model.checks = malloc(ffi.sizeof("struct fhk_check[?]", model.n_check))
+	local ret = ffi.new("struct fhk_check[?]", #checks)
 
 	for i=0, #checks-1 do
-		local c = model.checks+i
+		local c = ret+i
 		local check = checks[i+1]
 		c.var = check.var.fhk_var
 		c.costs[C.FHK_COST_IN] = check.cost_in
 		c.costs[C.FHK_COST_OUT] = check.cost_out
 		copy_cst(c, check.cst)
 	end
+
+	return ret
 end
 
-local function init_fhk_graph(G, data, malloc)
-	for _,m in pairs(data.fhk_models) do
+local function create_params(params)
+	if #params == 0 then
+		return
+	end
+
+	local ret = ffi.new("struct fhk_var *[?]", #params)
+	for i,p in ipairs(params) do
+		ret[i-1] = p.fhk_var
+	end
+
+	return ret
+end
+
+local function create_models(models)
+	if #models == 0 then
+		return
+	end
+
+	local ret = ffi.new("struct fhk_model *[?]", #models)
+	for i,m in ipairs(models) do
+		ret[i-1] = m.fhk_model
+	end
+
+	return ret
+end
+
+local function retind(returns, y)
+	-- we could build a lookup table here to avoid iterating but almost all models
+	-- have 1-2 returns so it really doesn't matter
+	for i,x in ipairs(returns) do
+		if y == x then
+			return i
+		end
+	end
+
+	assert(false)
+end
+
+local function init_fhk_graph(arena, cfg)
+	for _,m in pairs(cfg.fhk_models) do
 		local fm = m.fhk_model
 
 		fm.k = m.k
 		fm.c = m.c
 
-		create_checks(fm, m.checks, malloc)
+		local checks = create_checks(m.checks)
+		C.fhk_alloc_checks(arena, fm, #m.checks, checks)
 
-		-- TODO
-		fm.may_fail = 1
+		local params = create_params(m.params)
+		C.fhk_alloc_params(arena, fm, #m.params, params)
 
-		fm.n_param = #m.params
-		fm.params = malloc(ffi.sizeof("struct fhk_var *[?]", fm.n_param))
-		for i,p in ipairs(m.params) do
-			fm.params[i-1] = p.fhk_var
-		end
+		C.fhk_alloc_returns(arena, fm, #m.returns)
 	end
 
-	for _,v in pairs(data.fhk_vars) do
+	for _,v in pairs(cfg.fhk_vars) do
 		local fv = v.fhk_var
 
-		fv.n_mod = #v.models
-		fv.models = malloc(ffi.sizeof("struct fhk_model *[?]", fv.n_mod))
+		local models = create_models(v.models)
+		C.fhk_alloc_models(arena, fv, #v.models, models)
+
 		for i,m in ipairs(v.models) do
-			fv.models[i-1] = m.fhk_model
+			C.fhk_link_ret(m.fhk_model, fv, retind(m.returns, v)-1, i-1)
 		end
 	end
+
 end
 
 -------------------------

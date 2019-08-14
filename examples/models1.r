@@ -1,7 +1,7 @@
 Mb_1 <- function(x, c) {
 	#cat("(R) M1: x =", x, " type =", typeof(x), "\n")
 	#cat("(R) M1: c =", c, " type =", typeof(c), "\n")
-	return(c*x)
+	return(c(c*x, -c*x))
 }
 
 Mb_2 <- function(c) {
@@ -13,7 +13,7 @@ Mb_2v2 <- function() {
 }
 
 Mb_3 <- function(z) {
-	return(z*5)
+	return(c(z*5, -z*5))
 }
 
 Mb_4 <- function(z) {

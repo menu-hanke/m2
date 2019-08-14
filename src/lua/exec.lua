@@ -34,13 +34,16 @@ local function create(impl, argt, rett)
 end
 
 local function from_model(m)
-	local argt = {}
+	local argt, rett = {}, {}
 
 	for _,p in ipairs(m.params) do
 		table.insert(argt, p.src.type)
 	end
 
-	local rett = { m.returns.src.type }
+	for _,r in ipairs(m.returns) do
+		table.insert(rett, r.src.type)
+	end
+
 	return create(m.impl, argt, rett)
 end
 

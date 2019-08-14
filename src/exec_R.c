@@ -52,10 +52,8 @@ static void init_R_embedded();
 static int source(const char *fname);
 static int sourcef(const char *fname);
 static SEXP eval(SEXP call, int *err);
-static SEXPTYPE get_sexp_type(ptype t);
 static SEXP make_call(struct ex_R_func *X, const char *func);
 static void copy_args(struct ex_R_func *X, pvalue *argv);
-static void copy_sexp(pvalue *v, ptype type, SEXP s);
 static void copy_ret(struct ex_R_func *X, pvalue *ret, SEXP s);
 static void add_call(SEXP call);
 static void remove_call(SEXP call);
@@ -178,22 +176,6 @@ static SEXP eval(SEXP call, int *err){
 	// XXX: you can get the error string using R_curErrorBuf()
 }
 
-static SEXPTYPE get_sexp_type(ptype t){
-	switch(t){
-		case PT_REAL:
-			return REALSXP;
-
-		case PT_BIT:
-			return INTSXP;
-
-		case PT_POS:
-		case PT_UDATA:
-			assert(0);
-	}
-
-	UNREACHABLE();
-}
-
 static SEXP make_call(struct ex_R_func *X, const char *func){
 	SEXP fsym = Rf_install(func);
 	SEXP ret = Rf_lang1(fsym);
@@ -202,14 +184,10 @@ static SEXP make_call(struct ex_R_func *X, const char *func){
 	// so protecc it just in case
 	PROTECT(ret);
 
-	// XXX: if all args share the same type (probably common that all params are doubles),
-	// could allocate just one vector for all args and at call-time just memcpy the args there.
-	// TODO need to benchmark
-	for(int i=0;i<X->narg;i++){
-		SEXPTYPE st = get_sexp_type(X->argt[i]);
-		SEXP v = Rf_allocVector(st, 1);
-		Rf_listAppend(ret, Rf_lang1(v));
-	}
+	// all args are passed as real because R integers would be 32 bit anyway
+	// so no point in using them
+	for(int i=0;i<X->narg;i++)
+		Rf_listAppend(ret, Rf_lang1(Rf_allocVector(REALSXP, 1)));
 
 	UNPROTECT(1);
 
@@ -220,53 +198,29 @@ static void copy_args(struct ex_R_func *X, pvalue *argv){
 	// first is the function name, then a linked list of 1-length vectors
 	// representing the args
 	ptype *argt = X->argt;
-	int arg = 0;
 
-	for(SEXP s=CDR(X->call); s != R_NilValue; s=CDR(s), arg++, argt++, argv++){
-		assert(arg < X->narg);
-
+	for(SEXP s=CDR(X->call); s != R_NilValue; s=CDR(s), argt++, argv++){
 		SEXP v = CAR(s);
 
 		switch(*argt){
-			case PT_REAL:
-				//dv("R: copy arg[%d] (r=%f)\n", arg, argv->r);
-				*REAL(v) = argv->r;
-				break;
-
-			case PT_BIT:
-				/* XXX: could also have separately bit enum types that are passed
-				 * as bit masks, and bit enum types that are passed as integer values,
-				 * and let the caller convert the integer enums */
-				*INTEGER(v) = unpackenum(argv->b);
-				break;
-
-			default:
-				UNREACHABLE();
-				break;
+			case PT_REAL: *REAL(v) = argv->r; break;
+			case PT_BIT:  *REAL(v) = unpackenum(argv->b); break;
+			default:      UNREACHABLE();
 		}
 	}
 }
 
-static void copy_sexp(pvalue *v, ptype type, SEXP s){
-	switch(type){
-		case PT_REAL:
-			v->r = *REAL(s);
-			break;
-
-		case PT_BIT:
-			v->b = packenum(*INTEGER(s));
-			break;
-
-		default:
-			UNREACHABLE();
-			break;
-	}
-}
-
 static void copy_ret(struct ex_R_func *X, pvalue *ret, SEXP s){
-	// TODO multi-return, need to handle vector and pairlist cases...
-	// dv("R: copy ret (r=%f)\n", *REAL(s));
-	copy_sexp(ret, X->rett[0], s);
+	assert(TYPEOF(s) == REALSXP && LENGTH(s) == X->nret);
+
+	double *r = REAL(s);
+	for(int i=0;i<X->nret;i++,r++,ret++){
+		switch(X->rett[i]){
+			case PT_REAL: ret->r = *r; break;
+			case PT_BIT:  ret->b = packenum((uint64_t) *r); break;
+			default:      UNREACHABLE();
+		}
+	}
 }
 
 static void add_call(SEXP call){

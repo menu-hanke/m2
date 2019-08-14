@@ -27,13 +27,15 @@ local function modelinfo(udata)
 end
 
 local function hook_graph(G)
-	G.model_exec = function(G, udata, ret, args)
+	G.exec_model = function(G, udata, ret, args)
 		return exec.exec(modelinfo(udata).f, ret, args)
 	end
 
-	G.resolve_virtual = function(G, udata, value)
+	G.resolve_var = function(G, udata, value)
 		assert(false)
 	end
+
+	-- G.chain_solved = nil
 
 	G.debug_desc_var = function(udata)
 		return varinfo(udata).desc
@@ -64,11 +66,6 @@ local function hook_udata(data)
 end
 
 local function init_graph(G, data)
-	for _,fv in pairs(data.fhk_vars) do
-		fv.fhk_var.is_virtual = 0
-	end
-
-	ffi.C.fhk_reset(G, ffi.C.FHK_RESET_ALL)
 end
 
 local function get_vars(data, names)
@@ -80,14 +77,18 @@ local function get_vars(data, names)
 	return ret
 end
 
-local function set_flag(G, vars, flag)
+local function set_flag(G, flag, vars)
 	local bitmap = ffi.new("fhk_vbmap")
 	bitmap.u8 = 0
 	bitmap[flag] = 1
 
-	for _,v in ipairs(vars) do
-		local idx = v.fhk_var.idx
-		G.v_bitmaps[idx].u8 = bit.bor(G.v_bitmaps[idx].u8, bitmap.u8)
+	if vars then
+		for _,v in ipairs(vars) do
+			local idx = v.fhk_var.idx
+			G.v_bitmaps[idx].u8 = bit.bor(G.v_bitmaps[idx].u8, bitmap.u8)
+		end
+	else
+		ffi.C.bm_or64(ffi.cast("bm8 *", G.v_bitmaps), G.n_var, ffi.C.bmask8(bitmap.u8))
 	end
 end
 
@@ -106,7 +107,7 @@ local function reportv(visited, ret, G, fv, reason)
 	local bitmap = G.v_bitmaps[fv.idx]
 
 	local r = {
-		value  = typing.sim2out(typing.pvalue2lua(fv.mark.value, fvinfo.type), fvinfo.type),
+		value  = typing.sim2out(typing.pvalue2lua(fv.value, fvinfo.type), fvinfo.type),
 		desc   = ffi.string(fvinfo.desc),
 		reason = reason,
 		kind   = ffi.string(fvinfo.kind),
@@ -121,10 +122,10 @@ local function reportv(visited, ret, G, fv, reason)
 	end
 
 	if r.solved and (not r.given) then
-		local fm = fv.mark.model
+		local fm = ffi.C.fhk_get_select(fv)
 		local fminfo = modelinfo(fm.udata)
 		r.model = ffi.string(fminfo.desc)
-		r.cost = fv.mark.min_cost
+		r.cost = fv.min_cost
 
 		for i=0, tonumber(fm.n_param)-1 do
 			reportv(visited, ret, G, fm.params[i], "parameter")
@@ -196,22 +197,31 @@ local function main(args)
 	local data = conf.read(get_builtin_file("builtin_lex.lua"), args.config)
 	local G = conf.create_fhk_graph(data)
 	hook_udata(data)
-	init_graph(G, data)
 	hook_graph(G)
 
 	local vars, values = readcsv(args.input)
 	vars = get_vars(data, vars)
 	local solve = get_vars(data, args.vars)
-	set_flag(G, vars, "given")
-	set_flag(G, solve, "solve")
+
+	local reset_v = ffi.new("fhk_vbmap")
+	local reset_m = ffi.new("fhk_mbmap")
+	ffi.C.fhk_reset(G, reset_v, reset_m)
+
+	reset_v.given = 1
+	reset_v.solve = 1
+	reset_v.stable = 1
+
+	set_flag(G, "stable")
+	set_flag(G, "given", vars)
+	set_flag(G, "solve", solve)
 
 	for _,d in ipairs(values) do
+		ffi.C.fhk_reset(G, reset_v, reset_m)
+
+		set_flag(G, "has_value", vars)
 		for i,v in ipairs(vars) do
-			v.fhk_var.mark.value = typing.lua2pvalue(typing.out2sim(d[i], v.src.type), v.src.type)
-
+			v.fhk_var.value = typing.lua2pvalue(typing.out2sim(d[i], v.src.type), v.src.type)
 		end
-
-		ffi.C.fhk_reset(G, 0)
 
 		for _,v in ipairs(solve) do
 			ffi.C.fhk_solve(G, v.fhk_var)

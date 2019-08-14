@@ -5,6 +5,10 @@ obj "obj_a"
 		unit "m"
 		dtype "f64"
 
+	var "y2"
+		unit "m"
+		dtype "f64"
+
 obj "obj_b"
 	resolution(2)
 	

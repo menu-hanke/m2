@@ -2,7 +2,7 @@ local tpl = template(obj.obj_a, {
 	[var.y] = 0
 })
 
-local s = uset_obj("obj_a", {var.y})
+local s = uset_obj("obj_a", {var.y, var.y2})
 
 env.c:pvec():set(1)
 print(env.c:pvec().data[0])

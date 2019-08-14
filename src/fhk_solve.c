@@ -21,18 +21,19 @@ static void mm_solve_chain_v(struct state *s, struct fhk_var *y, double beta);
 static void mm_solve_chain_m(struct state *s, struct fhk_model *m, double beta);
 static void mm_solve_value(struct state *s, struct fhk_var *y);
 
-static void exec_chain(struct state *s, struct fhk_var *y, struct fhk_model *m);
-static void exec_model(struct state *s, struct fhk_var *y, struct fhk_model *m);
+static void exec_chain(struct state *s, struct fhk_var *y);
+static void exec_model(struct state *s, struct fhk_model *m);
 
 static double costf(struct fhk_model *m, double S);
 static double costf_inverse_S(struct fhk_model *m, double cost);
+static void stabilize(struct state *s, struct fhk_var *y);
 static int check_cst(struct fhk_cst *cst, pvalue v);
 static void constraint_bounds(double *Sc_min, double *Sc_max, struct state *s, struct fhk_model *m);
 static void resolve_given(struct state *s, struct fhk_var *x);
 static void param_bounds(double *Sp_min, double *Sp_max, struct fhk_model *m);
-static void mmin2(struct fhk_model **m1, struct fhk_model **m2, struct fhk_var *y);
+static void mmin2(unsigned *m1, unsigned *m2, struct fhk_var *y);
 
-#define UNSOLVABLE(e) ISPINF((e)->mark.min_cost)
+#define UNSOLVABLE(e) ISPINF((e)->min_cost)
 #define VM_CHAINSELECTED(vm) ((vm)->chain_selected || (vm)->given)
 #define ISPINF(x) (isinf(x) && (x)>0)
 #define VBMAP(s, y) (s)->G->v_bitmaps[(y)->idx]
@@ -62,9 +63,14 @@ int fhk_solve(struct fhk_graph *G, struct fhk_var *y){
 static void mm_bound_cost_v(struct state *s, struct fhk_var *y, double beta){
 	fhk_vbmap *bm = &VBMAP(s, y);
 
+	if(bm->has_bound)
+		return;
+
+	stabilize(s, y);
+
 	if(bm->given){
-		y->mark.min_cost = 0;
-		y->mark.max_cost = 0;
+		y->min_cost = 0;
+		y->max_cost = 0;
 		bm->has_bound = 1;
 		return;
 	}
@@ -79,8 +85,8 @@ static void mm_bound_cost_v(struct state *s, struct fhk_var *y, double beta){
 		struct fhk_model *m = y->models[i];
 		mm_bound_cost_m(s, m, beta);
 
-		if(m->mark.max_cost < beta)
-			beta = m->mark.max_cost;
+		if(m->max_cost < beta)
+			beta = m->max_cost;
 	}
 
 	bm->solving = 0;
@@ -90,17 +96,17 @@ static void mm_bound_cost_v(struct state *s, struct fhk_var *y, double beta){
 	for(size_t i=0;i<y->n_mod;i++){
 		struct fhk_model *m = y->models[i];
 
-		if(m->mark.min_cost < min)
-			min = m->mark.min_cost;
+		if(m->min_cost < min)
+			min = m->min_cost;
 
-		if(m->mark.max_cost < max)
-			max = m->mark.max_cost;
+		if(m->max_cost < max)
+			max = m->max_cost;
 	}
 
 	assert(max >= min);
 
-	y->mark.min_cost = min;
-	y->mark.max_cost = max;
+	y->min_cost = min;
+	y->max_cost = max;
 	bm->has_bound = 1;
 
 	dv("Bounded var %s in [%f, %f]\n", ddescv(s, y), min, max);
@@ -116,6 +122,9 @@ static void mm_bound_init_v(struct state *s, struct fhk_var *y, double beta){
 static void mm_bound_cost_m(struct state *s, struct fhk_model *m, double beta){
 	if(MBMAP(s, m).has_bound)
 		return;
+
+	for(size_t i=0;i<m->n_check;i++)
+		stabilize(s, m->checks[i].var);
 
 	double beta_S = costf_inverse_S(m, beta);
 
@@ -142,41 +151,41 @@ static void mm_bound_cost_m(struct state *s, struct fhk_model *m, double beta){
 
 		mm_bound_init_v(s, x, beta_S - S_min);
 
-		S_min += x->mark.min_cost;
-		S_max += x->mark.max_cost;
+		S_min += x->min_cost;
+		S_max += x->max_cost;
 
 		if(S_min >= beta_S)
 			goto betabound;
 	}
 
-	m->mark.min_cost = costf(m, S_min);
-	m->mark.max_cost = costf(m, S_max);
+	m->min_cost = costf(m, S_min);
+	m->max_cost = costf(m, S_max);
 	MBMAP(s, m).has_bound = 1;
 
-	dv("%s: bounded cost in [%f, %f]\n", ddescm(s, m), m->mark.min_cost, m->mark.max_cost);
+	dv("%s: bounded cost in [%f, %f]\n", ddescm(s, m), m->min_cost, m->max_cost);
 
-	assert(m->mark.max_cost >= m->mark.min_cost);
-	assert(beta > m->mark.min_cost);
+	assert(m->max_cost >= m->min_cost);
+	assert(beta > m->min_cost);
 
 	return;
 
 betabound:
-	m->mark.min_cost = costf(m, S_min);
-	m->mark.max_cost = INFINITY;
+	m->min_cost = costf(m, S_min);
+	m->max_cost = INFINITY;
 	MBMAP(s, m).has_bound = 1;
 
-	dv("%s: cost low bound=%f exceeded beta=%f\n", ddescm(s, m), m->mark.min_cost, beta);
+	dv("%s: cost low bound=%f exceeded beta=%f\n", ddescm(s, m), m->min_cost, beta);
 }
 
 static void mm_solve_chain_v(struct state *s, struct fhk_var *y, double beta){
 	fhk_vbmap *bm = &VBMAP(s, y);
 
-	assert(bm->has_bound);
+	assert(bm->stable && bm->has_bound);
 
 	if(VM_CHAINSELECTED(bm))
 		return;
 
-	if(y->mark.min_cost >= beta)
+	if(y->min_cost >= beta)
 		return;
 
 	// HUOM: tässä voisi vielä jatkaa, ks. lua
@@ -191,52 +200,48 @@ static void mm_solve_chain_v(struct state *s, struct fhk_var *y, double beta){
 		struct fhk_model *m = y->models[0];
 		mm_solve_chain_m(s, m, beta);
 
-		assert((m->mark.min_cost == m->mark.max_cost) || m->mark.min_cost >= beta);
+		assert((m->min_cost == m->max_cost) || m->min_cost >= beta);
 
-		y->mark.min_cost = m->mark.min_cost;
-		y->mark.max_cost = m->mark.max_cost;
+		y->min_cost = m->min_cost;
+		y->max_cost = m->max_cost;
 
-		if(m->mark.min_cost >= beta){
-			dv("%s: only model cost=%f exceeded low bound=%f\n",
-					ddescv(s, y), m->mark.min_cost, beta);
+		if(m->min_cost >= beta){
+			dv("%s: only model cost=%f exceeded low bound=%f\n", ddescv(s, y), m->min_cost, beta);
 			goto out;
 		}
 
 		bm->chain_selected = 1;
-		y->mark.model = m;
+		y->select_model = 0;
 
-		dv("%s: selected only model: %s (cost=%f)\n",
-				ddescv(s, y),
-				ddescm(s, m),
-				m->mark.min_cost
-		);
+		dv("%s: selected only model: %s (cost=%f)\n", ddescv(s, y), ddescm(s, m), m->min_cost);
 		goto out;
 	}
 
 	for(;;){
-		struct fhk_model *m1, *m2;
-		mmin2(&m1, &m2, y);
+		unsigned midx1, midx2;
+		mmin2(&midx1, &midx2, y);
 
-		if(m1->mark.min_cost >= beta){
+		struct fhk_model *m1 = y->models[midx1];
+		struct fhk_model *m2 = y->models[midx2];
+
+		if(m1->min_cost >= beta){
 			dv("%s: unable to solve below beta=%f\n", ddescv(s, y), beta);
 			goto out;
 		}
 
-		// XXX beta?
 		mm_solve_chain_m(s, m1, beta);
 
-		y->mark.min_cost = m1->mark.min_cost;
-		if(m1->mark.max_cost < y->mark.max_cost)
-			y->mark.max_cost = m1->mark.max_cost;
+		y->min_cost = m1->min_cost;
+		if(m1->max_cost < y->max_cost)
+			y->max_cost = m1->max_cost;
 
-		if(m1->mark.max_cost <= m2->mark.min_cost){
-			assert(m1->mark.min_cost == m1->mark.max_cost);
+		if(m1->max_cost <= m2->min_cost){
+			assert(m1->min_cost == m1->max_cost);
 
 			bm->chain_selected = 1;
-			y->mark.model = m1;
+			y->select_model = midx1;
 
-			dv("%s: selected model %s with cost %f\n",
-					ddescv(s, y), ddescm(s, m1), y->mark.min_cost);
+			dv("%s: selected model %s with cost %f\n", ddescv(s, y), ddescm(s, m1), y->min_cost);
 			goto out;
 		}
 	}
@@ -250,11 +255,11 @@ static void mm_solve_chain_m(struct state *s, struct fhk_model *m, double beta){
 	assert(bm->has_bound);
 
 	if(bm->chain_selected){
-		assert(m->mark.min_cost == m->mark.max_cost);
+		assert(m->min_cost == m->max_cost);
 		return;
 	}
 
-	if(m->mark.min_cost >= beta)
+	if(m->min_cost >= beta)
 		return;
 
 	double beta_S = costf_inverse_S(m, beta);
@@ -298,12 +303,12 @@ static void mm_solve_chain_m(struct state *s, struct fhk_model *m, double beta){
 		if(VM_CHAINSELECTED(&VBMAP(s, x)))
 			continue;
 
-		// here Sp_min - x->mark.min_cost is
-		//     sum  (y->mark.min_cost)
+		// here Sp_min - x->min_cost is
+		//     sum  (y->min_cost)
 		//     y!=x 
 		// 
 		// this call will either exit with chain_selected=1 or cost exceeds beta
-		mm_solve_chain_v(s, x, beta_S - (Sc_min + Sp_min - x->mark.min_cost));
+		mm_solve_chain_v(s, x, beta_S - (Sc_min + Sp_min - x->min_cost));
 
 		param_bounds(&Sp_min, &Sp_max, m);
 
@@ -313,28 +318,26 @@ static void mm_solve_chain_m(struct state *s, struct fhk_model *m, double beta){
 
 	assert(Sp_min == Sp_max);
 
-	m->mark.min_cost = costf(m, Sc_min + Sp_min);
-	m->mark.max_cost = m->mark.min_cost;
+	m->min_cost = costf(m, Sc_min + Sp_min);
+	m->max_cost = m->min_cost;
 	bm->chain_selected = 1;
-	dv("%s: solved chain, cost: %f (S=%f+%f)\n",
-			ddescm(s, m),
-			m->mark.min_cost,
-			Sc_min, Sp_min
-	);
+	dv("%s: solved chain, cost: %f (S=%f+%f)\n", ddescm(s, m), m->min_cost, Sc_min, Sp_min);
 	return;
 
 betabound:
-	m->mark.min_cost = costf(m, Sc_min + Sp_min);
-	m->mark.max_cost = costf(m, Sc_max + Sp_max);
+	m->min_cost = costf(m, Sc_min + Sp_min);
+	m->max_cost = costf(m, Sc_max + Sp_max);
 	dv("%s: min cost=%f (S=%f+%f) exceeded beta=%f\n",
 			ddescm(s, m),
-			m->mark.min_cost,
+			m->min_cost,
 			Sc_min, Sp_min,
 			beta
 	);
 }
 
 static void mm_solve_value(struct state *s, struct fhk_var *y){
+	stabilize(s, y);
+
 	fhk_vbmap *bm = &VBMAP(s, y);
 
 	if(bm->has_value || UNSOLVABLE(y))
@@ -351,43 +354,56 @@ static void mm_solve_value(struct state *s, struct fhk_var *y){
 		return;
 	}
 
-	exec_chain(s, y, y->mark.model);
+	exec_chain(s, y);
 
 	// TODO check invariants/retvalchecks (?)
 }
 
-static void exec_chain(struct state *s, struct fhk_var *y, struct fhk_model *m){
+static void exec_chain(struct state *s, struct fhk_var *y){
 	fhk_vbmap *bm = &VBMAP(s, y);
 
 	if(bm->has_value)
 		return;
 
 	assert(bm->chain_selected);
+	struct fhk_model *m = y->models[y->select_model];
 
-	for(size_t i=0;i<m->n_param;i++){
-		// this won't cause problems because the selected chain will never have a loop
-		struct fhk_var *x = m->params[i];
+	if(!MBMAP(s, m).has_return){
+		for(size_t i=0;i<m->n_param;i++){
+			// this won't cause problems because the selected chain will never have a loop
+			// Note: we don't need to check UNSOLVABLE here anymore, if we are here then
+			// we must have a finite cost
+			struct fhk_var *x = m->params[i];
 
-		if(VBMAP(s, x).given)
-			resolve_given(s, x);
-		else
-			exec_chain(s, x, x->mark.model);
+			if(VBMAP(s, x).given)
+				resolve_given(s, x);
+			else
+				exec_chain(s, x);
 
-		assert(VBMAP(s, x).has_value);
+			assert(VBMAP(s, x).has_value);
+		}
+
+		exec_model(s, m);
 	}
 
-	exec_model(s, y, m);
-
+	y->value = *y->mret[y->select_model];
 	bm->has_value = 1;
+
+	if(s->G->chain_solved)
+		s->G->chain_solved(s->G, y->udata, y->value);
 }
 
-static void exec_model(struct state *s, struct fhk_var *y, struct fhk_model *m){
+static void exec_model(struct state *s, struct fhk_model *m){
+	assert(!MBMAP(s, m).has_return);
+
 	pvalue args[m->n_param];
 	for(size_t i=0;i<m->n_param;i++)
-		args[i] = m->params[i]->mark.value;
+		args[i] = m->params[i]->value;
 
-	if(s->G->model_exec(s->G, m->udata, &y->mark.value, args))
-		FAIL(FHK_MODEL_FAILED, m, y);
+	if(s->G->exec_model(s->G, m->udata, m->returns, args))
+		FAIL(FHK_MODEL_FAILED, m, NULL);
+
+	MBMAP(s, m).has_return = 1;
 }
 
 // Note that costf must be increasing in S, non-negative (for non-negative S),
@@ -404,6 +420,51 @@ static double costf(struct fhk_model *m, double S){
 static double costf_inverse_S(struct fhk_model *m, double cost){
 	// XXX if needed, 1/c can be precomputed to turn this into a multiplication
 	return (cost - m->k) / m->c;
+}
+
+static void stabilize(struct state *s, struct fhk_var *y){
+	fhk_vbmap *bm = &VBMAP(s, y);
+
+	if(bm->stable)
+		return;
+
+	int r = s->G->resolve_var(s->G, y->udata, &y->value);
+
+	dv("stabilize %s -> (%s) %f / %#lx\n",
+			ddescv(s, y),
+			(r == FHK_OK) ? "resolved" :
+			(r == FHK_NOT_RESOLVED) ? "not resolved" : "error",
+			y->value.r,
+			y->value.b
+	);
+
+	if(r == FHK_OK){
+		bm->stable = 1;
+		bm->given = 1;
+		bm->has_value = 1;
+	}else if(r == FHK_NOT_RESOLVED){
+		bm->stable = 1;
+		bm->given = 0;
+		bm->has_value = 0;
+	}else{
+		FAIL(FHK_RESOLVE_FAILED, NULL, y);
+	}
+}
+
+static void resolve_given(struct state *s, struct fhk_var *x){
+	fhk_vbmap *bm = &VBMAP(s, x);
+
+	assert(bm->stable && bm->given);
+
+	if(bm->has_value)
+		return;
+
+	int r = s->G->resolve_var(s->G, x->udata, &x->value);
+	if(r != FHK_OK)
+		FAIL(FHK_RESOLVE_FAILED, NULL, x);
+
+	bm->has_value = 1;
+	dv("virtual %s -> %f / %#lx\n", ddescv(s, x), x->value.r, x->value.b);
 }
 
 static int check_cst(struct fhk_cst *cst, pvalue v){
@@ -430,10 +491,13 @@ static void constraint_bounds(double *Sc_min, double *Sc_max, struct state *s, s
 		struct fhk_check *c = &m->checks[i];
 		struct fhk_var *x = c->var;
 
-		resolve_given(s, x);
+		assert(VBMAP(s, x).stable);
+
+		if(VBMAP(s, x).given)
+			resolve_given(s, x);
 
 		if(VBMAP(s, x).has_value){
-			double cost = c->costs[check_cst(&c->cst, x->mark.value)];
+			double cost = c->costs[check_cst(&c->cst, x->value)];
 			min += cost;
 			max += cost;
 		}else if(UNSOLVABLE(x)){
@@ -449,58 +513,45 @@ static void constraint_bounds(double *Sc_min, double *Sc_max, struct state *s, s
 	*Sc_max = max;
 }
 
-static void resolve_given(struct state *s, struct fhk_var *x){
-	fhk_vbmap *bm = &VBMAP(s, x);
-
-	if(bm->given && !bm->has_value){
-		bm->has_value = 1;
-
-		if(x->is_virtual){
-			dv("Resolving virtual %s\n", ddescv(s, x));
-
-			if(s->G->resolve_virtual(s->G, x->udata, &x->mark.value))
-				FAIL(FHK_RESOLVE_FAILED, NULL, x);
-
-			dv("-> %f / %#lx\n",
-					x->mark.value.r,
-					x->mark.value.b
-			);
-		}
-	}
-}
-
 static void param_bounds(double *Sp_min, double *Sp_max, struct fhk_model *m){
 	double min = 0, max = 0;
 
 	for(size_t i=0;i<m->n_param;i++){
 		struct fhk_var *x = m->params[i];
 
-		min += x->mark.min_cost;
-		max += x->mark.max_cost;
+		min += x->min_cost;
+		max += x->max_cost;
 	}
 
 	*Sp_min = min;
 	*Sp_max = max;
 }
 
-static void mmin2(struct fhk_model **m1, struct fhk_model **m2, struct fhk_var *y){
+static void mmin2(unsigned *m1, unsigned *m2, struct fhk_var *y){
 	assert(y->n_mod >= 2);
 
-	struct fhk_model *a = y->models[y->models[0]->mark.min_cost >= y->models[1]->mark.min_cost];
-	struct fhk_model *b = y->models[y->models[0]->mark.min_cost < y->models[1]->mark.min_cost];
+	struct fhk_model **m = y->models;
+	double xa = m[0]->min_cost;
+	double xb = m[1]->min_cost;
+	unsigned a = xa > xb;
+	unsigned b = 1 - a;
 
-	for(size_t i=2;i<y->n_mod;i++){
-		struct fhk_model *m = y->models[i];
+	size_t n = y->n_mod;
+#define swap(A, B) do { typeof(A) _t = (A); (A) = (B); (B) = _t; } while(0)
+	for(size_t i=2;i<n;i++){
+		double xc = m[i]->min_cost;
 
-		if(m->mark.min_cost < b->mark.min_cost){
-			if(m->mark.min_cost < a->mark.min_cost){
-				b = a;
-				a = m;
-			}else{
-				b = m;
+		if(xc < xb){
+			xb = xc;
+			b = i;
+
+			if(xb < xa){
+				swap(xa, xb);
+				swap(a, b);
 			}
 		}
 	}
+#undef swap
 
 	*m1 = a;
 	*m2 = b;
