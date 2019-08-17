@@ -11,21 +11,21 @@ void fhk_reset(struct fhk_graph *G, fhk_vbmap vmask, fhk_mbmap mmask){
 	bm_and8((bm8 *) G->m_bitmaps, G->n_mod, mmask.u8);
 }
 
-// Compute support of y, ie. all variables that can cause y to change
+// Compute support of y, ie. all variables/models that can be reached from y
+// (= can cause y to change)
 void fhk_supp(bm8 *vmask, bm8 *mmask, struct fhk_var *y){
 	mark_supp_v(vmask, mmask, y);
 }
 
-// Compute the inverse support of variables specified in vmask, starting from root y
-// (ie. what set of variables can change when changing the set in  vmask).
-// This can be done more efficiently by first constructing a list of backrefs from models
-// and then following those, so we just use the simpler implementation to avoid
-// memory allocation rituals.
-void fhk_inv_supp(struct fhk_graph *G, bm8 *vmask, bm8 *mmask, struct fhk_var *y){
+// Compute inverse support of vmask, ie. mark all variables/models that vmask can be reached from
+// (= can be changed by vmask)
+void fhk_inv_supp(struct fhk_graph *G, bm8 *vmask, bm8 *mmask){
 	fhk_vbmap reset_v = { .solving=1 };
-	reset_v.u8 = ~reset_v.u8;
-	fhk_reset(G, reset_v, (fhk_mbmap) (uint8_t) ~0);
-	mark_isupp_v(G, vmask, mmask, y);
+	fhk_mbmap reset_m = {0};
+	fhk_reset(G, reset_v, reset_m);
+
+	for(size_t i=0;i<G->n_var;i++)
+		mark_isupp_v(G, vmask, mmask, &G->vars[i]);
 }
 
 static void mark_supp_v(bm8 *vmask, bm8 *mmask, struct fhk_var *y){
@@ -57,18 +57,21 @@ static int mark_isupp_v(struct fhk_graph *G, bm8 *vmask, bm8 *mmask, struct fhk_
 
 	fhk_vbmap *v = &G->v_bitmaps[y->idx];
 
-	// XXX: would be cleaner to have fhk_enter(var)/fhk_exit(var) functions or macros for this,
-	// the same cycle detection is also repeated in fhk_solve.c
 	if(v->solving)
 		return 0;
 
-	int ret = 0;
+	// Unlike in fhk_solve, we don't need to reset the "solving" bit here,
+	// no variable will ever need to be visited twice.
+	// This also automatically takes care of cycles.
+	// (It would probably be cleaner to have it named "visited" and make the fhk_vbmap
+	// an union so we could use the same bitmap for multiple purposes, or just stack allocate
+	// a bitset, or add a flag to fhk_var, ...)
 	v->solving = 1;
+
+	int ret = 0;
 
 	for(size_t i=0;i<y->n_mod;i++)
 		ret = mark_isupp_m(G, vmask, mmask, y->models[i]) || ret;
-
-	v->solving = 0;
 
 	if(ret)
 		vmask[y->idx] = 0xff;

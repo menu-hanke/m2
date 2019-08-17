@@ -171,7 +171,7 @@ struct fhk_graph {
 void fhk_reset(struct fhk_graph *G, fhk_vbmap vmask, fhk_mbmap mmask);
 void fhk_supp(bm8 *vmask, bm8 *mmask, struct fhk_var *y);
 // TODO: now that we have a full list of variables inv_supp doesn't need to take root
-void fhk_inv_supp(struct fhk_graph *G, bm8 *vmask, bm8 *mmask, struct fhk_var *y);
+void fhk_inv_supp(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
 // TODO: space intersection stuff..
 
 /* fhk_solve.c */
