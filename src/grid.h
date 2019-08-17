@@ -8,6 +8,8 @@
 typedef uint64_t gridpos;
 typedef uint32_t gridcoord;
 
+#define GRID_INVALID ((gridpos)(~0))
+
 /* A square 2D grid with 2^{order} pixels in each dimension stored as a Z-order curve,
  * where order=2*k for some k */
 struct grid {
