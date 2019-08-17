@@ -1,11 +1,13 @@
-local tpl = template(obj.obj_a, {
-	[var.y] = 0
-})
+local tpl = obj.obj_a:template { y = 0 }
+local solve_y_y2 = obj.obj_a:vsolver {"y", "y2"}
 
-local s = uset_obj("obj_a", {var.y, var.y2})
+local v = world:create_objvec(obj.obj_a)
+world:alloc_objvec(v, tpl, 10)
 
-env.c:pvec():set(1)
-print(env.c:pvec().data[0])
-print(env.c:pvec().data[1])
-world:create_objs(tpl, {0, 1, 2, 3})
-fhk_update(s)
+local y = world:alloc_band(v, id.y)
+local y2 = world:alloc_band(v, id.y2)
+solve_y_y2(v, {y, y2})
+
+y:add(y2)
+world:swap_band(v, id.y, y)
+world:swap_band(v, id.y2, y2)

@@ -109,6 +109,10 @@ local function numeric_setter(name)
 	end
 end
 
+local function set_resolution(res)
+	top().z_order = 2*tonumber(res)
+end
+
 local nodup_mt = {
 	__index = function(self, k)
 		return rawget(self._tab, k)
@@ -151,13 +155,27 @@ local obj_var = {
 }
 
 local obj = {
-	resolution = numeric_setter("resolution"),
+	resolution = set_resolution,
 	var = function(name)
 		top()._vars[name] = push(obj_var, {
 			name = name,
-			dtype = "f64",
+			type = "f64",
 			obj = top()
 		})
+	end,
+	position = function(name)
+		local obj = top()
+		if obj.position_var then
+			error(string.format("Position variable already defined as '%s'", obj.position_var.name))
+		end
+
+		obj.position_var = {
+			name = name,
+			type = "z",
+			obj = obj
+		}
+		
+		obj._vars[name] = obj.position_var
 	end
 }
 
@@ -168,7 +186,6 @@ function root.obj(name)
 		local vars = {}
 		o = {
 			name = name,
-			resolution = 0,
 			vars = vars,
 			_vars = nodup(vars, "Duplicate variable '%s'")
 		}
@@ -185,7 +202,7 @@ end
 local env_ = {
 	dtype = setter("type"),
 	unit = setter("unit"),
-	resolution = numeric_setter("resolution")
+	resolution = set_resolution,
 }
 
 function root.env(name)

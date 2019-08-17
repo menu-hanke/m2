@@ -1,6 +1,4 @@
 obj "obj_a"
-	resolution(2)
-
 	var "y"
 		unit "m"
 		dtype "f64"
@@ -10,8 +8,6 @@ obj "obj_a"
 		dtype "f64"
 
 obj "obj_b"
-	resolution(2)
-	
 	var "z"
 		unit "m"
 		dtype "f32"

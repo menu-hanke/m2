@@ -92,8 +92,23 @@ local function retind(returns, y)
 	assert(false)
 end
 
-local function init_fhk_graph(arena, cfg)
-	for _,m in pairs(cfg.fhk_models) do
+local function create_graph(cfg)
+	local arena = C.arena_create(4096)
+
+	local models = collect(cfg.fhk_models)
+	local vars = collect(cfg.fhk_vars)
+	local G = ffi.gc(C.fhk_alloc_graph(arena, #vars, #models),
+		function() C.arena_destroy(arena) end)
+
+	for i,m in ipairs(models) do
+		m.fhk_model = C.fhk_get_model(G, i-1)
+	end
+
+	for i,v in ipairs(vars) do
+		v.fhk_var = C.fhk_get_var(G, i-1)
+	end
+
+	for _,m in ipairs(models) do
 		local fm = m.fhk_model
 
 		fm.k = m.k
@@ -108,7 +123,7 @@ local function init_fhk_graph(arena, cfg)
 		C.fhk_alloc_returns(arena, fm, #m.returns)
 	end
 
-	for _,v in pairs(cfg.fhk_vars) do
+	for _,v in ipairs(vars) do
 		local fv = v.fhk_var
 
 		local models = create_models(v.models)
@@ -119,19 +134,41 @@ local function init_fhk_graph(arena, cfg)
 		end
 	end
 
+	cfg.G = G
+	return G
 end
 
--------------------------
-
-local ugraph = {}
-local ugraph_mt = {__index=ugraph}
+local function create_exf(cfg)
+	for _,m in pairs(cfg.fhk_models) do
+		m.ex_func = exec.from_model(m)
+	end
+end
 
 local function create_ugraph(G, cfg)
 	local u = ffi.gc(C.u_create(G), C.u_destroy)
 
-	for _,fv in pairs(cfg.fhk_vars) do
+	for name,fv in pairs(cfg.fhk_vars) do
 		if fv.kind == "computed" then
-			C.u_add_comp(u, fv.fhk_var, fv.src.name)
+			C.u_add_comp(u, fv.fhk_var, name)
+		end
+	end
+
+	for name,obj in pairs(cfg.objs) do
+		local uobj = C.u_add_obj(u, obj.wobj, name)
+		obj.uobj = uobj
+
+		for vname,var in pairs(obj.vars) do
+			local fv = cfg.fhk_vars[vname]
+			if fv then
+				C.u_add_var(u, uobj, var.varid, fv.fhk_var, vname)
+			end
+		end
+	end
+
+	for name,env in pairs(cfg.envs) do
+		local fv = cfg.fhk_vars[name]
+		if fv then
+			env.uenv = C.u_add_env(u, env.wenv, fv.fhk_var, name)
 		end
 	end
 
@@ -139,57 +176,101 @@ local function create_ugraph(G, cfg)
 		C.u_add_model(u, fm.ex_func, fm.fhk_model, fm.name)
 	end
 
-	return setmetatable({ _u=u }, ugraph_mt)
+	cfg.ugraph = u
+	return u
 end
 
-function ugraph:add_world(cfg, world)
-	self.obj = {}
-	self.env = {}
+-------------------------
 
-	for name,obj in pairs(cfg.objs) do
-		local wobj = world.obj[name]
-		local uobj = C.u_add_obj(self._u, wobj, name)
-		self.obj[name] = uobj
+local function newbitmap(n)
+	local bm = ffi.gc(C.bm_alloc(n), C.bm_free)
+	C.bm_zero(bm, n)
+	return bm
+end
 
-		for vname,_ in pairs(obj.vars) do
-			local fv = cfg.fhk_vars[vname]
-			if fv then
-				C.u_add_var(self._u, uobj, world.var[vname], fv.fhk_var, vname)
+local function objv_bitmaps(G, ugraph, obj)
+	local reset_v, reset_m = newbitmap(G.n_var), newbitmap(G.n_mod)
+	C.u_mark_obj(reset_v, obj.uobj)
+	local order = obj.wgrid and obj.wgrid.order or 0
+	C.u_mark_envs_z(reset_v, ugraph, order)
+	C.u_reset_mark(ugraph, reset_v, reset_m)
+	return reset_v, reset_m
+end
+
+local function init_bitmap(G, vars)
+	local init_v = newbitmap(G.n_var)
+
+	for _,fv in ipairs(vars) do
+		C.u_init_solve(init_v, fv.fhk_var)
+	end
+
+	-- Note: unstable vars aren't implemented yet at all (outside fhk) so this bit must
+	-- be always set
+	local stable = ffi.new("fhk_vbmap")
+	stable.stable = 1
+	C.bm_or64(init_v, G.n_var, C.bmask8(stable.u8))
+
+	return init_v
+end
+
+local function vars_xs(vars)
+	local ret = ffi.new("struct fhk_var *[?]", #vars)
+	for i,fv in ipairs(vars) do
+		ret[i-1] = fv.fhk_var
+	end
+	return ret
+end
+
+local function vars_types(vars)
+	local ret = ffi.new("type[?]", #vars)
+	for i,fv in ipairs(vars) do
+		ret[i-1] = fv.src.type
+	end
+	return ret
+end
+
+local function create_obj_solver(G, ugraph, obj, vars)
+	local uobj = obj.uobj
+	local reset_v, reset_m = objv_bitmaps(G, ugraph, obj)
+	local init_v = init_bitmap(G, vars)
+	local nv = #vars
+	local xs = vars_xs(vars)
+	local res = ffi.new("void *[?]", nv)
+	local types = vars_types(vars)
+
+	return function(v, dest)
+		C.u_graph_init(ugraph, init_v)
+		for i=0, nv-1 do
+			res[i] = dest[i+1]
+		end
+		C.u_solve_vec(ugraph, uobj, reset_v, reset_m, v, nv, xs, res, types)
+		return res
+	end
+end
+
+-------------------------
+
+local function inject(env, cfg, G, ugraph)
+	env.fhk = {
+
+		obj_solver = function(obj, vars)
+			local xs = {}
+			for i,name in ipairs(vars) do
+				xs[i] = cfg.fhk_vars[name]
+				assert(xs[i])
 			end
+
+			return create_obj_solver(G, ugraph, obj, xs)
 		end
-	end
 
-	for name,wenv in pairs(world.env) do
-		local fv = cfg.fhk_vars[name]
-		if fv then
-			self.env[name] = C.u_add_env(self._u, wenv, fv.fhk_var, name)
-		end
-	end
+	}
+
+	env._obj_meta.__index.vsolver = env.fhk.obj_solver
 end
-
-function ugraph:obj_uset(uobj, _world, varids)
-	local c_varids = copyarray("lexid[?]", varids)
-	return C.uset_create_obj(self._u, uobj, _world, #varids, c_varids)
-end
-
-function ugraph:update(s)
-	s:update(self._u)
-end
-
--------------------------
-
-local uset_obj = {}
-local uset_obj_mt = {__index=uset_obj, __gc=C.uset_destroy_obj}
-
-function uset_obj:update(_u)
-	C.uset_update_obj(_u, self)
-end
-
-ffi.metatype("uset_obj", uset_obj_mt)
-
--------------------------
 
 return {
-	init_fhk_graph = init_fhk_graph,
-	create_ugraph  = create_ugraph
+	create_graph  = create_graph,
+	create_exf    = create_exf,
+	create_ugraph = create_ugraph,
+	inject        = inject
 }

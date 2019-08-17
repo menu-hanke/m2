@@ -1,5 +1,6 @@
 local ffi = require "ffi"
 local conf = require "conf"
+local fhk = require "fhk"
 local exec = require "exec"
 local typing = require "typing"
 
@@ -195,7 +196,8 @@ end
 
 local function main(args)
 	local data = conf.read(get_builtin_file("builtin_lex.lua"), args.config)
-	local G = conf.create_fhk_graph(data)
+	local G = fhk.create_graph(data)
+	fhk.create_exf(data)
 	hook_udata(data)
 	hook_graph(G)
 

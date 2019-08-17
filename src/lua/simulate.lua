@@ -4,6 +4,18 @@ local sim = require "sim"
 local world = require "world"
 local fhk = require "fhk"
 
+local function envtable(mes)
+	return setmetatable({}, {__index=function(_, name)
+		error(string.format(mes, name))
+	end})
+end
+
+local function create_metatables(env)
+	env._obj_meta = { __index={} }
+	env._var_meta = { __index={} }
+	env._env_meta = { __index={} }
+end
+
 local function inject_types(env, cfg)
 	local enum = {}
 	env.enum = enum
@@ -15,17 +27,26 @@ local function inject_types(env, cfg)
 	end
 end
 
-local function inject_fhk(env, cfg, world)
-	local G = conf.create_fhk_graph(cfg)
-	local u = fhk.create_ugraph(G, cfg)
-	u:add_world(cfg, world)
-	local _world = world._world
+local function inject_names(env, cfg)
+	env.obj = envtable("No object with name '%s'")
+	env.id  = envtable("No varid with name '%s'")
+	env.var = envtable("No fhk var with name '%s'")
+	env.env = envtable("No env with name '%s'")
 
-	env.uset_obj = function(objname, varids)
-		return u:obj_uset(u.obj[objname], _world, varids)
+	for name,obj in pairs(cfg.objs) do
+		env.obj[name] = setmetatable(obj, env._obj_meta)
+		for vname,var in pairs(obj.vars) do
+			env.id[vname] = var.varid
+		end
 	end
 
-	env.fhk_update = delegate(u, u.update)
+	for name,fv in pairs(cfg.fhk_vars) do
+		env.var[name] = setmetatable(fv, env._var_meta)
+	end
+
+	for name,e in pairs(cfg.envs) do
+		env.env[name] = setmetatable(e, env._env_meta)
+	end
 end
 
 local function main(args)
@@ -33,15 +54,21 @@ local function main(args)
 		error("No scripts given, give some with -s")
 	end
 
-	local data = conf.read(get_builtin_file("builtin_lex.lua"), args.config)
-	local lex = conf.create_lexicon(data)
+	local cfg = conf.read(get_builtin_file("builtin_lex.lua"), args.config)
 	local _sim = sim.create()
-	local _world = world.create(_sim._sim, lex)
+	local _world = world.create(_sim._sim)
+	world.define(cfg, _world)
+	local G = fhk.create_graph(cfg)
+	fhk.create_exf(cfg)
+	local ugraph = fhk.create_ugraph(G, cfg)
+
 	local env = setmetatable({}, {__index=_G})
-	inject_types(env, data)
-	inject_fhk(env, data, _world)
+	create_metatables(env)
 	sim.inject(env, _sim)
 	world.inject(env, _world)
+	fhk.inject(env, cfg, G, ugraph)
+	inject_types(env, cfg)
+	inject_names(env, cfg)
 
 	for _,s in ipairs(args.scripts) do
 		local f, err = loadfile(s, nil, env)

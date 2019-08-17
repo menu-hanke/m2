@@ -58,20 +58,6 @@ typedef union pvalue {
 static_assert(sizeof(tvalue) == sizeof(uint64_t));
 static_assert(sizeof(pvalue) == sizeof(uint64_t));
 
-/* typed packed vector with length, this is useful for more complex calculations involving
- * sim data with vmath.c */
-struct pvec {
-	type type;
-	size_t n;
-	void *data;
-};
-
-/* builtin vars, created automatically for each object */
-enum {
-	VARID_POSITION = 0,
-	BUILTIN_VARS_END
-};
-
 #define POSITION_RESOLUTION 31
 #define POSITION_ORDER      GRID_ORDER(POSITION_RESOLUTION)
 

@@ -27,6 +27,8 @@ enum("species", {
 obj "tree"
 	resolution(0)
 
+	position "tree_z"
+
 	var "N"
 		-- I think we can have fractional trees?
 		-- Note: the unit in mela is 1/ha but I think in a spatial simulator just a number

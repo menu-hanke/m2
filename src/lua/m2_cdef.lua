@@ -84,10 +84,6 @@ struct pvec {
  size_t n;
  void *data;
 };
-enum {
- VARID_POSITION = 0,
- BUILTIN_VARS_END
-};
 typedef unsigned lexid;
 struct var_def {
  lexid id;
@@ -128,11 +124,17 @@ uint64_t broadcast64(uint64_t x, unsigned b);
        
 typedef struct sim sim;
 typedef uint64_t sim_branchid;
+typedef enum sim_mem {
+ SIM_ALLOC_STATIC = 0,
+ SIM_ALLOC_VSTACK = 1,
+ SIM_ALLOC_FRAME = 2
+} sim_mem;
 sim *sim_create();
 void sim_destroy(sim *sim);
 void *sim_static_alloc(sim *sim, size_t sz, size_t align);
 void *sim_vstack_alloc(sim *sim, size_t sz, size_t align);
 void *sim_frame_alloc(sim *sim, size_t sz, size_t align);
+void *sim_alloc(sim *sim, size_t sz, size_t align, sim_mem where);
 int sim_is_frame_owned(sim *sim, void *p);
 unsigned sim_frame_id(sim *sim);
 void sim_savepoint(sim *sim);
@@ -143,6 +145,12 @@ sim_branchid sim_branch(sim *sim, size_t n, sim_branchid *branches);
 sim_branchid sim_next_branch(sim *sim);
        
 typedef struct world world;
+typedef struct w_env {
+ unsigned type : 32;
+ unsigned zoom_order : 32;
+ gridpos zoom_mask;
+ struct grid grid;
+} w_env;
 typedef struct w_vband {
  unsigned stride_bits : 16;
  unsigned type : 16;
@@ -156,33 +164,31 @@ typedef struct w_objvec {
  w_vband bands[];
 } w_objvec;
 typedef struct w_obj {
+ int z_band;
  size_t vsize;
- w_objvec *vtemplate;
- struct grid grid;
+ w_objvec vtemplate;
 } w_obj;
-typedef struct w_env {
- unsigned type : 32;
- unsigned zoom_order : 32;
- gridpos zoom_mask;
+typedef struct w_objgrid {
+ w_obj *obj;
  struct grid grid;
-} w_env;
+} w_objgrid;
 typedef struct w_objref {
  w_objvec *vec;
  size_t idx;
 } w_objref;
 typedef struct w_objtpl {
- w_obj *obj;
- tvalue defaults[];
+ tvalue defaults[0];
 } w_objtpl;
-world *w_create(sim *sim, struct lex *lex);
+world *w_create(sim *sim);
 void w_destroy(world *w);
-w_env *w_get_env(world *w, lexid envid);
+w_env *w_define_env(world *w, type type, size_t resolution);
+w_obj *w_define_obj(world *w, size_t nv, type *vtypes);
+w_objgrid *w_define_objgrid(world *w, w_obj *obj, size_t order);
 void w_env_pvec(struct pvec *v, w_env *e);
 void w_env_swap(world *w, w_env *e, void *data);
 size_t w_env_orderz(w_env *e);
 gridpos w_env_posz(w_env *e, gridpos pos);
 tvalue w_env_readpos(w_env *e, gridpos pos);
-w_obj *w_get_obj(world *w, lexid objid);
 void w_obj_pvec(struct pvec *v, w_objvec *vec, lexid varid);
 void w_obj_swap(world *w, w_objvec *vec, lexid varid, void *data);
 void *w_vb_varp(w_vband *band, size_t idx);
@@ -192,12 +198,20 @@ tvalue w_obj_read1(w_objref *ref, lexid varid);
 void w_obj_write1(w_objref *ref, lexid varid, tvalue value);
 size_t w_tpl_size(w_obj *obj);
 void w_tpl_create(w_obj *obj, w_objtpl *tpl);
-void w_allocv(world *w, w_objref *refs, w_objtpl *tpl, size_t n, gridpos *pos);
-void w_allocvs(world *w, w_objref *refs, w_objtpl *tpl, size_t n, gridpos *pos);
-void w_deletev(world *w, size_t n, w_objref *refs);
-void w_deletevs(world *w, size_t n, w_objref *refs);
-void *w_alloc_band(world *w, w_objvec *vec, lexid varid);
-void *w_alloc_env(world *w, w_env *e);
+void *w_env_create_data(world *w, w_env *e);
+w_objvec *w_obj_create_vec(world *w, w_obj *obj);
+size_t w_objvec_alloc(world *w, w_objvec *vec, w_objtpl *tpl, size_t n);
+size_t w_objvec_delete(world *w, w_objvec *vec, size_t n, size_t *del);
+size_t w_objvec_delete_s(world *w, w_objvec *vec, size_t n, size_t *del);
+void *w_objvec_create_band(world *w, w_objvec *vec, lexid varid);
+void w_objgrid_alloc(world *w, w_objref *refs, w_objgrid *g, w_objtpl *tpl, size_t n,
+  gridpos *pos);
+void w_objgrid_alloc_s(world *w, w_objref *refs, w_objgrid *g, w_objtpl *tpl, size_t n,
+  gridpos *pos);
+void w_objref_delete(world *w, size_t n, w_objref *refs);
+void w_objref_delete_s(world *w, size_t n, w_objref *refs);
+gridpos w_objgrid_posz(w_objgrid *g, gridpos pos);
+w_objvec *w_objgrid_write(world *w, w_objgrid *g, gridpos z);
        
        
 typedef struct arena arena;
@@ -302,7 +316,7 @@ struct fhk_graph {
 };
 void fhk_reset(struct fhk_graph *G, fhk_vbmap vmask, fhk_mbmap mmask);
 void fhk_supp(bm8 *vmask, bm8 *mmask, struct fhk_var *y);
-void fhk_inv_supp(struct fhk_graph *G, bm8 *vmask, bm8 *mmask, struct fhk_var *y);
+void fhk_inv_supp(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
 int fhk_solve(struct fhk_graph *G, struct fhk_var *y);
 struct fhk_graph *fhk_alloc_graph(arena *arena, size_t n_var, size_t n_mod);
 void fhk_alloc_checks(arena *arena, struct fhk_model *m, size_t n_check, struct fhk_check *checks);
@@ -333,21 +347,30 @@ typedef struct u_env u_env;
 typedef struct u_comp u_comp;
 typedef struct u_glob u_glob;
 typedef struct u_model u_model;
-typedef struct uset_header uset;
-typedef struct uset_obj uset_obj;
 typedef void (*u_solver_cb)(void *udata, struct fhk_graph *G, size_t nv, struct fhk_var **xs);
-struct ugraph *u_create(struct fhk_graph *G);
+ugraph *u_create(struct fhk_graph *G);
 void u_destroy(ugraph *u);
 u_obj *u_add_obj(ugraph *u, w_obj *obj, const char *name);
 u_var *u_add_var(ugraph *u, u_obj *obj, lexid varid, struct fhk_var *x, const char *name);
 u_env *u_add_env(ugraph *u, w_env *env, struct fhk_var *x, const char *name);
 u_comp *u_add_comp(ugraph *u, struct fhk_var *x, const char *name);
 u_model *u_add_model(ugraph *u, ex_func *f, struct fhk_model *m, const char *name);
-uset_obj *uset_create_obj(ugraph *u, u_obj *obj, world *world, size_t nv, lexid *varids);
-void uset_update_obj(ugraph *u, uset_obj *s);
-void uset_destroy_obj(uset_obj *s);
-void uset_init_flag(uset *s, int xidx, fhk_vbmap flag);
-void uset_solver_cb(uset *s, u_solver_cb cb, void *udata);
+void u_init_given_obj(bm8 *init_v, u_obj *obj);
+void u_init_given_envs(bm8 *init_v, ugraph *u);
+void u_init_solve(bm8 *init_v, struct fhk_var *y);
+void u_graph_init(ugraph *u, bm8 *init_v);
+void u_mark_obj(bm8 *vmask, u_obj *obj);
+void u_mark_envs_z(bm8 *vmask, ugraph *u, size_t order);
+void u_reset_mark(ugraph *u, bm8 *vmask, bm8 *mmask);
+void u_graph_reset(ugraph *u, bm8 *reset_v, bm8 *reset_m);
+void u_bind_obj(u_obj *obj, w_objref *ref);
+void u_unbind_obj(u_obj *obj);
+void u_bind_pos(ugraph *u, gridpos pos);
+void u_unbind_pos(ugraph *u);
+void u_solve_vec(ugraph *u, u_obj *obj, bm8 *reset_v, bm8 *reset_m, w_objvec *v,
+  size_t nv, struct fhk_var **xs, void **res, type *types);
+void u_update_vec(ugraph *u, u_obj *obj, world *w, bm8 *reset_v, bm8 *reset_m, w_objvec *v,
+  size_t nv, struct fhk_var **xs, lexid *vars);
        
 typedef float vf32 __attribute__((aligned(16)));
 typedef double vf64 __attribute__((aligned(16)));

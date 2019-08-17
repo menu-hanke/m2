@@ -86,7 +86,7 @@ end
 local function bitmapind(size, xmask)
 	local set = maskf(C.bm_set64, xmask)
 	return {
-		init = function(self, pvec) self.n8 = self.n*size end,
+		init = function(self) self.n8 = self.n*size end,
 		set  = function(self, x) set(self.bm8, self.n8, x) end,
 		zero = function(self) C.bm_zero(self.bm8, self.n8) end,
 		copy = function(self, other)
@@ -115,12 +115,12 @@ local vtypes = {
 	[tonumber(ffi.C.T_B64)] = "struct Lbitmap_b64"
 }
 
-local function vec(pvec)
-	local t = vtypes[tonumber(pvec.type)]
+local function vec(data, type, n)
+	local t = vtypes[tonumber(type)]
 	local ret = ffi.new(t)
-	ret.n = pvec.n
-	ret.data = pvec.data
-	ret:init(pvec)
+	ret.n = n
+	ret.data = data
+	ret:init()
 	return ret
 end
 

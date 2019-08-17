@@ -10,145 +10,18 @@ ffi.cdef [[
 
 -------------------------
 
-local function vecn(v)
-	return tonumber(v.nuse)
-end
-
-local function vece(v, i)
-	return v.data+i
-end
-
--------------------------
-
 local objvec = {}
 
-function objvec:pvec(varid)
-	local ret = ffi.new("struct pvec")
-	C.w_obj_pvec(ret, self, varid)
-	return vmath.vec(ret)
+function objvec:band(varid, data)
+	local band = self.bands[varid]
+	return vmath.vec(data or band.data, band.type, self.n_used)
 end
 
 ffi.metatype("w_objvec", {__index=objvec})
 
 -------------------------
 
-local env = {}
-
-function env:pvec()
-	local pvec = ffi.new("struct pvec")
-	C.w_env_pvec(pvec, self)
-	return vmath.vec(pvec)
-end
-
-ffi.metatype("w_env", {__index=env})
-
--------------------------
-
-local function tplidx(varid)
-	return varid - C.BUILTIN_VARS_END
-end
-
-local function envtable(mes)
-	return setmetatable({}, {__index=function(_, name)
-		error(string.format(mes, name))
-	end})
-end
-
-local function create_env_lex(_world, lex)
-	local obj = envtable("No obj matching name '%s'")
-	local var = envtable("No var matching name '%s'")
-	local env = envtable("No env matching name '%s'")
-
-	for i=0, vecn(lex.objs)-1 do
-		local o = vece(lex.objs, i)
-		obj[ffi.string(o.name)] = C.w_get_obj(_world, i)
-
-		for j=0, vecn(o.vars)-1 do
-			local v = vece(o.vars, j)
-			var[ffi.string(v.name)] = v.id
-		end
-	end
-
-	for i=0, vecn(lex.envs)-1 do
-		local e = vece(lex.envs, i)
-		env[ffi.string(e.name)] = C.w_get_env(_world, i)
-	end
-
-	return obj, var, env
-end
-
--------------------------
-
-local world = {}
-local world_mt = {__index=world}
-
-local function create_world(sim, lex)
-	local _world = C.w_create(sim, lex)
-	local obj, var, env = create_env_lex(_world, lex)
-	return setmetatable({
-		_world=_world,
-		_sim=sim,
-		_lex=lex,
-		obj=obj,
-		var=var,
-		env=env
-	}, world_mt)
-end
-
-local function inject(env, world)
-	env.world = world
-	-- shortcuts
-	env.obj = world.obj
-	env.var = world.var
-	env.env = world.env
-	env.template = delegate(world, world.template)
-end
-
-function world:template(obj, values)
-	local sz = C.w_tpl_size(obj)
-	local tpl = ffi.gc(ffi.cast("w_objtpl *", C.malloc(sz)), C.free)
-	ffi.fill(tpl, sz)
-	local vt = obj.vtemplate
-	for varid,val in pairs(values) do
-		tpl.defaults[tplidx(varid)] = typing.lua2tvalue(val, vt.bands[varid].type)
-	end
-	C.w_tpl_create(obj, tpl)
-	return tpl
-end
-
-function world:swap_env(env)
-	local pvec old = ffi.new("struct pvec")
-	local pvec new = ffi.new("struct pvec")
-	C.w_env_pvec(old, env)
-	new.type = old.type
-	new.n = old.n
-	new.data = C.w_alloc_env(self._world, env)
-	C.w_env_swap(self._world, env, new.data)
-	return vmath.vec(old), vmath.vec(new)
-end
-
-function world:swap_band(vec, varid)
-	local pvec old = ffi.new("struct pvec")
-	local pvec new = ffi.new("struct pvec")
-	C.w_obj_pvec(old, vec, varid)
-	new.type = old.type
-	new.n = old.n
-	new.data = C.w_alloc_band(self._world, vec, varid)
-	C.w_obj_swap(self._world, vec, varid, new.data)
-	return vmath.vec(old), vmath.vec(new)
-end
-
-function world:create_objs(tpl, pos)
-	local c_pos, n = copyarray("gridpos[?]", pos)
-	local refs = ffi.new("w_objref[?]", n)
-	C.w_allocv(self._world, refs, tpl, n, c_pos)
-	return refs
-end
-
-function world:del_objs(refs)
-	local r, n = copyarray("w_objref[?]", refs)
-	C.w_deletev(self._world, n, r)
-end
+local objgrid = {}
 
 local function next_objvec(iter)
 	iter.idx = iter.idx+1
@@ -159,12 +32,55 @@ local function next_objvec(iter)
 	return iter.vecs[iter.idx], iter.idx
 end
 
-function world:objvecs(obj)
-	local grid = obj.grid
+function objgrid:vecs()
+	local grid = self.grid
 	local vecs = ffi.cast("w_objvec **", grid.data)
 	local max = C.grid_max(grid.order)
 
 	return next_objvec, {idx=-1, max=max, vecs=vecs}
+end
+
+ffi.metatype("w_objgrid", {__index=objgrid})
+
+-------------------------
+
+local env = {}
+
+function env:vec(data)
+	return vmath.vec(data or self.grid.data, self.type, C.grid_max(self.grid.order))
+end
+
+ffi.metatype("w_env", {__index=env})
+
+-------------------------
+
+local world = {
+	create_objvec    = function(self, obj) return C.w_obj_create_vec(self, obj.wobj) end,
+	alloc_objvec     = C.w_objvec_alloc,
+	alloc_env        = function(self, env)
+		return env.wenv:vec(C.w_create_env_data(self, env.wenv))
+	end,
+	alloc_band       = function(self, vec, varid)
+		return vec:band(varid, C.w_objvec_create_band(self, vec, varid))
+	end,
+	swap_env         = function(self, env, vec)
+		C.w_env_swap(self, env.wenv, vec.data)
+	end,
+	swap_band        = function(self, ovec, varid, vec)
+		C.w_obj_swap(self, ovec, varid, vec.data)
+	end
+}
+
+function world:create_grid_objs(wgrid, tpl, pos)
+	local c_pos, n = copyarray("gridpos[?]", pos)
+	local refs = ffi.new("w_objref[?]", n)
+	C.w_objgrid_alloc(self, refs, wgrid, tpl, n, c_pos)
+	return refs
+end
+
+function world:del_objs(refs)
+	local r, n = copyarray("w_objref[?]", refs)
+	C.w_objref_delete(self, n, r)
 end
 
 function world.read1(ref, varid)
@@ -177,9 +93,81 @@ function world.write1(ref, varid, value)
 	C.sim_obj_write1(ref, varid, typing.lua2tvalue(value, t))
 end
 
+
+ffi.metatype("world", {__index=world})
+
+-------------------------
+
+local function define_obj(w, src)
+	local vars = collect(src.vars)
+	local vtypes = ffi.new("type[?]", #vars)
+	local zband = -1
+
+	-- Note: this also fixed the var ids
+	for i=0, #vars-1 do
+		local var = vars[i+1]
+		vtypes[i] = var.type
+		var.varid = i
+		if var == src.position_var then
+			zband = i
+		end
+	end
+
+	local obj = C.w_define_obj(w, #vars, vtypes)
+	obj.z_band = zband
+
+	local grid
+
+	if src.z_order then
+		grid = C.w_define_objgrid(w, obj, src.z_order)
+	end
+
+	return obj, grid
+end
+
+local function define_env(w, src)
+	return C.w_define_env(w, src.type, src.z_order)
+end
+
+local function define(cfg, world)
+	for name,obj in pairs(cfg.objs) do
+		local wobj, wgrid = define_obj(world, obj)
+		obj.wobj = wobj
+		obj.wgrid = wgrid
+	end
+
+	for name,env in pairs(cfg.envs) do
+		local wenv = define_env(world, env)
+		env.wenv = wenv
+	end
+end
+
+local function create_template(obj, values)
+	local wobj = obj.wobj
+	local sz = C.w_tpl_size(wobj)
+	local tpl = ffi.gc(ffi.cast("w_objtpl *", C.malloc(sz)), C.free)
+	ffi.fill(tpl, sz)
+	local vt = wobj.vtemplate
+	for name,val in pairs(values) do
+		local varid = obj.vars[name].varid
+		tpl.defaults[varid] = typing.lua2tvalue(val, vt.bands[varid].type)
+	end
+	C.w_tpl_create(wobj, tpl)
+	return tpl
+end
+
+
+local function inject(env, world)
+	env.world = world
+	env._obj_meta.__index.template = create_template
+	env._obj_meta.__index.vecs = function(self) return self.wgrid:vecs() end
+	env._env_meta.__index.vec = function(self, data) return self.wenv:vec(data) end
+end
+
 -------------------------
 
 return {
-	create = create_world,
+	create = C.w_create,
+	define = define,
 	inject = inject
 }

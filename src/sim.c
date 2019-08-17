@@ -75,6 +75,16 @@ void *sim_frame_alloc(struct sim *sim, size_t sz, size_t align){
 	return f_alloc(TOP(sim), sz, align);
 }
 
+void *sim_alloc(struct sim *sim, size_t sz, size_t align, sim_mem where){
+	static void *(*const allocf[])(struct sim *, size_t, size_t) = {
+		[SIM_ALLOC_STATIC] = sim_static_alloc,
+		[SIM_ALLOC_FRAME]  = sim_frame_alloc,
+		[SIM_ALLOC_VSTACK] = sim_vstack_alloc
+	};
+
+	return allocf[where](sim, sz, align);
+}
+
 int sim_is_frame_owned(struct sim *sim, void *p){
 	// Note: debug only, see comment in arena.c:arena_contains
 	return arena_contains(TOP(sim)->arena, p);

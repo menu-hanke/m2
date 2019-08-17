@@ -1,6 +1,4 @@
 local typing = require "typing"
-local exec = require "exec"
-local fhk = require "fhk"
 local ffi = require "ffi"
 local C = ffi.C
 
@@ -43,8 +41,7 @@ local function resolve_dt(data, xs)
 		elseif data.types[dtype] then
 			x.type = data.types[dtype].type
 		else
-			error(string.format("No definition found for type '%s' of '%s'",
-				dtype, x.name))
+			error(string.format("No definition found for type '%s' of '%s'", dtype, x.name))
 		end
 	end
 end
@@ -171,63 +168,6 @@ local function read(...)
 	return data
 end
 
-local function create_lexicon(data)
-	local arena = C.arena_create(1024)
-	local lex = ffi.gc(C.lex_create(), function(lex)
-		C.arena_destroy(arena)
-		C.lex_destroy(lex)
-	end)
-
-	for _,o in pairs(data.objs) do
-		local lo = C.lex_add_obj(lex)
-		o.lexobj = lo
-		lo.name = arena_copystring(arena, o.name)
-		lo.resolution = o.resolution
-
-		for _,v in pairs(o.vars) do
-			local lv = C.lex_add_var(lo)
-			v.lexvar = lv
-			lv.name = arena_copystring(arena, v.name)
-			lv.type = v.type
-		end
-	end
-
-	for _,e in pairs(data.envs) do
-		local le = C.lex_add_env(lex)
-		e.lexenv = le
-		le.name = arena_copystring(arena, e.name)
-		le.resolution = e.resolution
-		le.type = e.type
-	end
-
-	data.lex = lex
-	return lex
-end
-
-local function create_fhk_graph(data)
-	local arena = C.arena_create(4096)
-
-	local models = collect(data.fhk_models)
-	local vars = collect(data.fhk_vars)
-	local G = ffi.gc(C.fhk_alloc_graph(arena, #vars, #models),
-		function() C.arena_destroy(arena) end)
-
-	for i,m in ipairs(models) do
-		m.fhk_model = C.fhk_get_model(G, i-1)
-		m.ex_func = exec.from_model(m)
-	end
-
-	for i,v in ipairs(vars) do
-		v.fhk_var = C.fhk_get_var(G, i-1)
-	end
-
-	fhk.init_fhk_graph(arena, data)
-
-	return G
-end
-
 return {
-	read=read,
-	create_lexicon=create_lexicon,
-	create_fhk_graph=create_fhk_graph
+	read = read
 }

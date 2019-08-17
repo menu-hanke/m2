@@ -11,17 +11,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define USET_ENVID (~0)
+#define VM_GIVEN ((fhk_vbmap) {.given=1}).u8
+#define VM_SOLVE ((fhk_vbmap) {.solve=1}).u8
 
 enum {
 	V_VAR  = 1,
 	V_ENV  = 2,
 	V_COMP = 3,
 	V_GLOB = 4
-};
-
-enum {
-	U_OBJ  = 1
 };
 
 #define vname(v) ((struct xheader *) (v))->name
@@ -35,6 +32,7 @@ struct xheader {
 struct u_var {
 	struct xheader header;
 	struct fhk_var *x;
+	struct u_obj *obj;
 	lexid varid;
 };
 
@@ -42,6 +40,7 @@ struct u_obj {
 	const char *name;
 	struct u_var *vars;
 	w_obj *wobj;
+	w_objref bind;
 };
 
 struct u_env {
@@ -63,43 +62,19 @@ struct ugraph {
 	arena *arena;
 	struct fhk_graph *G;
 	struct xheader **xs;
+	gridpos update_pos;
 };
 
-struct uset_header {
-	int type;
+#define obj_nv(o) ((o)->wobj->vtemplate.n_bands)
+#define u_nv(u)   ((u)->G->n_var)
 
-	bm8 *init_v;
-	bm8 *reset_v, *reset_m;
+static void mark_obj(bm8 *mark_v, struct u_obj *obj, uint8_t mark);
+static void mark_envs(bm8 *mark_v, struct ugraph *u, uint8_t mark);
+static void mark_envs_z(bm8 *mark_v, struct ugraph *u, size_t order, uint8_t mark);
+static void compute_reset_mask(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
 
-	// often we are interested in the chosen model chains, so they can be logged/etc.
-	// with this hook
-	u_solver_cb solver_cb;
-	void *solver_cb_udata;
-};
-
-struct uset_obj {
-	struct uset_header header;
-	struct u_obj *obj;
-	world *world;
-	// TODO: accept multiple objrefs here for "hierarchical" updating
-	w_objref ref;
-	size_t nv;
-	struct u_var *vars[];
-};
-
-static void s_init(struct ugraph *u, struct uset_header *s, int type);
-static void s_destroy(struct uset_header *s);
-static void s_init_G(struct uset_header *s, struct fhk_graph *G);
-static void s_reset_G(struct uset_header *s, struct fhk_graph *G);
-static void s_cb_G(struct uset_header *s, struct fhk_graph *G, size_t nv, struct fhk_var **xs);
-
-static void s_obj_compute_init(struct ugraph *u, struct uset_obj *s);
-static void s_obj_compute_reset(struct ugraph *u, struct uset_obj *s);
-static void s_obj_update_vec(struct ugraph *u, struct uset_obj *s, w_objvec *v);
-#define obj_nv(o) ((o)->wobj->vtemplate->n_bands)
-
-static pvalue v_resolve_var(struct uset_obj *s, struct u_var *var);
-static pvalue v_resolve_env(struct uset_header *s, struct u_env *env);
+static pvalue v_resolve_var(struct u_var *var);
+static pvalue v_resolve_env(struct ugraph *u, struct u_env *env);
 
 static int G_model_exec(struct fhk_graph *G, void *udata, pvalue *ret, pvalue *args);
 static int G_resolve_virtual(struct fhk_graph *G, void *udata, pvalue *value);
@@ -115,10 +90,13 @@ struct ugraph *u_create(struct fhk_graph *G){
 	memset(u->xs, 0, sizeof(*u->xs)*G->n_var);
 
 	u->G = G;
+	G->udata = u;
 	G->exec_model = G_model_exec;
 	G->resolve_var = G_resolve_virtual;
 	G->debug_desc_var = G_ddv;
 	G->debug_desc_model = G_ddm;
+
+	u_unbind_pos(u);
 
 	return u;
 }
@@ -134,6 +112,7 @@ struct u_obj *u_add_obj(struct ugraph *u, w_obj *obj, const char *name){
 	ret->vars = arena_malloc(u->arena, vsize);
 	memset(ret->vars, 0, vsize);
 	ret->name = arena_strcpy(u->arena, name);
+	u_unbind_obj(ret);
 	return ret;
 }
 
@@ -145,6 +124,7 @@ struct u_var *u_add_var(struct ugraph *u, struct u_obj *obj, lexid varid, struct
 	vtype(var) = V_VAR;
 	var->varid = varid;
 	var->x = x;
+	var->obj = obj;
 	x->udata = var;
 	u->xs[x->idx] = (struct xheader *) var;
 	dv("fhk var[%d] = var %p %s [lexid=%d]\n", x->idx, var, vname(var), varid);
@@ -182,224 +162,154 @@ struct u_model *u_add_model(struct ugraph *u, ex_func *f, struct fhk_model *m, c
 	return ret;
 }
 
-struct uset_obj *uset_create_obj(struct ugraph *u, struct u_obj *obj, world *world, size_t nv,
-		lexid *varids){
-
-	struct uset_obj *s = malloc(sizeof(*s) + nv*sizeof(*s->vars));
-	s_init(u, &s->header, U_OBJ);
-	s->world = world;
-	s->nv = nv;
-	s->obj = obj;
-	for(size_t i=0;i<nv;i++)
-		s->vars[i] = &obj->vars[varids[i]];
-	s_obj_compute_init(u, s);
-	s_obj_compute_reset(u, s);
-	return s;
+void u_init_given_obj(bm8 *init_v, struct u_obj *obj){
+	mark_obj(init_v, obj, VM_GIVEN);
 }
 
-void uset_update_obj(struct ugraph *u, struct uset_obj *s){
-	w_obj *obj = s->obj->wobj;
-	struct grid *g = &obj->grid;
-	w_objvec **data = g->data;
-	gridpos max = grid_max(g->order);
-
-	for(gridpos i=0;i<max;i++){
-		if(data[i])
-			s_obj_update_vec(u, s, data[i]);
-	}
+void u_init_given_envs(bm8 *init_v, struct ugraph *u){
+	mark_envs(init_v, u, VM_GIVEN);
 }
 
-void uset_destroy_obj(struct uset_obj *s){
-	s_destroy(&s->header);
-	free(s);
+void u_init_solve(bm8 *init_v, struct fhk_var *y){
+	init_v[y->idx] = VM_SOLVE;
 }
 
-void uset_init_flag(struct uset_header *s, int xidx, fhk_vbmap flag){
-	s->init_v[xidx] = flag.u8;
-}
-
-void uset_solver_cb(struct uset_header *s, u_solver_cb cb, void *udata){
-	s->solver_cb = cb;
-	s->solver_cb_udata = udata;
-}
-
-static void s_init(struct ugraph *u, struct uset_header *s, int type){
-	s->init_v = bm_alloc(u->G->n_var);
-	s->reset_v = bm_alloc(u->G->n_var);
-	s->reset_m = bm_alloc(u->G->n_mod);
-	s->solver_cb = NULL;
-	s->type = type;
-}
-
-static void s_destroy(struct uset_header *s){
-	free(s->init_v);
-	free(s->reset_v);
-	free(s->reset_m);
-}
-
-static void s_init_G(struct uset_header *s, struct fhk_graph *G){
-	bm_copy((bm8 *) G->v_bitmaps, s->init_v, G->n_var);
+void u_graph_init(struct ugraph *u, bm8 *init_v){
+	struct fhk_graph *G = u->G;
+	bm_copy((bm8 *) G->v_bitmaps, init_v, G->n_var);
 	bm_zero((bm8 *) G->m_bitmaps, G->n_mod);
 }
 
-static void s_reset_G(struct uset_header *s, struct fhk_graph *G){
-	bm_and((bm8 *) G->v_bitmaps, s->reset_v, G->n_var);
-	bm_and((bm8 *) G->m_bitmaps, s->reset_m, G->n_mod);
+void u_mark_obj(bm8 *vmask, struct u_obj *obj){
+	mark_obj(vmask, obj, 0xff);
 }
 
-static void s_cb_G(struct uset_header *s, struct fhk_graph *G, size_t nv, struct fhk_var **xs){
-	if(s->solver_cb)
-		s->solver_cb(s->solver_cb_udata, G, nv, xs);
+void u_mark_envs_z(bm8 *vmask, struct ugraph *u, size_t order){
+	mark_envs_z(vmask, u, order, 0xff);
 }
 
-static void s_obj_compute_init(struct ugraph *u, struct uset_obj *s){
-	size_t nv = u->G->n_var;
-	bm8 *init_v = s->header.init_v;
-	bm_zero(init_v, nv);
-
-	// envs are always given
-	fhk_vbmap given = { .given=1 };
-	for(size_t i=0;i<nv;i++){
-		if(u->xs[i] && vtype(u->xs[i]) == V_ENV)
-			init_v[i] = given.u8;
-	}
-
-	// first set all vars on the object to given
-	for(size_t i=0;i<obj_nv(s->obj);i++){
-		struct u_var *v = &s->obj->vars[i];
-		if(v->x)
-			init_v[v->x->idx] = given.u8;
-	}
-
-	// then set the requested ones to solve
-	fhk_vbmap solve = { .solve=1 };
-	for(size_t i=0;i<s->nv;i++){
-		struct u_var *v = s->vars[i];
-		init_v[v->x->idx] = solve.u8;
-	}
-
-	// currently all vars here are stable
-	fhk_vbmap stable = { .stable=1 };
-	bm_or8(init_v, nv, stable.u8);
+void u_reset_mark(struct ugraph *u, bm8 *vmask, bm8 *mmask){
+	compute_reset_mask(u->G, vmask, mmask);
 }
 
-static void s_obj_compute_reset(struct ugraph *u, struct uset_obj *s){
-	size_t nv = u->G->n_var;
-	size_t nm = u->G->n_mod;
+void u_graph_reset(struct ugraph *u, bm8 *reset_v, bm8 *reset_m){
+	struct fhk_graph *G = u->G;
+	bm_and((bm8 *) G->v_bitmaps, reset_v, G->n_var);
+	bm_and((bm8 *) G->m_bitmaps, reset_m, G->n_mod);
+}
 
-	bm8 *reset_v = s->header.reset_v;
-	bm8 *reset_m = s->header.reset_m;
+void u_bind_obj(struct u_obj *obj, w_objref *ref){
+	obj->bind = *ref;
+}
 
-	bm_zero(reset_v, nv);
-	bm_zero(reset_m, nm);
+void u_unbind_obj(struct u_obj *obj){
+	obj->bind.vec = NULL;
+}
 
-	// each iteration the following is reset:
-	// (1) all object variables
-	// (2) envs with a smaller grid than the object grid
-	// (3) everything depending on (1) & (2), above the requested vars
+void u_bind_pos(struct ugraph *u, gridpos pos){
+	u->update_pos = pos;
+}
+
+void u_unbind_pos(struct ugraph *u){
+	u->update_pos = GRID_INVALID;
+}
+
+void u_solve_vec(struct ugraph *u, struct u_obj *obj, bm8 *reset_v, bm8 *reset_m, w_objvec *v,
+		size_t nv, struct fhk_var **xs, void **res, type *types){
 	
-	// (1)
-	for(size_t i=0;i<obj_nv(s->obj);i++){
-		struct u_var *v = &s->obj->vars[i];
-		if(v->x)
-			reset_v[v->x->idx] = 0xff;
-	}
-
-	// (2)
-	size_t order = s->obj->wobj->grid.order;
-	for(size_t i=0;i<nv;i++){
-		if(u->xs[i] && vtype(u->xs[i]) == V_ENV){
-			struct u_env *e = (struct u_env *) u->xs[i];
-			if(w_env_orderz(e->wenv) > order)
-				reset_v[i] = 0xff;
-		}
-	}
-
-	// (3)
-	// zero the relevant indices first, fhk_inv_supp will set them
-	for(size_t i=0;i<s->nv;i++){
-		struct u_var *v = s->vars[i];
-		reset_v[v->x->idx] = 0;
-	}
-	for(size_t i=0;i<s->nv;i++){
-		struct u_var *v = s->vars[i];
-		fhk_inv_supp(u->G, reset_v, reset_m, v->x);
-	}
-
-	// now each thing to reset is marked with 0xff, but we want to mask them out so negate them
-	bm_not(reset_v, nv);
-	bm_not(reset_m, nm);
-
-	// finally, don't mask out given/solve/stable bits.
-	// Note: if unstable vars are added then the stable bit needs to be cleared for those
-	fhk_vbmap keep = { .given=1, .solve=1, .stable=1 };
-	bm_or8(reset_v, nv, keep.u8);
-}
-
-static void s_obj_update_vec(struct ugraph *u, struct uset_obj *s, w_objvec *v){
 	if(!v->n_used)
 		return;
 
-	// totally reset graph, this also sets the correct given/solve flags
-	struct fhk_graph *G = u->G;
-	s_init_G(&s->header, G);
-	G->udata = s;
-	s->ref.vec = v;
+	// TODO: either update u->update_pos here, or resolve it from the current active object
 
-	// collect new vectors to put the results in, this is done for 2 reasons
-	//   - since we just change the pointer, the old data doesn't need to be copied to safety
-	//   - we avoid overwriting old data since that could in theory change the results of some models
-	// also collect the corresponding fhk var pointers here
-	size_t nv = s->nv;
-	w_vband bands[nv];
-	struct fhk_var *xs[nv];
-	for(size_t i=0;i<nv;i++){
-		struct u_var *var = s->vars[i];
-		lexid varid = var->varid;
-		bands[i].type = v->bands[varid].type;
-		bands[i].stride_bits = v->bands[varid].stride_bits;
-		bands[i].data = w_alloc_band(s->world, v, varid);
-		xs[i] = var->x;
-	}
+	obj->bind.vec = v;
+	obj->bind.idx = 0;
 
-	// solve!
 	size_t n = v->n_used;
-	for(size_t i=0;i<n;i++){
-		s_reset_G(&s->header, G);
-		s->ref.idx = i;
+
+	for(size_t i=0;i<n;i++,obj->bind.idx++){
+		u_graph_reset(u, reset_v, reset_m);
 
 		for(size_t j=0;j<nv;j++){
-			int res = fhk_solve(G, xs[j]);
-			assert(!res); // TODO error handling goes here
+			int res = fhk_solve(u->G, xs[j]);
+			assert(res == FHK_OK); // TODO error handling goes here
 		}
 
 		for(size_t j=0;j<nv;j++){
-			tvalue v = vdemote(xs[j]->value, bands[j].type);
-			w_vb_vcopy(&bands[j], i, v);
+			tvalue v = vdemote(xs[j]->value, types[j]);
+			unsigned stride = tsize(types[j]);
+			memcpy(((char *)res[j]) + i*stride, &v, stride);
 		}
+	}
+}
 
-		s_cb_G(&s->header, G, nv, xs);
+void u_update_vec(struct ugraph *u, struct u_obj *obj, world *w, bm8 *reset_v, bm8 *reset_m,
+		w_objvec *v, size_t nv, struct fhk_var **xs, lexid *vars){
+
+	if(!v->n_used)
+		return;
+
+	void *bands[nv];
+	type types[nv];
+
+	for(size_t i=0;i<nv;i++){
+		bands[i] = w_objvec_create_band(w, v, vars[i]);
+		types[i] = v->bands[vars[i]].type;
 	}
 
-	// (5) replace only the changed pointers, the old data is safe generally in the previous
-	// branch arena
+	u_solve_vec(u, obj, reset_v, reset_m, v, nv, xs, bands, types);
+
 	for(size_t i=0;i<nv;i++)
-		w_obj_swap(s->world, v, s->vars[i]->varid, bands[i].data);
+		w_obj_swap(w, v, vars[i], bands[i]);
 }
 
-static pvalue v_resolve_var(struct uset_obj *s, struct u_var *var){
-	type t = s->ref.vec->bands[var->varid].type;
-	return vpromote(w_obj_read1(&s->ref, var->varid), t);
-}
-
-static pvalue v_resolve_env(struct uset_header *s, struct u_env *env){
-	if(s->type == U_OBJ){
-		struct uset_obj *o = (struct uset_obj *) s;
-		gridpos pos = w_obj_read1(&o->ref, VARID_POSITION).z;
-		return vpromote(w_env_readpos(env->wenv, pos), env->wenv->type);
+static void mark_obj(bm8 *mark_v, struct u_obj *obj, uint8_t mark){
+	for(size_t i=0;i<obj_nv(obj);i++){
+		struct u_var *v = &obj->vars[i];
+		if(v->x)
+			mark_v[v->x->idx] = mark;
 	}
+}
 
-	UNREACHABLE();
+static void mark_envs(bm8 *mark_v, struct ugraph *u, uint8_t mark){
+	for(size_t i=0;i<u_nv(u);i++){
+		if(u->xs[i] && vtype(u->xs[i]) == V_ENV)
+			mark_v[i] = mark;
+	}
+}
+
+static void mark_envs_z(bm8 *mark_v, struct ugraph *u, size_t order, uint8_t mark){
+	for(size_t i=0;i<u_nv(u);i++){
+		if(u->xs[i] && vtype(u->xs[i]) == V_ENV){
+			struct u_env *e = (struct u_env *) u->xs[i];
+			if(w_env_orderz(e->wenv) > order)
+				mark_v[i] = mark;
+		}
+	}
+}
+
+static void compute_reset_mask(struct fhk_graph *G, bm8 *vmask, bm8 *mmask){
+	fhk_inv_supp(G, vmask, mmask);
+
+	// Now vmask and mmask contain marked what we want to reset, so invert them
+	bm_not(vmask, G->n_var);
+	bm_not(mmask, G->n_mod);
+
+	// Finally, these bits shouldn't be touched when stepping
+	// Note: (TODO) unstable vars should have the stable bit cleared
+	fhk_vbmap keep = { .given=1, .solve=1, .stable=1 };
+	bm_or8(vmask, G->n_var, keep.u8);
+}
+
+static pvalue v_resolve_var(struct u_var *var){
+	struct u_obj *obj = var->obj;
+	type t = obj->bind.vec->bands[var->varid].type;
+	return vpromote(w_obj_read1(&obj->bind, var->varid), t);
+}
+
+static pvalue v_resolve_env(struct ugraph *u, struct u_env *env){
+	assert(u->update_pos != GRID_INVALID);
+	return vpromote(w_env_readpos(env->wenv, u->update_pos), env->wenv->type);
 }
 
 static int G_model_exec(struct fhk_graph *G, void *udata, pvalue *ret, pvalue *args){
@@ -411,7 +321,7 @@ static int G_model_exec(struct fhk_graph *G, void *udata, pvalue *ret, pvalue *a
 
 static int G_resolve_virtual(struct fhk_graph *G, void *udata, pvalue *value){
 	switch(vtype(udata)){
-		case V_VAR: *value = v_resolve_var(G->udata, udata); break;
+		case V_VAR: *value = v_resolve_var(udata); break;
 		case V_ENV: *value = v_resolve_env(G->udata, udata); break;
 		default: UNREACHABLE();
 	}
