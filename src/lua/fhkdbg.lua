@@ -195,7 +195,7 @@ end
 -------------------------
 
 local function main(args)
-	local data = conf.read(get_builtin_file("builtin_lex.lua"), args.config)
+	local data = conf.read(args.config)
 	local G = fhk.create_graph(data)
 	fhk.create_exf(data)
 	hook_udata(data)

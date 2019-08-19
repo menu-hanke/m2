@@ -54,7 +54,7 @@ local function main(args)
 		error("No scripts given, give some with -s")
 	end
 
-	local cfg = conf.read(get_builtin_file("builtin_lex.lua"), args.config)
+	local cfg = conf.read(args.config)
 	local _sim = sim.create()
 	local _world = world.create(_sim._sim)
 	world.define(cfg, _world)

@@ -54,9 +54,37 @@ ffi.metatype("w_env", {__index=env})
 
 -------------------------
 
+local function read1(ref, varid)
+	local t = ref.vec.bands[varid].type
+	return typing.tvalue2lua(C.w_obj_read1(ref, varid), t)
+end
+
+local function write1(ref, varid, value)
+	local t = ref.vec.bands[varid].type
+	C.w_obj_write1(ref, varid, typing.lua2tvalue(value, t))
+end
+
+ffi.metatype("w_objref", {__index=read1, __newindex=write1})
+
+-------------------------
+
+local function gen_refs(vec, pos, n)
+	local ret = ffi.new("w_objref[?]", n)
+	for i=0, tonumber(n)-1 do
+		ret[i].vec = vec
+		ret[i].idx = pos+i
+	end
+	return ret
+end
+
 local world = {
-	create_objvec    = function(self, obj) return C.w_obj_create_vec(self, obj.wobj) end,
-	alloc_objvec     = C.w_objvec_alloc,
+	create_objvec    = function(self, obj)
+		return C.w_obj_create_vec(self, obj.wobj)
+	end,
+	alloc_objvec     = function(self, vec, tpl, n)
+		local pos = C.w_objvec_alloc(self, vec, tpl, n)
+		return gen_refs(vec, pos, n)
+	end,
 	alloc_env        = function(self, env)
 		return env.wenv:vec(C.w_create_env_data(self, env.wenv))
 	end,
@@ -82,17 +110,6 @@ function world:del_objs(refs)
 	local r, n = copyarray("w_objref[?]", refs)
 	C.w_objref_delete(self, n, r)
 end
-
-function world.read1(ref, varid)
-	local t = ref.vec.bands[varid].type
-	return typing.tvalue2lua(C.sim_obj_read1(ref, varid), t)
-end
-
-function world.write1(ref, varid, value)
-	local t = ref.vec.bands[varid].type
-	C.sim_obj_write1(ref, varid, typing.lua2tvalue(value, t))
-end
-
 
 ffi.metatype("world", {__index=world})
 
