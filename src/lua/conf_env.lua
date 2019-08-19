@@ -311,6 +311,10 @@ function env.ival(a, b)
 	return {type="ival", a=a, b=b}
 end
 
+function env.objvec(obj)
+	return {type="objvec", obj=obj}
+end
+
 --------------------
 
 local types = {}

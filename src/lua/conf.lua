@@ -36,6 +36,15 @@ local function resolve_dt(data, xs)
 	for _,x in pairs(xs) do
 		local dtype = x.type
 
+		if type(dtype) == "table" then
+			if dtype.type == "objvec" then
+				x.vector_type = dtype.obj
+				dtype = "u"
+			else
+				error(string.format("Invalid type constraint '%s' of '%s'", dtype.type, x.name))
+			end
+		end
+
 		if typing.builtin_types[dtype] then
 			x.type = typing.builtin_types[dtype]
 		elseif data.types[dtype] then

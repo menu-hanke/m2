@@ -8,7 +8,13 @@ local builtin_types = {
 	b16 = C.T_B16,
 	b32 = C.T_B32,
 	b64 = C.T_B64,
-	z   = C.T_POSITION
+	z   = C.T_POSITION,
+	u   = C.T_USERDATA
+}
+
+local convert_number = {
+	f32 = true,
+	f64 = true
 }
 
 local tvalue_map = {}
@@ -17,9 +23,10 @@ for k,v in pairs(builtin_types) do
 end
 
 local pvalue_map = {
-	[tonumber(C.PT_REAL)] = "r",
-	[tonumber(C.PT_BIT)]  = "b",
-	[tonumber(C.PT_POS)]  = "p"
+	[tonumber(C.PT_REAL)]   = "r",
+	[tonumber(C.PT_BIT)]    = "b",
+	[tonumber(C.PT_POS)]    = "z",
+	[tonumber(C.PT_UDATA)]  = "u"
 }
 
 local function lua2tvalue(v, t)
@@ -29,7 +36,13 @@ local function lua2tvalue(v, t)
 end
 
 local function tvalue2lua(tv, t)
-	return tonumber(tv[tvalue_map[tonumber(t)]])
+	t = tonumber(t)
+	local ret = tv[tvalue_map[t]]
+	-- this check is mainly to prevent the number conversion from destroying my pointers
+	if convert_number[t] then
+		ret = tonumber(ret)
+	end
+	return ret
 end
 
 local function lua2pvalue(v, t)
