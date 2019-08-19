@@ -6,13 +6,14 @@ CCWARN = -Wall -Wextra
 XCFLAGS = 
 XLDFLAGS = 
 
-EXEC_LANG = 
+EXEC_LANG     ?= R simoC
 
-LUAJIT_INCLUDE = -isystem /usr/include/luajit-2.0
-LUAJIT_LIB = -lluajit-5.1
-
-R_INCLUDE = -isystem /usr/include/R
-R_LIB = -L/usr/lib/R/lib -lR
+LUAJIT_CFLAGS ?= $(shell pkg-config --cflags luajit)
+LUAJIT_LIB    ?= $(shell pkg-config --libs luajit)
+R_CFLAGS      ?= $(shell pkg-config --cflags libR)
+R_LIB         ?= $(shell pkg-config --libs-only-l --libs-only-L libR)
+LIBFFI_CFLAGS ?= $(shell pkg-config --cflags libffi)
+LIBFFI_LIB    ?= $(shell pkg-config --libs libffi)
 
 M2_EXECUTABLE = m2
 LUA_FFI_API = lua/m2_cdef.lua
@@ -34,18 +35,23 @@ ubsan: CCDEBUG = -DDEBUG
 ubsan: default
 
 M2_O = main.o bitmap.o fhk_graph.o fhk_solve.o fhk_aux.o lex.o arena.o sim.o grid.o save.o\
-	   update.o vmath.o world.o
+	   update.o vmath.o world.o exec_aux.o
 
-# TODO: test these features from EXEC_LANG
-# R support
-M2_O += exec_R.o
-CCDEF += -DM2_EXEC_R
-XCFLAGS += $(R_INCLUDE)
-XLDFLAGS += $(R_LIB)
+ifneq (,$(findstring R,$(EXEC_LANG)))
+	M2_O += exec_R.o
+	CCDEF += -DM2_EXEC_R
+	XLDFLAGS += $(R_LIB)
+endif
+
+ifneq (,$(findstring simoC,$(EXEC_LANG)))
+	M2_O += exec_simoC.o
+	CCDEF += -DM2_EXEC_SIMOC
+	XLDFLAGS += $(LIBFFI_LIB) -ldl
+endif
 
 M2_C = $(M2_O:.o=.c)
 
-CFLAGS = $(LUAJIT_INCLUDE) $(CCOPT) $(CCDEBUG) $(CCDEF) $(CCWARN) $(XCFLAGS)
+CFLAGS = $(LUAJIT_CFLAGS) $(CCOPT) $(CCDEBUG) $(CCDEF) $(CCWARN) $(XCFLAGS)
 # -rdynamic is needed to access C symbols of the executable from lua
 # ffi.C uses dlsym(RTLD_DEFAULT, ...)
 LDFLAGS = -rdynamic $(LUAJIT_LIB) $(CCOPT) $(CCDEBUG) $(XLDFLAGS)
@@ -74,6 +80,12 @@ clean:
 .PHONY: ffi dep clean
 
 include Makefile.dep
+
+exec_R.o: exec_R.c
+	$(CC) $(CFLAGS) $(R_CFLAGS) -c $< -o $@
+
+exec_simoC.o: exec_simoC.c
+	$(CC) $(CFLAGS) $(LIBFFI_CFLAGS) -c $< -o $@
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@

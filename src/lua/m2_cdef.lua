@@ -326,16 +326,12 @@ struct fhk_var *fhk_get_var(struct fhk_graph *G, unsigned idx);
 struct fhk_model *fhk_get_model(struct fhk_graph *G, unsigned idx);
 struct fhk_model *fhk_get_select(struct fhk_var *x);
        
-typedef int (*ex_exec_f)(void *, pvalue *ret, pvalue *argv);
-typedef void (*ex_destroy_f)(void *);
-struct ex_impl {
- ex_exec_f exec;
- ex_destroy_f destroy;
-};
-typedef struct ex_func {
- const struct ex_impl *impl;
-} ex_func;
+typedef struct ex_func ex_func;
+int ex_exec(ex_func *f, pvalue *ret, pvalue *argv);
+void ex_destroy(ex_func *f);
 ex_func *ex_R_create(const char *fname, const char *func, int narg, ptype *argt, int nret,
+  ptype *rett);
+ex_func *ex_simoC_create(const char *libname, const char *func, int narg, ptype *argt, int nret,
   ptype *rett);
        
 typedef struct ugraph ugraph;

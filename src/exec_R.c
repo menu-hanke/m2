@@ -1,7 +1,8 @@
 #define R_NO_REMAP
 
-#include "lex.h"
 #include "exec.h"
+#include "exec_aux.h"
+#include "lex.h"
 #include "def.h"
 
 #include <stdlib.h>
@@ -18,7 +19,7 @@
 
 struct ex_R_func {
 	// must be first
-	ex_func ex;
+	struct ex_func ex;
 
 	// TODO preallocate SEXP for all these, should be faster
 	SEXP call;

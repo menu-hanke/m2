@@ -1,8 +1,9 @@
 #pragma once
 
+#include <stdio.h>
+
 #ifdef DEBUG
 
-#include <stdio.h>
 #include <assert.h>
 #define dd(...) fprintf(stderr, __VA_ARGS__)
 #define dv(fmt, ...) dd("(%-10s) %-20s" fmt, __FILE__, __func__, ##__VA_ARGS__)
@@ -17,6 +18,9 @@
 #define UNREACHABLE() __builtin_unreachable()
 
 #endif // ifdef DEBUG
+
+#define DIEF(err, fmt, mes)\
+	do{ fprintf(stderr, "Fatal error: "); fprintf(stderr, (fmt), (mes)); exit(err); } while(0)
 
 #ifndef M2_VECTOR_SIZE
 

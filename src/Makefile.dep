@@ -1,4 +1,6 @@
-main.o: main.c def.h
+main.o: main.c def.h /usr/include/luajit-2.0/lua.h \
+ /usr/include/luajit-2.0/luaconf.h /usr/include/luajit-2.0/lualib.h \
+ /usr/include/luajit-2.0/lua.h /usr/include/luajit-2.0/lauxlib.h
 bitmap.o: bitmap.c bitmap.h def.h
 fhk_graph.o: fhk_graph.c bitmap.h def.h fhk.h arena.h lex.h list.h grid.h
 fhk_solve.o: fhk_solve.c def.h fhk.h bitmap.h arena.h lex.h list.h grid.h
@@ -12,6 +14,9 @@ update.o: update.c fhk.h bitmap.h def.h arena.h lex.h list.h grid.h \
  exec.h world.h sim.h update.h
 vmath.o: vmath.c vmath.h def.h
 world.o: world.c world.h lex.h def.h list.h grid.h bitmap.h sim.h
-exec_R.o: exec_R.c lex.h def.h list.h grid.h bitmap.h exec.h
+exec_aux.o: exec_aux.c exec_aux.h lex.h def.h list.h grid.h bitmap.h
+exec_R.o: exec_R.c exec.h lex.h def.h list.h grid.h bitmap.h exec_aux.h
+exec_simoC.o: exec_simoC.c exec.h lex.h def.h list.h grid.h bitmap.h \
+ exec_aux.h
 lua/m2_cdef.lua: lua_exports.h lex.h def.h list.h grid.h bitmap.h sim.h \
  world.h fhk.h arena.h exec.h update.h vmath.h

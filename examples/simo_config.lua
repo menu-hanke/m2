@@ -1,3 +1,6 @@
+read "examples/simo_models.lua"
+read_coeff "examples/simo_coeff.json"
+
 enum("species", {
 	pine                 = 1,
 	["Pinus sylvestris"] = 1,

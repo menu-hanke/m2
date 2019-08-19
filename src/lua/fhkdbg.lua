@@ -1,7 +1,6 @@
 local ffi = require "ffi"
 local conf = require "conf"
 local fhk = require "fhk"
-local exec = require "exec"
 local typing = require "typing"
 
 ffi.cdef [[
@@ -29,7 +28,7 @@ end
 
 local function hook_graph(G)
 	G.exec_model = function(G, udata, ret, args)
-		return exec.exec(modelinfo(udata).f, ret, args)
+		return modelinfo(udata).f(ret, args)
 	end
 
 	G.resolve_var = function(G, udata, value)

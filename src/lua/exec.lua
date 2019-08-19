@@ -1,5 +1,15 @@
 local ffi = require "ffi"
 
+ffi.metatype("ex_func", {
+	__call = ffi.C.ex_exec,
+	__gc = ffi.C.ex_destroy
+})
+
+local create_ex = {
+	R     = ffi.C.ex_R_create,
+	simoC = ffi.C.ex_simoC_create
+}
+
 local function promote_all(ts)
 	local ret = ffi.new("ptype[?]", #ts)
 
@@ -10,27 +20,17 @@ local function promote_all(ts)
 	return ret, #ts
 end
 
-local function destroy(f)
-	f.impl.destroy(f)
-end
-
-local function exec(f, ret, args)
-	return f.impl.exec(f, ret, args)
-end
-
 local function create(impl, argt, rett)
-	if impl.lang ~= "R" then
-		error("sorry only R")
+	local cr = create_ex[impl.lang]
+
+	if not cr then
+		error("Unsupported model lang:", impl.lang)
 	end
 
 	local argt, narg = promote_all(argt)
 	local rett, nret = promote_all(rett)
 
-	return ffi.gc(ffi.C.ex_R_create(
-		impl.file, impl.func,
-		narg, argt,
-		nret, rett
-	), destroy)
+	return cr(impl.file, impl.func, narg, argt, nret, rett)
 end
 
 local function from_model(m)
@@ -49,7 +49,5 @@ end
 
 return {
 	create     = create,
-	from_model = from_model,
-	destroy    = destroy,
-	exec       = exec
+	from_model = from_model
 }
