@@ -69,6 +69,17 @@ w_env *w_define_env(struct world *w, type type, size_t resolution){
 	return env;
 }
 
+w_global *w_define_global(struct world *w, type type){
+	// TODO: also put a readonly flag here
+	// (is the type needed or could we just alloc a tvalue?)
+	w_global *glob = sim_alloc(w->sim, sizeof(*glob), alignof(*glob), SIM_ALLOC_VSTACK);
+	glob->type = type;
+
+	dv("global[%p]: type=%d\n", glob, type);
+
+	return glob;
+}
+
 w_obj *w_define_obj(struct world *w, size_t nv, type *vtypes){
 	size_t vecsize = sizeof(w_objvec) + nv*sizeof(w_vband);
 	w_obj *obj = sim_alloc(w->sim, sizeof(*obj) + vecsize, alignof(*obj), SIM_ALLOC_STATIC);

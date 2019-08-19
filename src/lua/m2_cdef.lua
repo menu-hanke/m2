@@ -79,11 +79,6 @@ typedef union pvalue {
 } pvalue;
 
 
-struct pvec {
- type type;
- size_t n;
- void *data;
-};
 typedef unsigned lexid;
 struct var_def {
  lexid id;
@@ -151,6 +146,10 @@ typedef struct w_env {
  gridpos zoom_mask;
  struct grid grid;
 } w_env;
+typedef struct w_global {
+ type type;
+ tvalue value;
+} w_global;
 typedef struct w_vband {
  unsigned stride_bits : 16;
  unsigned type : 16;
@@ -182,14 +181,13 @@ typedef struct w_objtpl {
 world *w_create(sim *sim);
 void w_destroy(world *w);
 w_env *w_define_env(world *w, type type, size_t resolution);
+w_global *w_define_global(world *w, type type);
 w_obj *w_define_obj(world *w, size_t nv, type *vtypes);
 w_objgrid *w_define_objgrid(world *w, w_obj *obj, size_t order);
-void w_env_pvec(struct pvec *v, w_env *e);
 void w_env_swap(world *w, w_env *e, void *data);
 size_t w_env_orderz(w_env *e);
 gridpos w_env_posz(w_env *e, gridpos pos);
 tvalue w_env_readpos(w_env *e, gridpos pos);
-void w_obj_pvec(struct pvec *v, w_objvec *vec, lexid varid);
 void w_obj_swap(world *w, w_objvec *vec, lexid varid, void *data);
 void *w_vb_varp(w_vband *band, size_t idx);
 void w_vb_vcopy(w_vband *band, size_t idx, tvalue v);
@@ -345,7 +343,7 @@ typedef struct u_obj u_obj;
 typedef struct u_var u_var;
 typedef struct u_env u_env;
 typedef struct u_comp u_comp;
-typedef struct u_glob u_glob;
+typedef struct u_global u_global;
 typedef struct u_model u_model;
 typedef void (*u_solver_cb)(void *udata, struct fhk_graph *G, size_t nv, struct fhk_var **xs);
 ugraph *u_create(struct fhk_graph *G);
@@ -353,10 +351,12 @@ void u_destroy(ugraph *u);
 u_obj *u_add_obj(ugraph *u, w_obj *obj, const char *name);
 u_var *u_add_var(ugraph *u, u_obj *obj, lexid varid, struct fhk_var *x, const char *name);
 u_env *u_add_env(ugraph *u, w_env *env, struct fhk_var *x, const char *name);
+u_global *u_add_global(ugraph *u, w_global *glob, struct fhk_var *x, const char *name);
 u_comp *u_add_comp(ugraph *u, struct fhk_var *x, const char *name);
 u_model *u_add_model(ugraph *u, ex_func *f, struct fhk_model *m, const char *name);
 void u_init_given_obj(bm8 *init_v, u_obj *obj);
 void u_init_given_envs(bm8 *init_v, ugraph *u);
+void u_init_given_globals(bm8 *init_v, ugraph *u);
 void u_init_solve(bm8 *init_v, struct fhk_var *y);
 void u_graph_init(ugraph *u, bm8 *init_v);
 void u_mark_obj(bm8 *vmask, u_obj *obj);

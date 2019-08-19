@@ -16,6 +16,11 @@ typedef struct w_env {
 	struct grid grid;
 } w_env;
 
+typedef struct w_global {
+	type type;
+	tvalue value;
+} w_global;
+
 typedef struct w_vband {
 	unsigned stride_bits : 16;
 	unsigned type        : 16;
@@ -58,6 +63,7 @@ world *w_create(sim *sim);
 void w_destroy(world *w);
 
 w_env *w_define_env(world *w, type type, size_t resolution);
+w_global *w_define_global(world *w, type type);
 w_obj *w_define_obj(world *w, size_t nv, type *vtypes);
 w_objgrid *w_define_objgrid(world *w, w_obj *obj, size_t order);
 

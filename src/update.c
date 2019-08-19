@@ -49,6 +49,12 @@ struct u_env {
 	w_env *wenv;
 };
 
+struct u_global {
+	struct xheader header;
+	struct fhk_var *x;
+	w_global *wglob;
+};
+
 struct u_comp {
 	struct xheader header;
 };
@@ -69,12 +75,13 @@ struct ugraph {
 #define u_nv(u)   ((u)->G->n_var)
 
 static void mark_obj(bm8 *mark_v, struct u_obj *obj, uint8_t mark);
-static void mark_envs(bm8 *mark_v, struct ugraph *u, uint8_t mark);
+static void mark_type(bm8 *mark_v, struct ugraph *u, int type, uint8_t mark);
 static void mark_envs_z(bm8 *mark_v, struct ugraph *u, size_t order, uint8_t mark);
 static void compute_reset_mask(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
 
 static pvalue v_resolve_var(struct u_var *var);
 static pvalue v_resolve_env(struct ugraph *u, struct u_env *env);
+static pvalue v_resolve_glob(struct u_global *glob);
 
 static int G_model_exec(struct fhk_graph *G, void *udata, pvalue *ret, pvalue *args);
 static int G_resolve_virtual(struct fhk_graph *G, void *udata, pvalue *value);
@@ -143,6 +150,20 @@ struct u_env *u_add_env(struct ugraph *u, w_env *env, struct fhk_var *x, const c
 	return ret;
 }
 
+struct u_global *u_add_global(struct ugraph *u, w_global *glob, struct fhk_var *x,
+		const char *name){
+
+	struct u_global *ret = arena_malloc(u->arena, sizeof(*ret));
+	vname(ret) = arena_strcpy(u->arena, name);
+	vtype(ret) = V_GLOB;
+	ret->x = x;
+	ret->wglob = glob;
+	x->udata = ret;
+	u->xs[x->idx] = (struct xheader *) ret;
+	dv("fhk var[%d] = glob %p %s\n", x->idx, ret, name);
+	return ret;
+}
+
 struct u_comp *u_add_comp(struct ugraph *u, struct fhk_var *x, const char *name){
 	struct u_comp *ret = arena_malloc(u->arena, sizeof(*ret));
 	vname(ret) = arena_strcpy(u->arena, name);
@@ -167,7 +188,11 @@ void u_init_given_obj(bm8 *init_v, struct u_obj *obj){
 }
 
 void u_init_given_envs(bm8 *init_v, struct ugraph *u){
-	mark_envs(init_v, u, VM_GIVEN);
+	mark_type(init_v, u, V_ENV, VM_GIVEN);
+}
+
+void u_init_given_globals(bm8 *init_v, struct ugraph *u){
+	mark_type(init_v, u, V_GLOB, VM_GIVEN);
 }
 
 void u_init_solve(bm8 *init_v, struct fhk_var *y){
@@ -271,9 +296,9 @@ static void mark_obj(bm8 *mark_v, struct u_obj *obj, uint8_t mark){
 	}
 }
 
-static void mark_envs(bm8 *mark_v, struct ugraph *u, uint8_t mark){
+static void mark_type(bm8 *mark_v, struct ugraph *u, int type, uint8_t mark){
 	for(size_t i=0;i<u_nv(u);i++){
-		if(u->xs[i] && vtype(u->xs[i]) == V_ENV)
+		if(u->xs[i] && vtype(u->xs[i]) == type)
 			mark_v[i] = mark;
 	}
 }
@@ -312,6 +337,11 @@ static pvalue v_resolve_env(struct ugraph *u, struct u_env *env){
 	return vpromote(w_env_readpos(env->wenv, u->update_pos), env->wenv->type);
 }
 
+static pvalue v_resolve_glob(struct u_global *glob){
+	w_global *wg = glob->wglob;
+	return vpromote(wg->value, wg->type);
+}
+
 static int G_model_exec(struct fhk_graph *G, void *udata, pvalue *ret, pvalue *args){
 	(void)G;
 
@@ -321,8 +351,9 @@ static int G_model_exec(struct fhk_graph *G, void *udata, pvalue *ret, pvalue *a
 
 static int G_resolve_virtual(struct fhk_graph *G, void *udata, pvalue *value){
 	switch(vtype(udata)){
-		case V_VAR: *value = v_resolve_var(udata); break;
-		case V_ENV: *value = v_resolve_env(G->udata, udata); break;
+		case V_VAR:  *value = v_resolve_var(udata); break;
+		case V_ENV:  *value = v_resolve_env(G->udata, udata); break;
+		case V_GLOB: *value = v_resolve_glob(udata); break;
 		default: UNREACHABLE();
 	}
 

@@ -68,6 +68,20 @@ ffi.metatype("w_objref", {__index=read1, __newindex=write1})
 
 -------------------------
 
+local glob = {}
+
+function glob:read()
+	return typing.tvalue2lua(self.value, self.type)
+end
+
+function glob:write(v)
+	self.value = typing.lua2tvalue(v, self.type)
+end
+
+ffi.metatype("w_global", {__index=glob})
+
+-------------------------
+
 local function gen_refs(vec, pos, n)
 	local ret = ffi.new("w_objref[?]", n)
 	for i=0, tonumber(n)-1 do
@@ -146,6 +160,10 @@ local function define_env(w, src)
 	return C.w_define_env(w, src.type, src.z_order)
 end
 
+local function define_global(w, src)
+	return C.w_define_global(w, src.type)
+end
+
 local function define(cfg, world)
 	for name,obj in pairs(cfg.objs) do
 		local wobj, wgrid = define_obj(world, obj)
@@ -156,6 +174,11 @@ local function define(cfg, world)
 	for name,env in pairs(cfg.envs) do
 		local wenv = define_env(world, env)
 		env.wenv = wenv
+	end
+
+	for name,glob in pairs(cfg.globals) do
+		local wglob = define_global(world, glob)
+		glob.wglob = wglob
 	end
 end
 

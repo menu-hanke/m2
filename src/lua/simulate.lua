@@ -49,6 +49,22 @@ local function inject_names(env, cfg)
 	end
 end
 
+local function inject_globals(env, cfg)
+	local globals = {}
+	for name,g in pairs(cfg.globals) do
+		globals[name] = g.wglob
+	end
+
+	env.G = setmetatable({}, {
+		__index = function(G, name)
+			return globals[name]:read()
+		end,
+		__newindex = function(G, name, value)
+			globals[name]:write(value)
+		end
+	})
+end
+
 local function main(args)
 	if not args.scripts then
 		error("No scripts given, give some with -s")
@@ -69,6 +85,7 @@ local function main(args)
 	fhk.inject(env, cfg, G, ugraph)
 	inject_types(env, cfg)
 	inject_names(env, cfg)
+	inject_globals(env, cfg)
 
 	for _,s in ipairs(args.scripts) do
 		local f, err = loadfile(s, nil, env)

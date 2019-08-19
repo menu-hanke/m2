@@ -57,6 +57,7 @@ end
 
 local function resolve_types(data)
 	patch_enum_values(data)
+	resolve_dt(data, data.globals)
 	resolve_dt(data, data.envs)
 	resolve_dt(data, data.vars)
 	for _,o in pairs(data.objs) do
@@ -70,6 +71,8 @@ local function link_graph(data)
 		return self[k]
 	end})
 
+	-- TODO: only take vars that are actually used by models
+
 	for _,o in pairs(data.objs) do
 		for _,v in pairs(o.vars) do
 			fhk_vars[v.name].src = v
@@ -80,6 +83,11 @@ local function link_graph(data)
 	for _,e in pairs(data.envs) do
 		fhk_vars[e.name].src = e
 		fhk_vars[e.name].kind = "env"
+	end
+
+	for _,g in pairs(data.globals) do
+		fhk_vars[g.name].src = g
+		fhk_vars[g.name].kind = "global"
 	end
 
 	for _,v in pairs(data.vars) do

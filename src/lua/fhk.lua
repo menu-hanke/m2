@@ -172,6 +172,13 @@ local function create_ugraph(G, cfg)
 		end
 	end
 
+	for name,g in pairs(cfg.globals) do
+		local fv = cfg.fhk_vars[name]
+		if fv then
+			fv.uglob = C.u_add_global(u, g.wglob, fv.fhk_var, name)
+		end
+	end
+
 	for _,fm in pairs(cfg.fhk_models) do
 		C.u_add_model(u, fm.ex_func, fm.fhk_model, fm.name)
 	end
@@ -188,7 +195,7 @@ local function newbitmap(n)
 	return bm
 end
 
-local function objv_bitmaps(G, ugraph, obj)
+local function objv_reset_bitmaps(G, ugraph, obj)
 	local reset_v, reset_m = newbitmap(G.n_var), newbitmap(G.n_mod)
 	C.u_mark_obj(reset_v, obj.uobj)
 	local order = obj.wgrid and obj.wgrid.order or 0
@@ -197,8 +204,12 @@ local function objv_bitmaps(G, ugraph, obj)
 	return reset_v, reset_m
 end
 
-local function init_bitmap(G, vars)
+local function objv_init_bitmap(G, ugraph, obj, vars)
 	local init_v = newbitmap(G.n_var)
+
+	C.u_init_given_obj(init_v, obj.uobj)
+	C.u_init_given_globals(init_v, ugraph)
+	C.u_init_given_envs(init_v, ugraph)
 
 	for _,fv in ipairs(vars) do
 		C.u_init_solve(init_v, fv.fhk_var)
@@ -231,8 +242,8 @@ end
 
 local function create_obj_solver(G, ugraph, obj, vars)
 	local uobj = obj.uobj
-	local reset_v, reset_m = objv_bitmaps(G, ugraph, obj)
-	local init_v = init_bitmap(G, vars)
+	local init_v = objv_init_bitmap(G, ugraph, obj, vars)
+	local reset_v, reset_m = objv_reset_bitmaps(G, ugraph, obj)
 	local nv = #vars
 	local xs = vars_xs(vars)
 	local res = ffi.new("void *[?]", nv)

@@ -214,6 +214,22 @@ function root.env(name)
 end
 
 -----------------------
+-- envs
+-----------------------
+
+local global_ = {
+	dtype = setter("type"),
+	unit = setter("unit")
+}
+
+function root.global(name)
+	top()._globals[name] = push(global_, {
+		name = name,
+		dtype = "f64"
+	})
+end
+
+-----------------------
 -- models
 -----------------------
 
@@ -320,6 +336,7 @@ end
 local types = {}
 local objs = {}
 local envs = {}
+local globals = {}
 local fhk_models = {}
 local fhk_virtuals = {}
 local vars = {}
@@ -328,12 +345,14 @@ return env, push(root, {
 	types = types,
 	objs = objs,
 	envs = envs,
+	globals = globals,
 	fhk_models = fhk_models,
 	fhk_virtuals = fhk_virtuals,
 	vars = vars,
 	_types = nodup(types, "Redefinition of type '%s'"),
 	_objs = nodup(objs, "Redefinition of object '%s'"),
 	_envs = nodup(envs, "Redefinition of env '%s'"),
+	_globals = nodup(globals, "Redefinition of global '%s'"),
 	_fhk_models = nodup(fhk_models, "Redefinition of model '%s'"),
 	_fhk_virtuals = nodup(fhk_virtuals, "Redefinition of virtual '%s'"),
 	_vars = nodup(vars, "Redefinition of variable '%s'")

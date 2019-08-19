@@ -21,3 +21,35 @@ end
 
 local s = plant_pines(10)
 generate_trees(s[0])
+
+----------------------------------------------------------
+
+on("next_year", function()
+	G.year = G.year + 1
+	print("Nyt on vuosi:", G.year)
+end)
+
+local function maybe_plant(op)
+	if op == "plant" then
+		plant_pines(10)
+	end
+end
+
+on("maybe_plant", function()
+	branch(maybe_plant, {
+		choice(0x1, "plant"),
+		choice(0x2, "no plant")
+	})
+end)
+
+----------------------------------------------------------
+
+local instr = record()
+
+for i=1, 2 do
+	instr.next_year()
+	instr.maybe_plant()
+end
+
+G.year = 0
+simulate(instr)

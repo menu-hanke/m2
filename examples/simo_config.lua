@@ -17,6 +17,18 @@ enum("species", {
 	misc_decidious       = 9
 })
 
+-- ks. simo
+enum("soilclass", {
+	very_rich = 1,
+	rich      = 2,
+	damp      = 3,
+	dryish    = 4,
+	dry       = 5,
+	barren    = 6,
+	rocky     = 7,
+	hilltop   = 8
+})
+
 obj "stratum"
 	var "trees"   dtype(objvec("tree"))
 	var "species" dtype "species"
@@ -40,3 +52,9 @@ obj "tree"
 	var "h"     dtype "f64"
 	var "v"     dtype "f64"
 	-- TODO: biomass
+
+-- TODO: many of these don't change so they can be made readonly
+-- (and save 16 bytes of vstack space per global!)
+global "year" dtype "f64"
+global "sc"   dtype "soilclass"
+global "ts"   dtype "f64"
