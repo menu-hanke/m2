@@ -148,8 +148,24 @@ local function report(G, vars)
 	return ret
 end
 
+local function maxcol(rep, field, max)
+	max = max or 0
+
+	for _,r in ipairs(rep) do
+		local x = r[field]
+		if x and #x > max then
+			max = #x
+		end
+	end
+
+	return max
+end
+
 local function print_report(rep)
-	print(string.format("%-20s   %-20s %-20s %-16s %s",
+	local desc_len = maxcol(rep, "desc", 20)
+	local model_len = maxcol(rep, "model", 20)
+
+	print(string.format("%-"..desc_len.."s   %-20s %-"..model_len.."s %-16s %s",
 		"Variable",
 		"Value",
 		"Model",
@@ -158,7 +174,7 @@ local function print_report(rep)
 	))
 
 	for _,r in ipairs(rep) do
-		print(string.format("%-20s = %-20s %-20s %-16f %s %s (%s)",
+		print(string.format("%-"..desc_len.."s = %-20s %-"..model_len.."s %-16f %s %s (%s)",
 			r.desc,
 			r.value,
 			r.model or "",
