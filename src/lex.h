@@ -21,10 +21,13 @@ typedef enum type {
 	T_B32      = 4,
 	T_B64      = 5,
 
+	T_BOOL     = 6,
+	T_ID       = 7,
+
 	// TODO: is a complex type needed?
 	
-	T_POSITION = 6,
-	T_USERDATA = 7
+	T_POSITION = 8,
+	T_USERDATA = 9
 } type;
 
 typedef union tvalue {
@@ -34,6 +37,8 @@ typedef union tvalue {
 	uint16_t b16;
 	uint32_t b32;
 	uint64_t b64;
+	uint8_t  b;
+	uint32_t id;
 	gridpos  z;
 	void    *u;
 } tvalue;
@@ -42,14 +47,17 @@ typedef union tvalue {
 typedef enum ptype {
 	PT_REAL    = 1, // F*
 	PT_BIT     = 2, // B*
-	PT_POS     = 3, // POSITION
-	PT_UDATA   = 4  // USERDATA
+	PT_BOOL    = 3, // BOOL
+	PT_POS     = 4, // POSITION
+	PT_ID      = 5, // ID
+	PT_UDATA   = 6  // USERDATA
 } ptype;
 
 /* promoted values */
 typedef union pvalue {
 	double   r;   // F*
-	uint64_t b;   // B*
+	uint64_t b;   // B* / BOOL
+	uint64_t id;  // ID
 	gridpos  z;   // POSITION
 	void    *u;   // USERDATA
 } pvalue;

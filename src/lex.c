@@ -74,12 +74,13 @@ type tfitenum(unsigned max){
 
 size_t tsize(type t){
 	static const uint8_t sizes[] = {
-		[T_F32] = 4,
-		[T_F64] = 8,
-		[T_B8]  = 1,
-		[T_B16] = 2,
-		[T_B32] = 4,
-		[T_B64] = 8,
+		[T_F32]      = 4,
+		[T_F64]      = 8,
+		[T_B8]       = 1,
+		[T_B16]      = 2,
+		[T_B32]      = 4,
+		[T_B64]      = 8,
+		[T_BOOL]     = 1,
 		[T_POSITION] = sizeof(gridpos),
 		[T_USERDATA] = sizeof(void *)
 	};
@@ -98,6 +99,12 @@ ptype tpromote(type t){
 		case T_B32:
 		case T_B64:
 			return PT_BIT;
+
+		case T_BOOL:
+			return PT_BOOL;
+
+		case T_ID:
+			return PT_ID;
 
 		case T_POSITION:
 			return PT_POS;
@@ -119,6 +126,8 @@ pvalue vpromote(tvalue v, type t){
 		case T_B16:      ret.b = v.b16; break;
 		case T_B32:      ret.b = v.b32; break;
 		case T_B64:      ret.b = v.b64; break;
+		case T_BOOL:     ret.b = v.b; break;
+		case T_ID:       ret.id = v.id; break;
 		case T_POSITION: ret.z = v.z; break;
 		case T_USERDATA: ret.u = v.u; break;
 		default: UNREACHABLE();
@@ -137,6 +146,8 @@ tvalue vdemote(pvalue v, type t){
 		case T_B16:      ret.b16 = v.b; break;
 		case T_B32:      ret.b32 = v.b; break;
 		case T_B64:      ret.b64 = v.b; break;
+		case T_BOOL:     ret.b   = v.b; break;
+		case T_ID:       ret.id  = v.id; break;
 		case T_POSITION: ret.z   = v.z; break;
 		case T_USERDATA: ret.u   = v.u; break;
 		default: UNREACHABLE();

@@ -8,6 +8,8 @@ local builtin_types = {
 	b16 = C.T_B16,
 	b32 = C.T_B32,
 	b64 = C.T_B64,
+	b   = C.T_BOOL,
+	id  = C.T_ID,
 	z   = C.T_POSITION,
 	u   = C.T_USERDATA
 }
@@ -25,6 +27,8 @@ end
 local pvalue_map = {
 	[tonumber(C.PT_REAL)]   = "r",
 	[tonumber(C.PT_BIT)]    = "b",
+	[tonumber(C.PT_BOOL)]   = "b",
+	[tonumber(C.PT_ID)]     = "id",
 	[tonumber(C.PT_POS)]    = "z",
 	[tonumber(C.PT_UDATA)]  = "u"
 }

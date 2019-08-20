@@ -47,6 +47,8 @@ double exa_export_double1(ptype argt, pvalue arg){
 	switch(argt){
 		case PT_REAL: return arg.r;
 		case PT_BIT:  return (double) unpackenum(arg.b);
+		case PT_BOOL: return (double) !!arg.b;
+		case PT_ID:   return (double) arg.id;
 		default:      UNREACHABLE();
 	}
 }
@@ -60,8 +62,10 @@ pvalue exa_import_double1(ptype rett, double ret){
 	pvalue r;
 
 	switch(rett){
-		case PT_REAL: r.r = ret; break;
-		case PT_BIT:  r.b = packenum((uint64_t) ret); break;
+		case PT_REAL: r.r  = ret; break;
+		case PT_BIT:  r.b  = packenum((uint64_t) ret); break;
+		case PT_BOOL: r.b  = !!ret; break;
+		case PT_ID:   r.id = (uint64_t) ret; break;
 		default:      UNREACHABLE();
 	}
 

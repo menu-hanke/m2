@@ -52,8 +52,10 @@ typedef enum type {
  T_B16 = 3,
  T_B32 = 4,
  T_B64 = 5,
- T_POSITION = 6,
- T_USERDATA = 7
+ T_BOOL = 6,
+ T_ID = 7,
+ T_POSITION = 8,
+ T_USERDATA = 9
 } type;
 typedef union tvalue {
  float f32;
@@ -62,18 +64,23 @@ typedef union tvalue {
  uint16_t b16;
  uint32_t b32;
  uint64_t b64;
+ uint8_t b;
+ uint32_t id;
  gridpos z;
  void *u;
 } tvalue;
 typedef enum ptype {
  PT_REAL = 1,
  PT_BIT = 2,
- PT_POS = 3,
- PT_UDATA = 4
+ PT_BOOL = 3,
+ PT_POS = 4,
+ PT_ID = 5,
+ PT_UDATA = 6
 } ptype;
 typedef union pvalue {
  double r;
  uint64_t b;
+ uint64_t id;
  gridpos z;
  void *u;
 } pvalue;
