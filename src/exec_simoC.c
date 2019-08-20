@@ -26,7 +26,7 @@ static int ex_simoC_exec(struct ex_simoC_func *X, pvalue *ret, pvalue *argv);
 static void ex_simoC_destroy(struct ex_simoC_func *X);
 
 static const struct ex_impl EX_SIMOC = {
-	.exec = (ex_exec_f) ex_simoC_exec,
+	.exec    = (ex_exec_f) ex_simoC_exec,
 	.destroy = (ex_destroy_f) ex_simoC_destroy
 };
 
@@ -56,12 +56,14 @@ static int ex_simoC_exec(struct ex_simoC_func *X, pvalue *ret, pvalue *argv){
 	void *ffiarg[nparg+6];
 	char err[200]; // simo uses 200 bytes for all error buffers so we do too
 	ffi_sarg status; // return value
-	int nres = 123456; // simo sets this
+	int nres = 0; // simo sets this
 	int *nres_ptr = &nres;
 
 	int errorCheckMode = 0;
 	double allowedRiskLevel = 0;
 	double rectFactor = 1;
+
+	exa_export_double(X->proto.narg, X->proto.argt, argv);
 
 	for(size_t i=0;i<nparg;i++)
 		ffiarg[i] = &argv[i];
@@ -80,6 +82,8 @@ static int ex_simoC_exec(struct ex_simoC_func *X, pvalue *ret, pvalue *argv){
 		dv("simo error: %s\n", err);
 		assert(0);
 	}
+
+	exa_import_double(X->proto.nret, X->proto.rett, argv);
 
 	return !(status == SIMO_STATUS_OK);
 }

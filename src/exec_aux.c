@@ -32,10 +32,45 @@ void exa_set_file_data(const char *file, void *udata){
 		VEC_INIT(loaded_files, 10);
 
 	struct exa_file *f = find_loaded(file);
-	if(!f)
+	if(!f){
+		// this will be leaked because it is never removed
 		f = VEC_ADD(loaded_files);
+		char *fname = malloc(strlen(file)+1);
+		strcpy(fname, file);
+		f->filename = fname;
+	}
 
 	f->udata = udata;
+}
+
+double exa_export_double1(ptype argt, pvalue arg){
+	switch(argt){
+		case PT_REAL: return arg.r;
+		case PT_BIT:  return (double) unpackenum(arg.b);
+		default:      UNREACHABLE();
+	}
+}
+
+void exa_export_double(unsigned narg, ptype *argt, pvalue *argv){
+	for(unsigned i=0;i<narg;i++)
+		argv[i].r = exa_export_double1(argt[i], argv[i]);
+}
+
+pvalue exa_import_double1(ptype rett, double ret){
+	pvalue r;
+
+	switch(rett){
+		case PT_REAL: r.r = ret; break;
+		case PT_BIT:  r.b = packenum((uint64_t) ret); break;
+		default:      UNREACHABLE();
+	}
+
+	return r;
+}
+
+void exa_import_double(unsigned nret, ptype *rett, pvalue *retv){
+	for(unsigned i=0;i<nret;i++)
+		retv[i] = exa_import_double1(rett[i], retv[i].r);
 }
 
 void exa_init_prototype(struct exa_prototype *p, unsigned narg, ptype *argt, unsigned nret,

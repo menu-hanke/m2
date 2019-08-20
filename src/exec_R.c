@@ -18,23 +18,14 @@
 #endif
 
 struct ex_R_func {
-	// must be first
-	struct ex_func ex;
-
-	// TODO preallocate SEXP for all these, should be faster
+	ex_func ex;
+	struct exa_prototype proto;
 	SEXP call;
-	int narg;
-	ptype *argt;
-	int nret;
-	ptype *rett;
 };
 
 /* global state goes here - R is full of global state anyway so it doesn't make
  * sense to tie this to ex_R_func or some other non-global object */
 struct GS {
-	// I'm using an R list to store the already sourced files because I'm lazy
-	SEXP sourced;
-
 	// pairlist of all calls, stored here to protect them from gc
 	SEXP calls;
 };
@@ -45,7 +36,7 @@ static int ex_R_exec(struct ex_R_func *X, pvalue *ret, pvalue *argv);
 static void ex_R_destroy(struct ex_R_func *X);
 
 static const struct ex_impl EX_R = {
-	.exec = (ex_exec_f) ex_R_exec,
+	.exec    = (ex_exec_f) ex_R_exec,
 	.destroy = (ex_destroy_f) ex_R_destroy
 };
 
@@ -54,8 +45,6 @@ static int source(const char *fname);
 static int sourcef(const char *fname);
 static SEXP eval(SEXP call, int *err);
 static SEXP make_call(struct ex_R_func *X, const char *func);
-static void copy_args(struct ex_R_func *X, pvalue *argv);
-static void copy_ret(struct ex_R_func *X, pvalue *ret, SEXP s);
 static void add_call(SEXP call);
 static void remove_call(SEXP call);
 
@@ -68,13 +57,7 @@ ex_func *ex_R_create(const char *fname, const char *func, int narg, ptype *argt,
 	struct ex_R_func *X = malloc(sizeof *X);
 	X->ex.impl = &EX_R;
 
-	X->narg = narg;
-	X->argt = malloc(narg * sizeof(ptype));
-	memcpy(X->argt, argt, narg * sizeof(ptype));
-
-	X->nret = nret;
-	X->rett = malloc(nret * sizeof(ptype));
-	memcpy(X->rett, rett, nret * sizeof(ptype));
+	exa_init_prototype(&X->proto, narg, argt, nret, rett);
 
 	SEXP call = make_call(X, func);
 	X->call = call;
@@ -84,17 +67,31 @@ ex_func *ex_R_create(const char *fname, const char *func, int narg, ptype *argt,
 }
 
 static int ex_R_exec(struct ex_R_func *X, pvalue *ret, pvalue *argv){
-	copy_args(X, argv);
+	exa_export_double(X->proto.narg, X->proto.argt, argv);
+
+	for(SEXP s=CDR(X->call); s != R_NilValue; s=CDR(s), argv++)
+		*REAL(CAR(s)) = argv->r;
+
 	int err;
+
 	SEXP r = eval(X->call, &err);
-	copy_ret(X, ret, r);
-	return err;
+
+	if(!err){
+		assert(TYPEOF(r) == REALSXP && (unsigned)LENGTH(r) == X->proto.nret);
+		memcpy(ret, REAL(r), X->proto.nret * sizeof(*ret));
+
+		exa_import_double(X->proto.nret, X->proto.rett, ret);
+
+		return 0;
+	}
+
+	dv("eval error: %d\n", err);
+	return 1;
 }
 
 static void ex_R_destroy(struct ex_R_func *X){
+	exa_destroy_prototype(&X->proto);
 	remove_call(X->call);
-	free(X->argt);
-	free(X->rett);
 	free(X);
 }
 
@@ -127,18 +124,13 @@ static void init_R_embedded(){
 	// no point in checking return value, this always returns 1
 	Rf_initEmbeddedR(sizeof(argv)/sizeof(argv[0]), argv);
 
-	GS->sourced = Rf_list1(R_NilValue);
-	PROTECT(GS->sourced);
-
 	GS->calls = Rf_list1(R_NilValue);
 	PROTECT(GS->calls);
 }
 
 static int source(const char *fname){
-	for(SEXP s=CDR(GS->sourced); s != R_NilValue; s=CDR(s)){
-		if(!strcmp(CHAR(CAR(s)), fname))
-			return 0;
-	}
+	if(exa_get_file_data(fname))
+		return 0;
 
 	dv("R: sourcing %s\n", fname);
 	int ret = sourcef(fname);
@@ -146,7 +138,7 @@ static int source(const char *fname){
 		dv("R: error in source: %d\n", ret);
 		return ret;
 	}else{
-		Rf_listAppend(GS->sourced, Rf_list1(Rf_mkChar(fname)));
+		exa_set_file_data(fname, (void *)1);
 		return 0;
 	}
 }
@@ -187,41 +179,12 @@ static SEXP make_call(struct ex_R_func *X, const char *func){
 
 	// all args are passed as real because R integers would be 32 bit anyway
 	// so no point in using them
-	for(int i=0;i<X->narg;i++)
+	for(unsigned i=0;i<X->proto.narg;i++)
 		Rf_listAppend(ret, Rf_lang1(Rf_allocVector(REALSXP, 1)));
 
 	UNPROTECT(1);
 
 	return ret;
-}
-
-static void copy_args(struct ex_R_func *X, pvalue *argv){
-	// first is the function name, then a linked list of 1-length vectors
-	// representing the args
-	ptype *argt = X->argt;
-
-	for(SEXP s=CDR(X->call); s != R_NilValue; s=CDR(s), argt++, argv++){
-		SEXP v = CAR(s);
-
-		switch(*argt){
-			case PT_REAL: *REAL(v) = argv->r; break;
-			case PT_BIT:  *REAL(v) = unpackenum(argv->b); break;
-			default:      UNREACHABLE();
-		}
-	}
-}
-
-static void copy_ret(struct ex_R_func *X, pvalue *ret, SEXP s){
-	assert(TYPEOF(s) == REALSXP && LENGTH(s) == X->nret);
-
-	double *r = REAL(s);
-	for(int i=0;i<X->nret;i++,r++,ret++){
-		switch(X->rett[i]){
-			case PT_REAL: ret->r = *r; break;
-			case PT_BIT:  ret->b = packenum((uint64_t) *r); break;
-			default:      UNREACHABLE();
-		}
-	}
 }
 
 static void add_call(SEXP call){
