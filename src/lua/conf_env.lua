@@ -252,8 +252,8 @@ local function make_check(cst, cost_in, cost_out, var)
 end
 
 local param = {
-	check = function(cst, cost_in, cost_out)
-		table.insert(top(1).checks, make_check(cst, cost_in, cost_out, top()))
+	check = function(cst, cost_in, cost_out, var)
+		table.insert(top(1).checks, make_check(cst, cost_in, cost_out, var or top()))
 	end
 }
 
