@@ -111,8 +111,13 @@ local function create_graph(cfg)
 	for _,m in ipairs(models) do
 		local fm = m.fhk_model
 
-		fm.k = m.k
-		fm.c = m.c
+		fm.k = m.k or 1
+		fm.c = m.c or 1
+
+		if not m.k or not m.c then
+			io.stderr:write(string.format("warn: No cost given for model %s - defaulting to 1\n",
+				m.name))
+		end
 
 		local checks = create_checks(m.checks)
 		C.fhk_alloc_checks(arena, fm, #m.checks, checks)
