@@ -39,7 +39,6 @@ obj "stratum"
 
 	-- XXX: these are currently aggregated manually from trees,
 	-- but they should be virtuals
-	var "BA"      dtype "f64"
 	var "N"       dtype "f64"
 	var "D_gM"    dtype "f64"
 	var "D_hM"    dtype "f64"
@@ -75,5 +74,5 @@ global "WASTE" dtype "b"
 global "PEAT"  dtype "b"
 
 -- temporary internal vars
-var "i_h"    dtype "f64"
-var "d_href" dtype "f64"
+comp "i_h"    dtype "f64"
+comp "d_href" dtype "f64"

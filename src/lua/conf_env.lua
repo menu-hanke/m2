@@ -301,7 +301,7 @@ local var = {
 	unit = setter("unit")
 }
 
-function root.var(name)
+function root.comp(name)
 	top()._vars[name] = push(var, {
 		name = name,
 		dtype = "f64"
