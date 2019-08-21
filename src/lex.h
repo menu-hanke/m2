@@ -66,8 +66,10 @@ typedef union pvalue {
 static_assert(sizeof(tvalue) == sizeof(uint64_t));
 static_assert(sizeof(pvalue) == sizeof(uint64_t));
 
-#define POSITION_RESOLUTION 31
-#define POSITION_ORDER      GRID_ORDER(POSITION_RESOLUTION)
+enum {
+	POSITION_RESOLUTION = 31,
+	POSITION_ORDER      = GRID_ORDER(POSITION_RESOLUTION)
+};
 
 typedef unsigned lexid;
 

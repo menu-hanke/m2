@@ -3,11 +3,6 @@ local vmath = require "vmath"
 local typing = require "typing"
 local C = ffi.C
 
-ffi.cdef [[
-	void *malloc(size_t size);
-	void free(void *ptr);
-]]
-
 -------------------------
 
 local objvec = {}

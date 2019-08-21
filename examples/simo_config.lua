@@ -1,5 +1,5 @@
-read "examples/simo_models.lua"
-read_coeff "examples/simo_coeff.json"
+read "examples/simo_parm.lua"
+read "simo-libs/simo_libs.lua"
 
 enum("species", {
 	pine                 = 1,
@@ -35,11 +35,14 @@ enum("soilclass", {
 obj "stratum"
 	var "trees"   dtype(objvec("tree"))
 	var "species" dtype "species"
+	var "SI_50"   dtype "f64"
+
+	-- XXX: these are currently aggregated manually from trees,
+	-- but they should be virtuals
+	var "BA"      dtype "f64"
 	var "N"       dtype "f64"
 	var "D_gM"    dtype "f64"
 	var "D_hM"    dtype "f64"
-	var "SI_50"   dtype "f64"
-	-- TODO: jne.
 
 obj "tree"
 	var "n"     dtype "f64"
@@ -61,3 +64,16 @@ obj "tree"
 global "year" dtype "f64"
 global "sc"   dtype "soilclass"
 global "ts"   dtype "f64"
+
+-- idiot
+global "time_step"         dtype "f64"
+global "random_number_0_1" dtype "f64"
+
+-- some indicators
+global "SCRUB" dtype "b"
+global "WASTE" dtype "b"
+global "PEAT"  dtype "b"
+
+-- temporary internal vars
+var "i_h"    dtype "f64"
+var "d_href" dtype "f64"

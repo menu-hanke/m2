@@ -1,5 +1,7 @@
 local ffi = require "ffi"
 local exec = require "exec"
+local arena = require "arena"
+local malloc = require "malloc"
 local C = ffi.C
 
 local function copy_ival_cst(check, a, b)
@@ -93,8 +95,7 @@ local function retind(returns, y)
 end
 
 local function create_graph(cfg)
-	local arena = C.arena_create(4096)
-
+	local arena = arena.create()
 	local models = collect(cfg.fhk_models)
 	local vars = collect(cfg.fhk_vars)
 	local G = ffi.gc(C.fhk_alloc_graph(arena, #vars, #models),
@@ -139,7 +140,6 @@ local function create_graph(cfg)
 		end
 	end
 
-	cfg.G = G
 	return G
 end
 
@@ -149,23 +149,101 @@ local function create_exf(cfg)
 	end
 end
 
-local function create_ugraph(G, cfg)
-	local u = ffi.gc(C.u_create(G), C.u_destroy)
+--------------------------------------------------------------------------------
 
-	for name,fv in pairs(cfg.fhk_vars) do
-		if fv.kind == "computed" then
-			C.u_add_comp(u, fv.fhk_var, name)
-		end
+local gmap = {}
+local gmap_mt = {__index=gmap}
+
+local function gen_objids(cfg)
+	local id = 1
+	for _,obj in pairs(cfg.objs) do
+		obj.fhk_mapping_id = id
+		id = id+1
 	end
+end
 
-	for name,obj in pairs(cfg.objs) do
-		local uobj = C.u_add_obj(u, obj.wobj, name)
-		obj.uobj = uobj
+local function create_obj_binds(cfg)
+	for _,obj in pairs(cfg.objs) do
+		obj.fhk_mapping_bind = ffi.new("w_objref")
+	end
+end
 
-		for vname,var in pairs(obj.vars) do
-			local fv = cfg.fhk_vars[vname]
+local function create_z_bind(cfg)
+	return ffi.new("gridpos[1]")
+end
+
+local function set_gv(gv, name, type)
+	gv.name = name
+	gv.type.support_type = type
+	gv.type.resolve_type = type
+	return gv
+end
+
+local function map_var(src)
+	local ret = set_gv(
+		ffi.new("struct gv_var"),
+		src.name,
+		C.GMAP_VAR
+	)
+
+	ret.objid = src.obj.fhk_mapping_id
+	ret.wbind = src.obj.fhk_mapping_bind
+	ret.varid = src.varid
+
+	return ret
+end
+
+local function map_env(src, zbind)
+	local ret = set_gv(
+		ffi.new("struct gv_env"),
+		src.name,
+		C.GMAP_ENV
+	)
+
+	ret.wenv = src.wenv
+	ret.zbind = zbind
+
+	return ret
+end
+
+local function map_global(src)
+	local ret = set_gv(
+		ffi.new("struct gv_global"),
+		src.name,
+		C.GMAP_GLOBAL
+	)
+
+	ret.wglob = src.wglob
+
+	return ret
+end
+
+local function map_computed(name)
+	return set_gv(
+		ffi.new("struct gv_computed"),
+		name,
+		C.GMAP_COMPUTED
+	)
+end
+
+local function bind_mapping(G, fv, mapping)
+	fv.fhk_mapping = mapping
+	C.gmap_bind(G, fv.fhk_var.idx, ffi.cast("struct gmap_any *", mapping))
+end
+
+local function bind_model(G, fm)
+	fm.fhk_mapping = ffi.new("struct gmap_model")
+	fm.fhk_mapping.name = fm.name
+	fm.fhk_mapping.f = fm.ex_func
+	C.gmap_bind_model(G, fm.fhk_model.idx, fm.fhk_mapping)
+end
+
+local function map_all(G, cfg, zbind)
+	for _,obj in pairs(cfg.objs) do
+		for name,var in pairs(obj.vars) do
+			local fv = cfg.fhk_vars[name]
 			if fv then
-				C.u_add_var(u, uobj, var.varid, fv.fhk_var, vname)
+				bind_mapping(G, fv, map_var(var))
 			end
 		end
 	end
@@ -173,55 +251,80 @@ local function create_ugraph(G, cfg)
 	for name,env in pairs(cfg.envs) do
 		local fv = cfg.fhk_vars[name]
 		if fv then
-			env.uenv = C.u_add_env(u, env.wenv, fv.fhk_var, name)
+			bind_mapping(G, fv, map_env(env))
 		end
 	end
 
-	for name,g in pairs(cfg.globals) do
+	for name,glob in pairs(cfg.globals) do
 		local fv = cfg.fhk_vars[name]
 		if fv then
-			fv.uglob = C.u_add_global(u, g.wglob, fv.fhk_var, name)
+			bind_mapping(G, fv, map_global(glob))
 		end
 	end
 
-	for _,fm in pairs(cfg.fhk_models) do
-		C.u_add_model(u, fm.ex_func, fm.fhk_model, fm.name)
+	for name,fv in pairs(cfg.fhk_vars) do
+		if fv.kind == "computed" then
+			bind_mapping(G, fv, map_computed(name))
+		end
 	end
-
-	cfg.ugraph = u
-	return u
 end
 
--------------------------
+local function create_mapping(G, cfg)
+	C.gmap_hook(G)
+	gen_objids(cfg)
+	create_obj_binds(cfg)
+	-- TODO: could create zbind here only if there are any envs
+	local zbind = create_z_bind()
+	map_all(G, cfg, zbind)
+	for _,fm in pairs(cfg.fhk_models) do
+		bind_model(G, fm)
+	end
+
+	return setmetatable({G=G, zbind=zbind}, gmap_mt)
+end
 
 local function newbitmap(n)
-	local bm = ffi.gc(C.bm_alloc(n), C.bm_free)
+	local bm = C.bm_alloc(n)
 	C.bm_zero(bm, n)
 	return bm
 end
 
-local function objv_reset_bitmaps(G, ugraph, obj)
-	local reset_v, reset_m = newbitmap(G.n_var), newbitmap(G.n_mod)
-	C.u_mark_obj(reset_v, obj.uobj)
-	local order = obj.wgrid and obj.wgrid.order or 0
-	C.u_mark_envs_z(reset_v, ugraph, order)
-	C.u_reset_mark(ugraph, reset_v, reset_m)
-	return reset_v, reset_m
+local function objchange(objid)
+	local ret = ffi.new("gmap_change")
+	ret.type = C.GMAP_NEW_OBJECT
+	ret.objid = objid
+	return ret
 end
 
-local function objv_init_bitmap(G, ugraph, obj, vars)
+local function zchange(order)
+	local ret = ffi.new("gmap_change")
+	ret.type = C.GMAP_NEW_Z
+	ret.order = order
+	return ret
+end
+
+local function set_init_vars(vmask, cfg, vars)
+	local solve = ffi.new("fhk_vbmap")
+	solve.solve = 1
+	solve.stable = 1
+
+	for _,v in ipairs(vars) do
+		local fv = cfg.fhk_vars[v]
+		vmask[fv.fhk_var.idx] = solve.u8
+	end
+end
+
+local function create_obj_init(G, cfg, obj)
 	local init_v = newbitmap(G.n_var)
-
-	C.u_init_given_obj(init_v, obj.uobj)
-	C.u_init_given_globals(init_v, ugraph)
-	C.u_init_given_envs(init_v, ugraph)
-
-	for _,fv in ipairs(vars) do
-		C.u_init_solve(init_v, fv.fhk_var)
+	C.gmap_mark_reachable(G, init_v, objchange(obj.fhk_mapping_id))
+	if obj.position_var then
+		C.gmap_mark_reachable(G, init_v, zchange(C.POSITION_ORDER));
 	end
 
-	-- Note: unstable vars aren't implemented yet at all (outside fhk) so this bit must
-	-- be always set
+	local given = ffi.new("fhk_vbmap")
+	given.given = 1
+	C.bm_and64(init_v, G.n_var, C.bmask8(given.u8))
+
 	local stable = ffi.new("fhk_vbmap")
 	stable.stable = 1
 	C.bm_or64(init_v, G.n_var, C.bmask8(stable.u8))
@@ -229,64 +332,76 @@ local function objv_init_bitmap(G, ugraph, obj, vars)
 	return init_v
 end
 
-local function vars_xs(vars)
-	local ret = ffi.new("struct fhk_var *[?]", #vars)
-	for i,fv in ipairs(vars) do
-		ret[i-1] = fv.fhk_var
+local function create_obj_reset(G, obj)
+	local reset_v, reset_m = newbitmap(G.n_var), newbitmap(G.n_mod)
+	C.gmap_mark_supported(G, reset_v, objchange(obj.fhk_mapping_id))
+	if obj.z_order then
+		C.gmap_mark_supported(G, reset_v, zchange(obj.z_order))
 	end
-	return ret
+	C.gmap_make_reset_masks(G, reset_v, reset_m)
+	return reset_v, reset_m
 end
 
-local function vars_types(vars)
-	local ret = ffi.new("type[?]", #vars)
-	for i,fv in ipairs(vars) do
-		ret[i-1] = fv.src.type
-	end
-	return ret
-end
-
-local function create_obj_solver(G, ugraph, obj, vars)
-	local uobj = obj.uobj
-	local init_v = objv_init_bitmap(G, ugraph, obj, vars)
-	local reset_v, reset_m = objv_reset_bitmaps(G, ugraph, obj)
+function gmap:create_vec_solver(cfg, obj, vars)
 	local nv = #vars
-	local xs = vars_xs(vars)
-	local res = ffi.new("void *[?]", nv)
-	local types = vars_types(vars)
+	local init_v = create_obj_init(self.G, cfg, obj)
+	set_init_vars(init_v, cfg, vars)
+	local reset_v, reset_m = create_obj_reset(self.G, obj)
+	local xs = malloc.new("struct fhk_var *", nv)
+	local types = malloc.new("type", nv)
 
-	return function(v, dest)
-		C.u_graph_init(ugraph, init_v)
-		for i=0, nv-1 do
-			res[i] = dest[i+1]
+	local arg = ffi.gc(ffi.new("struct gs_vec_args"), function()
+		C.free(init_v)
+		C.free(reset_v)
+		C.free(reset_m)
+		C.free(xs)
+		C.free(types)
+	end)
+
+	for i,v in ipairs(vars) do
+		xs[i-1] = cfg.fhk_vars[v].fhk_var
+		types[i-1] = obj.vars[v].type
+	end
+
+	arg.G = self.G
+	arg.wobj = obj.wobj
+	arg.wbind = obj.fhk_mapping_bind
+	arg.zbind = self.zbind
+	arg.reset_v = reset_v
+	arg.reset_m = reset_m
+	arg.nv = nv
+	arg.xs = xs
+	arg.types = types
+
+	local res = ffi.new("void *[?]", nv)
+
+	return function(vec, d)
+		for i,v in ipairs(d) do
+			res[i-1] = v.data
 		end
-		C.u_solve_vec(ugraph, uobj, reset_v, reset_m, v, nv, xs, res, types)
-		return res
+
+		C.gmap_init(arg.G, init_v)
+		C.gmap_solve_vec(vec, res, arg)
 	end
 end
 
--------------------------
+--------------------------------------------------------------------------------
 
-local function inject(env, cfg, G, ugraph)
+local function inject(env, mapping, cfg)
 	env.fhk = {
 
-		obj_solver = function(obj, vars)
-			local xs = {}
-			for i,name in ipairs(vars) do
-				xs[i] = cfg.fhk_vars[name]
-				assert(xs[i])
-			end
-
-			return create_obj_solver(G, ugraph, obj, xs)
+		vec_solver = function(obj, vars)
+			return mapping:create_vec_solver(cfg, obj, vars)
 		end
 
 	}
 
-	env._obj_meta.__index.vsolver = env.fhk.obj_solver
+	env._obj_meta.__index.vec_solver = env.fhk.vec_solver
 end
 
 return {
-	create_graph  = create_graph,
-	create_exf    = create_exf,
-	create_ugraph = create_ugraph,
-	inject        = inject
+	create_graph   = create_graph,
+	create_exf     = create_exf,
+	create_mapping = create_mapping,
+	inject         = inject
 }

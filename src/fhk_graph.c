@@ -26,6 +26,9 @@ void fhk_inv_supp(struct fhk_graph *G, bm8 *vmask, bm8 *mmask){
 
 	for(size_t i=0;i<G->n_var;i++)
 		mark_isupp_v(G, vmask, mmask, &G->vars[i]);
+
+	for(size_t i=0;i<G->n_mod;i++)
+		mark_isupp_m(G, vmask, mmask, &G->models[i]);
 }
 
 static void mark_supp_v(bm8 *vmask, bm8 *mmask, struct fhk_var *y){

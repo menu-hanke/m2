@@ -4,5 +4,5 @@
 #include "fhk.h"
 #include "exec.h"
 #include "arena.h"
-#include "update.h"
+#include "gmap.h"
 #include "vmath.h"

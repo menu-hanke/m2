@@ -86,6 +86,10 @@ typedef union pvalue {
 } pvalue;
 
 
+enum {
+ POSITION_RESOLUTION = 31,
+ POSITION_ORDER = ((POSITION_RESOLUTION)<<1)
+};
 typedef unsigned lexid;
 struct var_def {
  lexid id;
@@ -341,39 +345,84 @@ ex_func *ex_R_create(const char *fname, const char *func, int narg, ptype *argt,
 ex_func *ex_simoC_create(const char *libname, const char *func, int narg, ptype *argt, int nret,
   ptype *rett);
        
-typedef struct ugraph ugraph;
-typedef struct u_obj u_obj;
-typedef struct u_var u_var;
-typedef struct u_env u_env;
-typedef struct u_comp u_comp;
-typedef struct u_global u_global;
-typedef struct u_model u_model;
-typedef void (*u_solver_cb)(void *udata, struct fhk_graph *G, size_t nv, struct fhk_var **xs);
-ugraph *u_create(struct fhk_graph *G);
-void u_destroy(ugraph *u);
-u_obj *u_add_obj(ugraph *u, w_obj *obj, const char *name);
-u_var *u_add_var(ugraph *u, u_obj *obj, lexid varid, struct fhk_var *x, const char *name);
-u_env *u_add_env(ugraph *u, w_env *env, struct fhk_var *x, const char *name);
-u_global *u_add_global(ugraph *u, w_global *glob, struct fhk_var *x, const char *name);
-u_comp *u_add_comp(ugraph *u, struct fhk_var *x, const char *name);
-u_model *u_add_model(ugraph *u, ex_func *f, struct fhk_model *m, const char *name);
-void u_init_given_obj(bm8 *init_v, u_obj *obj);
-void u_init_given_envs(bm8 *init_v, ugraph *u);
-void u_init_given_globals(bm8 *init_v, ugraph *u);
-void u_init_solve(bm8 *init_v, struct fhk_var *y);
-void u_graph_init(ugraph *u, bm8 *init_v);
-void u_mark_obj(bm8 *vmask, u_obj *obj);
-void u_mark_envs_z(bm8 *vmask, ugraph *u, size_t order);
-void u_reset_mark(ugraph *u, bm8 *vmask, bm8 *mmask);
-void u_graph_reset(ugraph *u, bm8 *reset_v, bm8 *reset_m);
-void u_bind_obj(u_obj *obj, w_objref *ref);
-void u_unbind_obj(u_obj *obj);
-void u_bind_pos(ugraph *u, gridpos pos);
-void u_unbind_pos(ugraph *u);
-void u_solve_vec(ugraph *u, u_obj *obj, bm8 *reset_v, bm8 *reset_m, w_objvec *v,
-  size_t nv, struct fhk_var **xs, void **res, type *types);
-void u_update_vec(ugraph *u, u_obj *obj, world *w, bm8 *reset_v, bm8 *reset_m, w_objvec *v,
-  size_t nv, struct fhk_var **xs, lexid *vars);
+enum {
+ GMAP_VAR = 0,
+ GMAP_ENV,
+ GMAP_GLOBAL,
+ GMAP_VIRTUAL,
+ GMAP_COMPUTED
+};
+enum {
+ GMAP_NEW_OBJECT = 0,
+ GMAP_NEW_Z
+};
+typedef struct gmap_change {
+ uint8_t type;
+ union {
+  uint8_t order;
+  uint32_t objid;
+ };
+} gmap_change;
+typedef struct gmap_type {
+ unsigned support_type : 8;
+ unsigned resolve_type : 8;
+} gmap_type;
+struct gmap_any {
+ gmap_type type; const char *name;
+};
+struct gv_var {
+ gmap_type type; const char *name;
+ unsigned objid;
+ lexid varid;
+ w_objref *wbind;
+};
+struct gv_env {
+ gmap_type type; const char *name;
+ w_env *wenv;
+ gridpos *zbind;
+};
+struct gv_global {
+ gmap_type type; const char *name;
+ w_global *wglob;
+};
+struct gv_computed {
+ gmap_type type; const char *name;
+};
+struct gv_virtual {
+ union {
+  struct { gmap_type type; const char *name; };
+  struct gv_var var;
+  struct gv_env env;
+ };
+ pvalue (*resolve)(void *udata);
+ void *udata;
+};
+struct gmap_model {
+ const char *name;
+ ex_func *f;
+};
+void gmap_hook(struct fhk_graph *G);
+void gmap_bind(struct fhk_graph *G, unsigned idx, struct gmap_any *g);
+void gmap_unbind(struct fhk_graph *G, unsigned idx);
+void gmap_bind_model(struct fhk_graph *G, unsigned idx, struct gmap_model *m);
+void gmap_unbind_model(struct fhk_graph *G, unsigned idx);
+void gmap_mark_reachable(struct fhk_graph *G, bm8 *vmask, gmap_change change);
+void gmap_mark_supported(struct fhk_graph *G, bm8 *vmask, gmap_change change);
+void gmap_make_reset_masks(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
+void gmap_init(struct fhk_graph *G, bm8 *init_v);
+void gmap_reset(struct fhk_graph *G, bm8 *reset_v, bm8 *reset_m);
+struct gs_vec_args {
+ struct fhk_graph *G;
+ w_obj *wobj;
+ w_objref *wbind;
+ gridpos *zbind;
+ bm8 *reset_v;
+ bm8 *reset_m;
+ size_t nv;
+ struct fhk_var **xs;
+ type *types;
+};
+void gmap_solve_vec(w_objvec *vec, void **res, struct gs_vec_args *arg);
        
 typedef float vf32 __attribute__((aligned(16)));
 typedef double vf64 __attribute__((aligned(16)));

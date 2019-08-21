@@ -1,4 +1,5 @@
 require "m2_cdef"
+require "arena"
 require "glob_util"
 
 local function opt(name)
