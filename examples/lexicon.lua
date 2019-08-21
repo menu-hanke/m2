@@ -9,12 +9,8 @@ obj "test_obj"
 	
 	--var "c" dtype "b16"
 
-env "x"
-	resolution(0)
-	dtype "f64"
-
 global "c" dtype "b16"
-
+var "x"  dtype "f64"
 var "z"  dtype "f32"
 var "x'" dtype "f64"
 var "w"  dtype "f64"

@@ -39,14 +39,15 @@ void gmap_hook(struct fhk_graph *G){
 }
 
 void gmap_bind(struct fhk_graph *G, unsigned idx, struct gmap_any *g){
-	G->vars[idx].udata = g;
-
-	dv("map %s : %s (%s) -> fhk var[%u]\n",
+	dv("%smap %s : %s (%s) -> fhk var[%u]\n",
+			G->vars[idx].udata ? "(!) re" : "",
 			g->name,
 			map_type_name(g->type.support_type),
 			map_type_name(g->type.resolve_type),
 			idx
 	);
+
+	G->vars[idx].udata = g;
 }
 
 void gmap_unbind(struct fhk_graph *G, unsigned idx){
@@ -54,9 +55,14 @@ void gmap_unbind(struct fhk_graph *G, unsigned idx){
 }
 
 void gmap_bind_model(struct fhk_graph *G, unsigned idx, struct gmap_model *m){
-	G->models[idx].udata = m;
+	dv("%smap %s (%p) -> fhk model[%u]\n",
+			G->models[idx].udata ? "(!) re" : "",
+			m->name,
+			m->f,
+			idx
+	);
 
-	dv("map %s (%p) -> fhk model[%u]\n", m->name, m->f, idx);
+	G->models[idx].udata = m;
 }
 
 void gmap_unbind_model(struct fhk_graph *G, unsigned idx){
@@ -222,6 +228,7 @@ static int G_resolve_var(struct fhk_graph *G, void *udata, pvalue *value){
 		case GMAP_ENV:     *value = env_resolve(udata); break;
 		case GMAP_GLOBAL:  *value = global_resolve(udata); break;
 		case GMAP_VIRTUAL: *value = virtual_resolve(udata); break;
+
 		default: UNREACHABLE();
 	}
 

@@ -80,5 +80,6 @@ return {
 	pvalue2lua    = pvalue2lua,
 	out2sim       = out2sim,
 	sim2out       = sim2out,
-	builtin_types = builtin_types
+	builtin_types = builtin_types,
+	pvalue_map    = pvalue_map
 }

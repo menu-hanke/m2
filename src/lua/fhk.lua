@@ -1,5 +1,6 @@
 local ffi = require "ffi"
 local exec = require "exec"
+local typing = require "typing"
 local arena = require "arena"
 local malloc = require "malloc"
 local C = ffi.C
@@ -226,6 +227,30 @@ local function map_computed(name)
 	)
 end
 
+local function map_virtual(name, kind, closure, udata, arg)
+	local ret = ffi.new("struct gv_virtual")
+
+	ret.name = name
+	ret.type.resolve_type = C.GMAP_VIRTUAL
+
+	if kind == "var" then
+		ret.type.support_type = C.GMAP_VAR
+		ret.var.objid = arg.fhk_mapping_id
+	elseif kind == "env" then
+		ret.type.support_type = C.GMAP_ENV
+		ret.env.wenv = arg.wenv
+	elseif kind == "global" then
+		ret.type.support_type = C.GMAP_GLOBAL
+	else
+		assert(false)
+	end
+
+	ret.resolve = closure
+	ret.udata = udata
+
+	return ret
+end
+
 local function bind_mapping(G, fv, mapping)
 	fv.fhk_mapping = mapping
 	C.gmap_bind(G, fv.fhk_var.idx, ffi.cast("struct gmap_any *", mapping))
@@ -387,16 +412,52 @@ end
 
 --------------------------------------------------------------------------------
 
+local function wrap_closure(type, closure)
+	-- Note: this is hacky and very slow.
+	-- Don't use lua virtuals for other than testing,
+	-- use C callbacks for performance
+
+	local ptype = C.tpromote(type)
+	local pvfield = typing.pvalue_map[tonumber(ptype)]
+	return ffi.cast("uint64_t (*)(void *)", function(udata)
+		local r = ffi.new("pvalue")
+		r[pvfield] = closure(udata)
+		return r.b
+	end)
+end
+
 local function inject(env, mapping, cfg)
+
 	env.fhk = {
 
 		vec_solver = function(obj, vars)
 			return mapping:create_vec_solver(cfg, obj, vars)
+		end,
+
+		virtual = function(arg, kind, name, closure, udata)
+			local fv = cfg.fhk_vars[name]
+			if type(closure) == "function" then
+				closure = wrap_closure(fv.src.type, closure)
+			end
+			local virt = map_virtual(name, kind, closure, udata, arg)
+			bind_mapping(mapping.G, fv, virt)
+		end,
+
+		gvirtual = function(...)
+			return env.fhk.virtual(nil, "global", ...)
 		end
 
 	}
 
 	env._obj_meta.__index.vec_solver = env.fhk.vec_solver
+
+	env._obj_meta.__index.virtual = function(self, ...)
+		return env.fhk.virtual(self, "var", ...)
+	end
+
+	env._env_meta.__index.virtual = function(self, ...)
+		return env.fhk.virtual(self, "env", ...)
+	end
 end
 
 return {

@@ -293,13 +293,6 @@ function root.model(name)
 end
 
 --------------------
--- virtuals
---------------------
-
-function root.virtual(name)
-end
-
---------------------
 -- vars
 --------------------
 
@@ -338,7 +331,6 @@ local objs = {}
 local envs = {}
 local globals = {}
 local fhk_models = {}
-local fhk_virtuals = {}
 local vars = {}
 
 return env, push(root, {
@@ -347,13 +339,11 @@ return env, push(root, {
 	envs = envs,
 	globals = globals,
 	fhk_models = fhk_models,
-	fhk_virtuals = fhk_virtuals,
 	vars = vars,
 	_types = nodup(types, "Redefinition of type '%s'"),
 	_objs = nodup(objs, "Redefinition of object '%s'"),
 	_envs = nodup(envs, "Redefinition of env '%s'"),
 	_globals = nodup(globals, "Redefinition of global '%s'"),
 	_fhk_models = nodup(fhk_models, "Redefinition of model '%s'"),
-	_fhk_virtuals = nodup(fhk_virtuals, "Redefinition of virtual '%s'"),
 	_vars = nodup(vars, "Redefinition of variable '%s'")
 })
