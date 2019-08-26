@@ -7,6 +7,15 @@
 #include <string.h>
 #include <assert.h>
 
+#define COPY_ARENA(a, ndest, nsrc, dest, src)\
+	do {\
+		(ndest) = (nsrc);\
+		if((nsrc)){\
+			(dest) = arena_malloc(a, (nsrc) * sizeof(*(src)));\
+			memcpy((dest), (src), (nsrc) * sizeof(*(src)));\
+		}\
+	} while(0)
+
 static void init_vars(struct fhk_var *x, size_t n);
 static void init_models(struct fhk_model *m, size_t n);
 
@@ -26,42 +35,71 @@ struct fhk_graph *fhk_alloc_graph(arena *arena, size_t n_var, size_t n_mod){
 	return G;
 }
 
-void fhk_alloc_checks(arena *arena, struct fhk_model *m, size_t n_check, struct fhk_check *checks){
-	m->n_check = n_check;
-	if(!n_check)
-		return;
-
-	m->checks = arena_malloc(arena, n_check * sizeof(*checks));
-	memcpy(m->checks, checks, n_check * sizeof(*checks));
+void fhk_copy_checks(arena *arena, struct fhk_model *m, size_t n_check, struct fhk_check *checks){
+	COPY_ARENA(arena, m->n_check, n_check, m->checks, checks);
 }
 
-void fhk_alloc_params(arena *arena, struct fhk_model *m, size_t n_param, struct fhk_var **params){
-	m->n_param = n_param;
-	if(!n_param)
-		return;
-
-	m->params = arena_malloc(arena, n_param * sizeof(*params));
-	memcpy(m->params, params, n_param * sizeof(*params));
+void fhk_copy_params(arena *arena, struct fhk_model *m, size_t n_param, struct fhk_var **params){
+	COPY_ARENA(arena, m->n_param, n_param, m->params, params);
 }
 
-void fhk_alloc_returns(arena *arena, struct fhk_model *m, size_t n_ret){
-	assert(n_ret > 0);
-	m->returns = arena_malloc(arena, n_ret * sizeof(*m->returns));
+void fhk_copy_returns(arena *arena, struct fhk_model *m, size_t n_ret, struct fhk_var **returns){
+	COPY_ARENA(arena, m->n_return, n_ret, m->returns, returns);
+
+	if(n_ret)
+		m->rvals = arena_malloc(arena, n_ret * sizeof(*m->rvals));
 }
 
-void fhk_alloc_models(arena *arena, struct fhk_var *x, size_t n_mod, struct fhk_model **models){
-	x->n_mod = n_mod;
-	if(!n_mod)
-		return;
+void fhk_compute_links(arena *arena, struct fhk_graph *G){
+	// (1) init for counting
+	for(unsigned i=0;i<G->n_var;i++){
+		struct fhk_var *x = &G->vars[i];
 
-	x->models = arena_malloc(arena, n_mod * sizeof(*models));
-	x->mret = arena_malloc(arena, n_mod * sizeof(*x->mret));
-	memcpy(x->models, models, n_mod * sizeof(*models));
-}
+		x->n_mod = 0;
+		x->n_fwd = 0;
+	}
 
-void fhk_link_ret(struct fhk_model *m, struct fhk_var *x, size_t mind, size_t xind){
-	assert(xind < x->n_mod);
-	x->mret[xind] = &m->returns[mind];
+	// (2) count links for allocating
+	for(unsigned i=0;i<G->n_mod;i++){
+		struct fhk_model *m = &G->models[i];
+
+		for(unsigned j=0;j<m->n_return;j++)
+			m->returns[j]->n_mod++;
+
+		for(unsigned j=0;j<m->n_param;j++)
+			m->params[j]->n_fwd++;
+	}
+
+	// (3) allocate links
+	for(unsigned i=0;i<G->n_var;i++){
+		struct fhk_var *x = &G->vars[i];
+
+		if(x->n_mod){
+			x->models = arena_malloc(arena, x->n_mod * sizeof(*x->models));
+			x->n_mod = 0;
+		}
+
+		if(x->n_fwd){
+			x->fwd_models = arena_malloc(arena, x->n_fwd * sizeof(*x->fwd_models));
+			x->n_fwd = 0;
+		}
+	}
+
+	// (4) record links
+	for(unsigned i=0;i<G->n_mod;i++){
+		struct fhk_model *m = &G->models[i];
+
+		for(unsigned j=0;j<m->n_return;j++){
+			struct fhk_var *x = m->returns[j];
+			x->models[x->n_mod] = m;
+			x->n_mod++;
+		}
+
+		for(unsigned j=0;j<m->n_param;j++){
+			struct fhk_var *x = m->params[j];
+			x->fwd_models[x->n_fwd++] = m;
+		}
+	}
 }
 
 struct fhk_var *fhk_get_var(struct fhk_graph *G, unsigned idx){
@@ -72,10 +110,6 @@ struct fhk_var *fhk_get_var(struct fhk_graph *G, unsigned idx){
 struct fhk_model *fhk_get_model(struct fhk_graph *G, unsigned idx){
 	assert(idx < G->n_mod);
 	return &G->models[idx];
-}
-
-struct fhk_model *fhk_get_select(struct fhk_var *x){
-	return x->models[x->select_model];
 }
 
 static void init_vars(struct fhk_var *x, size_t n){

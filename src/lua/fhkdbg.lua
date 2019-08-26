@@ -65,14 +65,19 @@ local function hook_udata(data)
 	end
 end
 
-local function init_graph(G, data)
-end
-
 local function get_vars(data, names)
 	local fv = data.fhk_vars
 	local ret = {}
 	for _,n in ipairs(names) do
 		table.insert(ret, fv[n])
+	end
+	return ret
+end
+
+local function get_cvars(vars)
+	local ret = ffi.new("struct fhk_var *[?]", #vars)
+	for i,v in ipairs(vars) do
+		ret[i-1] = v.fhk_var
 	end
 	return ret
 end
@@ -122,7 +127,7 @@ local function reportv(visited, ret, G, fv, reason)
 	end
 
 	if r.solved and (not r.given) then
-		local fm = ffi.C.fhk_get_select(fv)
+		local fm = fv.model
 		local fminfo = modelinfo(fm.udata)
 		r.model = ffi.string(fminfo.desc)
 		r.cost = fv.min_cost
@@ -174,7 +179,7 @@ local function print_report(rep)
 	))
 
 	for _,r in ipairs(rep) do
-		print(string.format("%-"..desc_len.."s = %-20s %-"..model_len.."s %-16f %s %s (%s)",
+		print(string.format("%-"..desc_len.."s = %-20s %-"..model_len.."s %-16s %s %s (%s)",
 			r.desc,
 			r.value,
 			r.model or "",
@@ -219,18 +224,17 @@ local function main(args)
 	local vars, values = readcsv(args.input)
 	vars = get_vars(data, vars)
 	local solve = get_vars(data, args.vars)
+	local csolve = get_cvars(solve)
 
 	local reset_v = ffi.new("fhk_vbmap")
 	local reset_m = ffi.new("fhk_mbmap")
 	ffi.C.fhk_reset(G, reset_v, reset_m)
 
 	reset_v.given = 1
-	reset_v.solve = 1
 	reset_v.stable = 1
 
 	set_flag(G, "stable")
 	set_flag(G, "given", vars)
-	set_flag(G, "solve", solve)
 
 	for _,d in ipairs(values) do
 		ffi.C.fhk_reset(G, reset_v, reset_m)
@@ -239,10 +243,8 @@ local function main(args)
 		for i,v in ipairs(vars) do
 			v.fhk_var.value = typing.lua2pvalue(typing.out2sim(d[i], v.src.type), v.src.type)
 		end
-
-		for _,v in ipairs(solve) do
-			ffi.C.fhk_solve(G, v.fhk_var)
-		end
+		
+		ffi.C.fhk_solve(G, #solve, csolve)
 
 		print("--------------------")
 		local rep = report(G, solve)

@@ -268,35 +268,39 @@ struct fhk_check {
  double costs[2];
 };
 struct fhk_model {
- unsigned idx;
- double k, c;
- size_t n_check;
+ unsigned idx : 16;
+ unsigned n_check : 8;
+ unsigned n_param : 8;
+ unsigned n_return : 8;
+ unsigned may_fail : 1;
  struct fhk_check *checks;
- size_t n_param;
  struct fhk_var **params;
- pvalue *returns;
+ struct fhk_var **returns;
+ pvalue *rvals;
+ double k, c;
  double min_cost, max_cost;
  void *udata;
 };
 struct fhk_var {
- unsigned idx;
- size_t n_mod;
+ unsigned idx : 16;
+ unsigned n_fwd : 16;
+ unsigned n_mod : 8;
+ unsigned hptr : 8;
  struct fhk_model **models;
- pvalue **mret;
+ struct fhk_model **fwd_models;
+ struct fhk_model *model;
  pvalue value;
- unsigned select_model;
  double min_cost, max_cost;
  void *udata;
 };
-typedef union fhk_mbmap { uint8_t u8; struct { unsigned blacklisted : 1; unsigned has_bound : 1; unsigned chain_selected : 1; unsigned has_return : 1; unsigned may_fail : 1; } __attribute__((packed));  } fhk_mbmap;
-typedef union fhk_vbmap { uint8_t u8; struct { unsigned given : 1; unsigned solve : 1; unsigned solving : 1; unsigned chain_selected : 1; unsigned has_value : 1; unsigned has_bound : 1; unsigned stable : 1; } __attribute__((packed));  } fhk_vbmap;
+typedef union fhk_mbmap { uint8_t u8; struct { unsigned blacklisted : 1; unsigned has_bound : 1; unsigned chain_selected : 1; unsigned has_return : 1; unsigned mark : 1; } __attribute__((packed));  } fhk_mbmap;
+typedef union fhk_vbmap { uint8_t u8; struct { unsigned given : 1; unsigned mark : 1; unsigned chain_selected : 1; unsigned has_value : 1; unsigned has_bound : 1; unsigned stable : 1; unsigned target : 1; } __attribute__((packed));  } fhk_vbmap;
 enum {
  FHK_NOT_RESOLVED = -1,
  FHK_OK = 0,
  FHK_RESOLVE_FAILED = 1,
  FHK_MODEL_FAILED = 2,
- FHK_CYCLE = 3,
- FHK_REQUIRED_UNSOLVABLE = 4
+ FHK_SOLVER_FAILED = 3
 };
 struct fhk_einfo {
  int err;
@@ -320,22 +324,22 @@ struct fhk_graph {
  size_t n_mod;
  struct fhk_model *models;
  fhk_mbmap *m_bitmaps;
+ unsigned dirty;
  struct fhk_einfo last_error;
  void *udata;
 };
 void fhk_reset(struct fhk_graph *G, fhk_vbmap vmask, fhk_mbmap mmask);
+void fhk_reset_mask(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
 void fhk_supp(bm8 *vmask, bm8 *mmask, struct fhk_var *y);
 void fhk_inv_supp(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
-int fhk_solve(struct fhk_graph *G, struct fhk_var *y);
+int fhk_solve(struct fhk_graph *G, size_t nv, struct fhk_var **ys);
 struct fhk_graph *fhk_alloc_graph(arena *arena, size_t n_var, size_t n_mod);
-void fhk_alloc_checks(arena *arena, struct fhk_model *m, size_t n_check, struct fhk_check *checks);
-void fhk_alloc_params(arena *arena, struct fhk_model *m, size_t n_param, struct fhk_var **params);
-void fhk_alloc_returns(arena *arena, struct fhk_model *m, size_t n_ret);
-void fhk_alloc_models(arena *arena, struct fhk_var *x, size_t n_mod, struct fhk_model **models);
-void fhk_link_ret(struct fhk_model *m, struct fhk_var *x, size_t mind, size_t xind);
+void fhk_copy_checks(arena *arena, struct fhk_model *m, size_t n_check, struct fhk_check *checks);
+void fhk_copy_params(arena *arena, struct fhk_model *m, size_t n_param, struct fhk_var **params);
+void fhk_copy_returns(arena *arena, struct fhk_model *m, size_t n_ret, struct fhk_var **returns);
+void fhk_compute_links(arena *arena, struct fhk_graph *G);
 struct fhk_var *fhk_get_var(struct fhk_graph *G, unsigned idx);
 struct fhk_model *fhk_get_model(struct fhk_graph *G, unsigned idx);
-struct fhk_model *fhk_get_select(struct fhk_var *x);
        
 typedef struct ex_func ex_func;
 int ex_exec(ex_func *f, pvalue *ret, pvalue *argv);

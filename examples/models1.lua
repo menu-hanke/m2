@@ -56,3 +56,31 @@ model "Mc_2"
 
 	returns "x"
 	impl "R::examples/models1.r::Mc_2"
+
+-- cyclic models for dijkstra
+
+model "cy_a2b"
+	param "a" -- check(ival(-inf, 0))
+	returns "b"
+	impl "R::examples/models1.r::cy_a2b"
+
+model "cy_b2a"
+	param "b"
+	returns "a"
+	impl "R::examples/models1.r::cy_b2a"
+
+model "cy_a0"
+	param "a0"
+	returns "a"
+	impl "R::examples/models1.r::cy_a0"
+
+model "cy_b0"
+	param "b0"
+	returns "b"
+	impl "R::examples/models1.r::cy_b0"
+
+model "cy_d"
+	param "a"
+	param "b"
+	returns "d"
+	impl "R::examples/models1.r::cy_d"

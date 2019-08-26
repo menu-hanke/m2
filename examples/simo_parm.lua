@@ -1,7 +1,7 @@
 -- These are parameter tables in simo but they're implemented as R "models" here
 -- for testing
 
-var "t_href" dtype "f64"
+comp "t_href" dtype "f64"
 
 model "age_increment_test"
 	param "species"

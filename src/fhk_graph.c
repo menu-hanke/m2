@@ -7,8 +7,15 @@ static int mark_isupp_v(struct fhk_graph *G, bm8 *vmask, bm8 *mmask, struct fhk_
 static int mark_isupp_m(struct fhk_graph *G, bm8 *vmask, bm8 *mmask, struct fhk_model *m);
 
 void fhk_reset(struct fhk_graph *G, fhk_vbmap vmask, fhk_mbmap mmask){
+	G->dirty = 0;
 	bm_and8((bm8 *) G->v_bitmaps, G->n_var, vmask.u8);
 	bm_and8((bm8 *) G->m_bitmaps, G->n_mod, mmask.u8);
+}
+
+void fhk_reset_mask(struct fhk_graph *G, bm8 *vmask, bm8 *mmask){
+	G->dirty = 0;
+	bm_and((bm8 *) G->v_bitmaps, vmask, G->n_var);
+	bm_and((bm8 *) G->m_bitmaps, mmask, G->n_mod);
 }
 
 // Compute support of y, ie. all variables/models that can be reached from y
@@ -20,7 +27,7 @@ void fhk_supp(bm8 *vmask, bm8 *mmask, struct fhk_var *y){
 // Compute inverse support of vmask, ie. mark all variables/models that vmask can be reached from
 // (= can be changed by vmask)
 void fhk_inv_supp(struct fhk_graph *G, bm8 *vmask, bm8 *mmask){
-	fhk_vbmap reset_v = { .solving=1 };
+	fhk_vbmap reset_v = { .mark=1 };
 	fhk_mbmap reset_m = {0};
 	fhk_reset(G, reset_v, reset_m);
 
@@ -60,16 +67,13 @@ static int mark_isupp_v(struct fhk_graph *G, bm8 *vmask, bm8 *mmask, struct fhk_
 
 	fhk_vbmap *v = &G->v_bitmaps[y->idx];
 
-	if(v->solving)
+	if(v->mark)
 		return 0;
 
-	// Unlike in fhk_solve, we don't need to reset the "solving" bit here,
+	// Unlike in fhk_solve, we don't need to reset the mark bit here,
 	// no variable will ever need to be visited twice.
 	// This also automatically takes care of cycles.
-	// (It would probably be cleaner to have it named "visited" and make the fhk_vbmap
-	// an union so we could use the same bitmap for multiple purposes, or just stack allocate
-	// a bitset, or add a flag to fhk_var, ...)
-	v->solving = 1;
+	v->mark = 1;
 
 	int ret = 0;
 

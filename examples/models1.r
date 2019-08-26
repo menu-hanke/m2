@@ -27,3 +27,23 @@ Mc_1 <- function(x) {
 Mc_2 <- function(xprime) {
 	return(log(xprime))
 }
+
+cy_a2b <- function(a) {
+	return(a*2);
+}
+
+cy_b2a <- function(b) {
+	return(b/2);
+}
+
+cy_a0 <- function(a0) {
+	return(a0 + 1);
+}
+
+cy_b0 <- function(b0) {
+	return(b0 - 1);
+}
+
+cy_d <- function(a, b) {
+	return(a + b);
+}

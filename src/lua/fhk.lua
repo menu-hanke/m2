@@ -57,42 +57,17 @@ local function create_checks(checks)
 	return ret
 end
 
-local function create_params(params)
-	if #params == 0 then
+local function copyvars(vs)
+	if #vs == 0 then
 		return
 	end
 
-	local ret = ffi.new("struct fhk_var *[?]", #params)
-	for i,p in ipairs(params) do
-		ret[i-1] = p.fhk_var
+	local ret = ffi.new("struct fhk_var *[?]", #vs)
+	for i,fv in ipairs(vs) do
+		ret[i-1] = fv.fhk_var
 	end
 
 	return ret
-end
-
-local function create_models(models)
-	if #models == 0 then
-		return
-	end
-
-	local ret = ffi.new("struct fhk_model *[?]", #models)
-	for i,m in ipairs(models) do
-		ret[i-1] = m.fhk_model
-	end
-
-	return ret
-end
-
-local function retind(returns, y)
-	-- we could build a lookup table here to avoid iterating but almost all models
-	-- have 1-2 returns so it really doesn't matter
-	for i,x in ipairs(returns) do
-		if y == x then
-			return i
-		end
-	end
-
-	assert(false)
 end
 
 local function create_graph(cfg)
@@ -122,24 +97,16 @@ local function create_graph(cfg)
 		end
 
 		local checks = create_checks(m.checks)
-		C.fhk_alloc_checks(arena, fm, #m.checks, checks)
+		C.fhk_copy_checks(arena, fm, #m.checks, checks)
 
-		local params = create_params(m.params)
-		C.fhk_alloc_params(arena, fm, #m.params, params)
+		local params = copyvars(m.params)
+		C.fhk_copy_params(arena, fm, #m.params, params)
 
-		C.fhk_alloc_returns(arena, fm, #m.returns)
+		local returns = copyvars(m.returns)
+		C.fhk_copy_returns(arena, fm, #m.returns, returns)
 	end
 
-	for _,v in ipairs(vars) do
-		local fv = v.fhk_var
-
-		local models = create_models(v.models)
-		C.fhk_alloc_models(arena, fv, #v.models, models)
-
-		for i,m in ipairs(v.models) do
-			C.fhk_link_ret(m.fhk_model, fv, retind(m.returns, v)-1, i-1)
-		end
-	end
+	C.fhk_compute_links(arena, G)
 
 	return G
 end
@@ -330,7 +297,6 @@ end
 
 local function set_init_vars(vmask, cfg, vars)
 	local solve = ffi.new("fhk_vbmap")
-	solve.solve = 1
 	solve.stable = 1
 
 	for _,v in ipairs(vars) do
@@ -453,6 +419,10 @@ local function inject(env, mapping, cfg)
 
 	env._obj_meta.__index.virtual = function(self, ...)
 		return env.fhk.virtual(self, "var", ...)
+	end
+
+	env._obj_meta.__index.bind = function(self, ref)
+		ffi.copy(self.fhk_mapping_bind, ref, ffi.sizeof("w_objref"))
 	end
 
 	env._env_meta.__index.virtual = function(self, ...)

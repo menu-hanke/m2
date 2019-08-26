@@ -86,18 +86,13 @@ void gmap_make_reset_masks(struct fhk_graph *G, bm8 *vmask, bm8 *mmask){
 
 	// Finally, these bits shouldn't be touched when stepping
 	// Note: (TODO) unstable vars should have the stable bit cleared
-	fhk_vbmap keep = { .given=1, .solve=1, .stable=1 };
+	fhk_vbmap keep = { .given=1, .stable=1 };
 	bm_or8(vmask, G->n_var, keep.u8);
 }
 
 void gmap_init(struct fhk_graph *G, bm8 *init_v){
 	bm_copy((bm8 *) G->v_bitmaps, init_v, G->n_var);
 	bm_zero((bm8 *) G->m_bitmaps, G->n_mod);
-}
-
-void gmap_reset(struct fhk_graph *G, bm8 *reset_v, bm8 *reset_m){
-	bm_and((bm8 *) G->v_bitmaps, reset_v, G->n_var);
-	bm_and((bm8 *) G->m_bitmaps, reset_m, G->n_mod);
 }
 
 void gmap_solve_vec(w_objvec *vec, void **res, struct gs_vec_args *arg){
@@ -124,7 +119,7 @@ void gmap_solve_vec(w_objvec *vec, void **res, struct gs_vec_args *arg){
 	bm8 *reset_m = arg->reset_m;
 
 	for(size_t i=0;i<n;i++){
-		gmap_reset(G, reset_v, reset_m);
+		fhk_reset_mask(G, reset_v, reset_m);
 		dv("solver[%p]: %zu/%zu\n", vec, (i+1), n);
 
 		if(wbind)
@@ -133,10 +128,8 @@ void gmap_solve_vec(w_objvec *vec, void **res, struct gs_vec_args *arg){
 		if(zbind)
 			*zbind = *zband++;
 
-		for(size_t j=0;j<nv;j++){
-			int r = fhk_solve(G, xs[j]);
-			assert(r == FHK_OK); // TODO error handling goes here
-		}
+		int r = fhk_solve(G, nv, xs);
+		assert(r == FHK_OK); // TODO error handling goes here
 
 		for(size_t j=0;j<nv;j++){
 			type t = arg->types[j];

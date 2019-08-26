@@ -6,7 +6,7 @@
 
 #include <assert.h>
 #define dd(...) fprintf(stderr, __VA_ARGS__)
-#define dv(fmt, ...) dd("(%-10s) %-20s" fmt, __FILE__, __func__, ##__VA_ARGS__)
+#define dv(fmt, ...) dd("(%-12s) %-20s" fmt, __FILE__, __func__, ##__VA_ARGS__)
 #define DD(x) x
 #define UNREACHABLE() assert(!"unreachable")
 

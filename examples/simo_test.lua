@@ -1,8 +1,15 @@
+obj.stratum:virtual("BA", function()
+	print("stratum BA virtual called")
+	return 0
+end)
+
+----------------------------------------------------------
+
 local pine_stratum_tpl = obj.stratum:template {
 	species = enum.species.pine
 }
 
-local tree_tpl = obj.stratum:template {}
+local tree_tpl = obj.tree:template {}
 
 local stratums = world:create_objvec(obj.stratum)
 
@@ -21,6 +28,14 @@ end
 
 local s = plant_pines(10)
 generate_trees(s[0])
+
+----------------------------------------------------------
+
+local function grow_trees(s_ref)
+	obj.stratum:bind(s_ref)
+	local trees = s_ref[id.trees]
+
+end
 
 ----------------------------------------------------------
 
