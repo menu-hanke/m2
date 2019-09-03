@@ -640,6 +640,7 @@ static void heap_add(struct heap *h, struct fhk_var *y, double cost){
 	unsigned idx = heap_cascade_up(h, h->end, cost);
 	HEAP_COST(h->ent[idx]) = cost;
 	h->ent[idx].var = y;
+	HEAP_PTR(h->ent[idx]) = idx;
 }
 
 static void heap_add_unordered(struct heap *h, struct fhk_var *y, double cost){
