@@ -1,95 +1,57 @@
 #pragma once
 
-/* Mapping of world "objects" to fhk graph.
- * Note that a world object does not necessarily correspond to 1 variable in the graph.
- * An fhk variable may represented by:
- *   - object vector band   (var)
- *   - env var              (env)
- *   - global var           (global)
- *   - function pointer     (virtual)
- *   - nothing              (computed)
- *
- * Technically each type is a special case of virtual, but they are implemented separately for
- * efficiency. 
- */
-
 #include "fhk.h"
 #include "bitmap.h"
-#include "world.h"
-#include "lex.h"
+#include "type.h"
 #include "exec.h"
+#include "grid.h"
+#include "vec.h"
 
 #include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
 
 enum {
-	GMAP_VAR = 0,
-	GMAP_ENV,
-	GMAP_GLOBAL,
-	GMAP_VIRTUAL,
-	GMAP_COMPUTED
+	GMAP_BIND_OBJECT,
+	GMAP_BIND_Z,
+	GMAP_BIND_GLOBAL
 };
 
-enum {
-	GMAP_NEW_OBJECT = 0,
-	GMAP_NEW_Z
-};
+typedef struct gmap_support {
+	bool (*is_visible)(tvalue to, unsigned reason, tvalue parm);
+	bool (*is_constant)(tvalue to, unsigned reason, tvalue parm);
+} gmap_support;
 
-typedef struct gmap_change {
-	// Note: here uint*_t types must be used, bit fields in unions don't work
-	// correctly in luajit
-	uint8_t type;
-	union {
-		uint8_t order;
-		uint32_t objid;
-	};
-} gmap_change;
-
-typedef struct gmap_type {
-	unsigned support_type : 8;
-	unsigned resolve_type : 8;
-} gmap_type;
+typedef tvalue (*gmap_resolve)(void *);
 
 #define GV_HEADER\
-	gmap_type type;\
-	const char *name
+	const gmap_support *supp;    \
+	gmap_resolve resolve;        \
+	tvalue udata;                \
+	const char *name;            \
+	unsigned target_type : 16
 
 struct gmap_any {
 	GV_HEADER;
 };
 
-struct gv_var {
+struct gv_vec {
 	GV_HEADER;
-	unsigned objid;
-	lexid varid;
-	w_objref *wbind;
+	unsigned target_offset : 16;
+	unsigned target_band   : 16;
+	struct vec_ref *bind;
 };
 
-struct gv_env {
+struct gv_grid {
 	GV_HEADER;
-	w_env *wenv;
-	gridpos *zbind;
+	unsigned target_offset : 16;
+	struct grid *grid;
+	gridpos *bind;
 };
 
-struct gv_global {
+struct gv_data {
 	GV_HEADER;
-	w_global *wglob;
-};
-
-struct gv_computed {
-	GV_HEADER;
-};
-
-struct gv_virtual {
-	union {
-		struct { GV_HEADER; };
-		struct gv_var var;
-		struct gv_env env;
-	};
-
-	// Note: if needed, you can add is_reachable/is_supported callbacks here and
-	// call them when support_type=GMAP_VIRTUAL, however that will probably never be useful
-	pvalue (*resolve)(void *udata);
-	void *udata;
+	void **ref;
 };
 
 struct gmap_model {
@@ -103,24 +65,25 @@ void gmap_unbind(struct fhk_graph *G, unsigned idx);
 void gmap_bind_model(struct fhk_graph *G, unsigned idx, struct gmap_model *m);
 void gmap_unbind_model(struct fhk_graph *G, unsigned idx);
 
-void gmap_mark_reachable(struct fhk_graph *G, bm8 *vmask, gmap_change change);
-void gmap_mark_supported(struct fhk_graph *G, bm8 *vmask, gmap_change change);
+void gmap_supp_obj_var(struct gmap_any *v, uint64_t objid);
+void gmap_supp_grid_env(struct gmap_any *v, uint64_t order);
+void gmap_supp_global(struct gmap_any *v);
+
+tvalue gmap_res_vec(void *v);
+tvalue gmap_res_grid(void *v);
+tvalue gmap_res_data(void *v);
+
+void gmap_mark_visible(struct fhk_graph *G, bm8 *vmask, unsigned reason, tvalue parm);
+void gmap_mark_nonconstant(struct fhk_graph *G, bm8 *vmask, unsigned reason, tvalue parm);
 
 void gmap_make_reset_masks(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
 
 void gmap_init(struct fhk_graph *G, bm8 *init_v);
-void gmap_reset(struct fhk_graph *G, bm8 *reset_v, bm8 *reset_m);
 
-struct gs_vec_args {
-	struct fhk_graph *G;
-	w_obj *wobj;
-	w_objref *wbind;
-	gridpos *zbind;
-	bm8 *reset_v;
-	bm8 *reset_m;
-	size_t nv;
-	struct fhk_var **xs;
-	type *types;
+struct gmap_solver_vec_bind {
+	struct vec_ref *v_bind;
+	gridpos *z_bind;
+	int z_band;
 };
 
-void gmap_solve_vec(w_objvec *vec, void **res, struct gs_vec_args *arg);
+void gmap_solve_vec(struct gmap_solver_vec_bind *bind, struct fhk_solver *solver, struct vec *vec);

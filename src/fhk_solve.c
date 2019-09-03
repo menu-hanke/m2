@@ -779,8 +779,8 @@ static void stabilize(struct state *s, struct fhk_var *y){
 			ddescv(s, y),
 			(r == FHK_OK) ? "resolved" :
 			(r == FHK_NOT_RESOLVED) ? "not resolved" : "error",
-			y->value.r,
-			y->value.b
+			y->value.f64,
+			y->value.u64
 	);
 
 	if(r == FHK_OK){
@@ -824,18 +824,18 @@ static void resolve_given(struct state *s, struct fhk_var *x){
 		FAIL(FHK_RESOLVE_FAILED, NULL, x);
 
 	bm->has_value = 1;
-	dv("virtual %s -> %f / %#lx\n", ddescv(s, x), x->value.r, x->value.b);
+	dv("virtual %s -> %f / %#lx\n", ddescv(s, x), x->value.f64, x->value.u64);
 }
 
 static int check_cst(struct fhk_cst *cst, pvalue v){
 	switch(cst->type){
 
 		case FHK_RIVAL:
-			return v.r >= cst->rival.min && v.r <= cst->rival.max;
+			return v.f64 >= cst->rival.min && v.f64 <= cst->rival.max;
 
 		case FHK_BITSET:
-			//dv("check bitset b=%#lx mask=0%#lx\n", v.b, cst->setmask);
-			return !!(v.b & cst->setmask);
+			//dv("check bitset b=%#lx mask=0%#lx\n", v.u64, cst->setmask);
+			return !!(v.u64 & cst->setmask);
 	}
 
 	UNREACHABLE();

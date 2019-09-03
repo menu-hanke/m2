@@ -5,8 +5,12 @@ local arena = {
 	alloc  = ffi.C.arena_alloc,
 	malloc = ffi.C.arena_malloc,
 
-	new    = function(self, ct)
-		return ffi.cast(ct, self:alloc(ffi.sizeof(ct), ffi.alignof(ct)))
+	new    = function(self, ct, nelem)
+		nelem = nelem or 1
+		if nelem == 0 then
+			return nil
+		end
+		return ffi.cast(ct, self:alloc(ffi.sizeof(ct) * nelem, ffi.alignof(ct)))
 	end
 }
 

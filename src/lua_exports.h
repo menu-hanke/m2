@@ -1,6 +1,6 @@
-#include "lex.h"
+#include "type.h"
 #include "sim.h"
-#include "world.h"
+#include "sim_ds.h"
 #include "fhk.h"
 #include "exec.h"
 #include "arena.h"

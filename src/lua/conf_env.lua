@@ -1,50 +1,5 @@
-local env_mt = {}
-local env = setmetatable({}, env_mt)
-local root = {}
-
--- config file state
-local stack = {}
-local topidx = 0
-
-function env_mt:__index(f)
-	for i=#stack, 1, -1 do
-		local s = stack[i]
-		local fd = s.def[f]
-		if fd then
-			return function(...)
-				topidx = i
-				local res, err = pcall(fd, ...)
-				if not res then
-					-- re-raise it here so traceback shows the correct line in config file
-					error(err, 2)
-				end
-			end
-		end
-	end
-
-	error(string.format("Directive '%s' is not valid here", f), 2)
-end
-
-local function push(def, e)
-	for i=topidx+1, #stack do
-		stack[i] = nil
-	end
-
-	stack[topidx+1] = {e=e, def=def}
-	return e
-end
-
-local function top(offset)
-	offset = offset or 0
-	return stack[topidx - offset].e
-end
-
-local function idx(offset)
-	return stack[offset].e
-end
-
--- Expose some generic stuff
-env.inf = math.huge
+local typing = require "typing"
+local env = setmetatable({ define={} }, {__index=_G})
 
 -- This is global, use it to read config files
 -- Note that this also works inside config files
@@ -62,55 +17,19 @@ function env.read(fname)
 	f()
 end
 
--- Use this to read json parameter files from config
-function env.read_coeff(fname)
-	if not fname then
-		error("Missing file name to read_calib()", 2)
-	end
+--------------------------------------------------------------------------------
 
-	local f = io.open(fname)
-	if not f then
-		error(string.format("Failed to read file '%s'", fname), 2)
-	end
-
-	local data = f:read("*a")
-	local decode = require "json.decode"
-
-	local coeffs = decode(data)
-	local fhk_models = idx(1).fhk_models
-
-	for k,v in pairs(coeffs) do
-		local m = fhk_models[k]
-
-		if m then
-			-- TODO: calibrated params also go here
-			m.k = v.k
-			m.c = v.c
+local function namespace(index)
+	return setmetatable({}, {
+		__index=function(_, k)
+			return function(...)
+				index(k, ...)
+			end
+		end,
+		__newindex=function(_, k, ...)
+			index(k, ...)
 		end
-
-		-- silently ignore uknown models.
-		-- could also print a warning here?
-	end
-end
-
--------------------
--- util
--------------------
-
-local function setter(name)
-	return function(x)
-		top()[name] = x
-	end
-end
-
-local function numeric_setter(name)
-	return function(x)
-		top()[name] = tonumber(x)
-	end
-end
-
-local function set_resolution(res)
-	top().z_order = 2*tonumber(res)
+	})
 end
 
 local nodup_mt = {
@@ -129,221 +48,176 @@ local function nodup(tab, mes)
 	return setmetatable({_tab=tab, _mes=mes}, nodup_mt)
 end
 
--------------------
+local function totable(x)
+	if type(x) ~= "table" then
+		x = {x}
+	end
+	return x
+end
+
+--------------------------------------------------------------------------------
 -- types
--------------------
+--------------------------------------------------------------------------------
 
-local type_ = {
+local types = {}
 
-}
-
-function root.enum(name, def)
-	top()._types[name] = push(type_, {
-		name = name,
-		def  = def,
-		kind = "enum"
-	})
+local function gettype(name)
+	if not types[name] then
+		types[name] = { name=name, def={} }
+	end
+	return types[name]
 end
 
------------------------
--- objects
------------------------
-
-local obj_var = {
-	dtype = setter("type"),
-	unit = setter("unit")
-}
-
-local obj = {
-	resolution = set_resolution,
-	var = function(name)
-		top()._vars[name] = push(obj_var, {
-			name = name,
-			type = "f64",
-			obj = top()
-		})
-	end,
-	position = function(name)
-		local obj = top()
-		if obj.position_var then
-			error(string.format("Position variable already defined as '%s'", obj.position_var.name))
-		end
-
-		obj.position_var = {
-			name = name,
-			type = "z",
-			obj = obj
-		}
-		
-		obj._vars[name] = obj.position_var
-	end
-}
-
-function root.obj(name)
-	-- allow re-pushing defined obj to add more details e.g. from multiple config files
-	local o = top().objs[name]
-	if not o then
-		local vars = {}
-		o = {
-			name = name,
-			vars = vars,
-			_vars = nodup(vars, "Duplicate variable '%s'")
-		}
-		top().objs[name] = o
+local function setkind(type, name)
+	if type.kind == name then
+		return
 	end
 
-	push(obj, o)
+	if type.kind then
+		error(string.format("Redefinition of type '%s' as kind '%s' (was previously '%s')",
+			type.name, name, type.kind))
+	end
+
+	type.kind = name
 end
 
------------------------
--- envs
------------------------
+local function setdef(type, k, v)
+	if type.def[k] and type.def[k] ~= v then
+		error(string.format("Redefinition of '%s' of type '%s' (%s -> %s)",
+			k, type.name, type.def[k], v))
+	end
 
-local env_ = {
-	dtype = setter("type"),
-	unit = setter("unit"),
-	resolution = set_resolution,
-}
-
-function root.env(name)
-	top()._envs[name] = push(env_, {
-		name = name,
-		resolution = 0,
-		dtype = "f64"
-	})
+	type.def[k] = v
 end
 
------------------------
--- envs
------------------------
+env.define.enum = namespace(function(name, def)
+	local e = gettype(name)
+	setkind(e, "enum")
 
-local global_ = {
-	dtype = setter("type"),
-	unit = setter("unit")
-}
+	for k,v in pairs(def) do
+		setdef(e, k, tonumber(v))
+	end
+end)
 
-function root.global(name)
-	top()._globals[name] = push(global_, {
-		name = name,
-		dtype = "f64"
-	})
-end
+env.define.type = namespace(function(name, def)
+	local t = gettype(name)
+	setkind(t, "struct")
 
------------------------
--- models
------------------------
+	for k,v in pairs(def) do
+		setdef(t, k, tostring(v))
+	end
+end)
 
-local function make_check(cst, cost_in, cost_out, var)
-	cost_in = cost_in or 0
-	cost_out = cost_out or math.huge
+env.C = typing.ctype
+
+--------------------------------------------------------------------------------
+-- fhk
+--------------------------------------------------------------------------------
+
+local models = {}
+local vars = {}
+local type_exports = {}
+
+local _models = nodup(models, "Redefinition of model '%s'")
+local _vars = nodup(vars, "Redefinition of var '%s'")
+
+local function make_check(cst, cost_in, cost_out)
+	cst.cost_in = cost_in or 0
+	cst.cost_out = cost_out or math.huge
 
 	-- the solver expects this
 	-- see constraint_bounds() in fhk_solve.c
-	if cost_in > cost_out then
+	if cst.cost_in > cst.cost_out then
 		error(string.format("Expected cost_in<=cost_out but got %f>%f", cost_in, cost_out))
 	end
 
-	return {
-		var=var,
-		cst=cst,
-		cost_in=cost_in,
-		cost_out=cost_out
-	}
+	return cst
 end
-
-local param = {
-	check = function(cst, cost_in, cost_out, var)
-		table.insert(top(1).checks, make_check(cst, cost_in, cost_out, var or top()))
-	end
-}
-
-local model = {
-	param = function(name)
-		push(param, name)
-		top()._params[name] = true
-		table.insert(top().params, name)
-	end,
-	returns = function(name)
-		top()._returns[name] = true
-		table.insert(top().returns, name)
-	end,
-	check = function(cst, cost_in, cost_out, var)
-		table.insert(top().checks, make_check(cst, cost_in, cost_out, var))
-	end,
-	impl = function(impl)
-		local lang, file, func = impl:match("([^:]+)::([^:]+)::(.+)$")
-		if not lang then
-			error(string.format("Invalid format: %s", impl))
-		end
-		top().impl = { lang=lang, file=file, func=func }
-	end
-}
-
-function root.model(name)
-	local params = {}
-	local returns = {}
-	top()._fhk_models[name] = push(model, {
-		name = name,
-		checks = {},
-		params = params,
-		returns = returns,
-		_params = nodup(params, "Parameter '%s' specified twice"),
-		_returns = nodup(returns, "Return value '%s' specified twice")
-	})
-end
-
---------------------
--- vars
---------------------
-
-local var = {
-	dtype = setter("type"),
-	unit = setter("unit")
-}
-
-function root.comp(name)
-	top()._vars[name] = push(var, {
-		name = name,
-		dtype = "f64"
-	})
-end
-
---------------------
--- constraints
---------------------
 
 function env.set(...)
-	return {type="set", values={...}}
+	return make_check({type="set", values={...}})
 end
 
 function env.ival(a, b)
-	return {type="ival", a=a, b=b}
+	return make_check({type="ival", a=a, b=b})
 end
 
-function env.objvec(obj)
-	return {type="objvec", obj=obj}
+local function parse_impl(impl)
+	local lang, file, func = impl:match("([^:]+)::([^:]+)::(.+)$")
+	if not lang then
+		error(string.format("Invalid format: %s", impl))
+	end
+	return {lang=lang, file=file, func=func}
 end
 
---------------------
+env.define.model = namespace(function(name, def)
+	_models[name] = {
+		name = name,
+		params = totable(def.params or {}),
+		returns = totable(def.returns or {}),
+		checks = def.checks or {},
+		impl = parse_impl(def.impl)
+	}
+end)
 
-local types = {}
-local objs = {}
-local envs = {}
-local globals = {}
-local fhk_models = {}
-local vars = {}
+env.define.var = namespace(function(name, type)
+	_vars[name] = type or "real"
+end)
 
-return env, push(root, {
+env.define.vars = function(defs)
+	for name,t in pairs(defs) do
+		if type(name) == "number" then
+			_vars[t] = "real"
+		else
+			_vars[name] = t
+		end
+	end
+end
+
+env.fhk = {
+	export = function(...)
+		local ts = {...}
+		for _,t in ipairs(ts) do
+			type_exports[t] = true
+		end
+	end,
+
+	read_coeff = function(fname)
+		if not fname then
+			error("Missing file name to read_calib()", 2)
+		end
+
+		local f = io.open(fname)
+		if not f then
+			error(string.format("Failed to read file '%s'", fname), 2)
+		end
+
+		local data = f:read("*a")
+		local decode = require "json.decode"
+
+		local coeffs = decode(data)
+
+		for k,v in pairs(coeffs) do
+			local m = models[k]
+
+			if m then
+				-- TODO: calibrated params also go here
+				m.k = v.k
+				m.c = v.c
+			end
+
+			-- TODO: this should probably cache the costs and then merge them to model
+			-- when parsing conf because now this must be called after model definitions
+			-- or it silently ignores costs
+		end
+	end
+}
+
+--------------------------------------------------------------------------------
+
+return env, {
 	types = types,
-	objs = objs,
-	envs = envs,
-	globals = globals,
-	fhk_models = fhk_models,
+	models = models,
 	vars = vars,
-	_types = nodup(types, "Redefinition of type '%s'"),
-	_objs = nodup(objs, "Redefinition of object '%s'"),
-	_envs = nodup(envs, "Redefinition of env '%s'"),
-	_globals = nodup(globals, "Redefinition of global '%s'"),
-	_fhk_models = nodup(fhk_models, "Redefinition of model '%s'"),
-	_vars = nodup(vars, "Redefinition of variable '%s'")
-})
+	type_exports = type_exports
+}

@@ -1,12 +1,13 @@
 local ffi = require "ffi"
 local conf = require "conf"
 local fhk = require "fhk"
+local malloc = require "malloc"
 local typing = require "typing"
 
 ffi.cdef [[
 	struct Lvar_info {
 		const char *desc;
-		const char *kind;
+		const char *ctype;
 		type type;
 	};
 
@@ -46,30 +47,29 @@ local function hook_graph(G)
 	end
 end
 
-local function hook_udata(data)
-	for _,fv in pairs(data.fhk_vars) do
-		local info = ffi.new("struct Lvar_info")
-		info.desc = fv.src.name
-		info.type = fv.src.type
-		info.kind = fv.kind
+local function hook_udata(vars, models, exf)
+	for name,fv in pairs(vars) do
+		local info = malloc.new("struct Lvar_info")
+		info.desc = name
+		info.type = fv.type.desc
+		info.ctype = fv.type.ctype
 		fv.info = info
 		fv.fhk_var.udata = info
 	end
 
-	for _,fm in pairs(data.fhk_models) do
-		local info = ffi.new("struct Lmodel_info")
-		info.desc = fm.name
-		info.f = fm.ex_func
+	for name,fm in pairs(models) do
+		local info = malloc.new("struct Lmodel_info")
+		info.desc = name
+		info.f = exf[name]
 		fm.info = info
 		fm.fhk_model.udata = info
 	end
 end
 
-local function get_vars(data, names)
-	local fv = data.fhk_vars
+local function get_vars(names, vars)
 	local ret = {}
 	for _,n in ipairs(names) do
-		table.insert(ret, fv[n])
+		table.insert(ret, vars[n])
 	end
 	return ret
 end
@@ -112,10 +112,9 @@ local function reportv(visited, ret, G, fv, reason)
 	local bitmap = G.v_bitmaps[fv.idx]
 
 	local r = {
-		value  = typing.sim2out(typing.pvalue2lua(fv.value, fvinfo.type), fvinfo.type),
+		value  = tonumber(ffi.C.vexportd(fv.value, fvinfo.type)),
 		desc   = ffi.string(fvinfo.desc),
 		reason = reason,
-		kind   = ffi.string(fvinfo.kind),
 		given  = bitmap.given == 1,
 		solved = bitmap.chain_selected == 1
 	}
@@ -179,14 +178,13 @@ local function print_report(rep)
 	))
 
 	for _,r in ipairs(rep) do
-		print(string.format("%-"..desc_len.."s = %-20s %-"..model_len.."s %-16s %s %s (%s)",
+		print(string.format("%-"..desc_len.."s = %-20s %-"..model_len.."s %-16s %s %s",
 			r.desc,
 			r.value,
 			r.model or "",
 			r.cost  or "",
 			r.given and "given" or (r.solved and "solved" or "failed"),
-			r.reason,
-			r.kind
+			r.reason
 		))
 	end
 end
@@ -215,15 +213,15 @@ end
 -------------------------
 
 local function main(args)
-	local data = conf.read(args.config)
-	local G = fhk.create_graph(data)
-	fhk.create_exf(data)
-	hook_udata(data)
+	local cfg = conf.read(args.config)
+	local G, vars, models = fhk.build_graph(cfg.fhk_vars, cfg.fhk_models)
+	local exf = fhk.create_models(vars, models)
+	hook_udata(vars, models, exf)
 	hook_graph(G)
 
-	local vars, values = readcsv(args.input)
-	vars = get_vars(data, vars)
-	local solve = get_vars(data, args.vars)
+	local given, values = readcsv(args.input)
+	given = get_vars(given, vars)
+	local solve = get_vars(args.vars, vars)
 	local csolve = get_cvars(solve)
 
 	local reset_v = ffi.new("fhk_vbmap")
@@ -234,14 +232,14 @@ local function main(args)
 	reset_v.stable = 1
 
 	set_flag(G, "stable")
-	set_flag(G, "given", vars)
+	set_flag(G, "given", given)
 
 	for _,d in ipairs(values) do
 		ffi.C.fhk_reset(G, reset_v, reset_m)
 
-		set_flag(G, "has_value", vars)
-		for i,v in ipairs(vars) do
-			v.fhk_var.value = typing.lua2pvalue(typing.out2sim(d[i], v.src.type), v.src.type)
+		set_flag(G, "has_value", given)
+		for i,v in ipairs(given) do
+			v.fhk_var.value = ffi.C.vimportd(d[i], v.type.desc)
 		end
 		
 		ffi.C.fhk_solve(G, #solve, csolve)

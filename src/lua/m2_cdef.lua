@@ -5,7 +5,6 @@ ffi.cdef [[
        
        
        
-       
 typedef uint8_t bm8 __attribute__((aligned(16)));
 bm8 *bm_alloc(size_t n);
 void bm_free(bm8 *bm);
@@ -46,101 +45,54 @@ gridpos grid_zoom_up(gridpos z, size_t from, size_t to);
 gridpos grid_zoom_down(gridpos z, size_t from, size_t to);
 gridpos grid_translate_mask(size_t from, size_t to);
 typedef enum type {
- T_F32 = 0,
- T_F64 = 1,
- T_B8 = 2,
- T_B16 = 3,
- T_B32 = 4,
- T_B64 = 5,
- T_BOOL = 6,
- T_ID = 7,
- T_POSITION = 8,
- T_USERDATA = 9
+ T_F64 = (((0) << 2) | ((!!((8)&0xa)) | ((!!((8)&0xc))<<1))),
+ T_F32 = (((0) << 2) | ((!!((4)&0xa)) | ((!!((4)&0xc))<<1))),
+ T_B64 = (((1) << 2) | ((!!((8)&0xa)) | ((!!((8)&0xc))<<1))),
+ T_B32 = (((1) << 2) | ((!!((4)&0xa)) | ((!!((4)&0xc))<<1))),
+ T_B16 = (((1) << 2) | ((!!((2)&0xa)) | ((!!((2)&0xc))<<1))),
+ T_B8 = (((1) << 2) | ((!!((1)&0xa)) | ((!!((1)&0xc))<<1))),
+ T_BOOL64 = (((2) << 2) | ((!!((8)&0xa)) | ((!!((8)&0xc))<<1))),
+ T_BOOL8 = (((2) << 2) | ((!!((1)&0xa)) | ((!!((1)&0xc))<<1))),
+ T_U64 = (((3) << 2) | ((!!((8)&0xa)) | ((!!((8)&0xc))<<1))),
+ T_U32 = (((3) << 2) | ((!!((4)&0xa)) | ((!!((4)&0xc))<<1))),
+ T_U16 = (((3) << 2) | ((!!((2)&0xa)) | ((!!((2)&0xc))<<1))),
+ T_U8 = (((3) << 2) | ((!!((1)&0xa)) | ((!!((1)&0xc))<<1))),
+ T_ID = T_U64,
+ T_POSITION = T_U64 | ((!!((sizeof(gridpos))&0xa)) | ((!!((sizeof(gridpos))&0xc))<<1)),
+ T_USERDATA = T_U64 | ((!!((sizeof(void *))&0xa)) | ((!!((sizeof(void *))&0xc))<<1))
 } type;
-typedef union tvalue {
- float f32;
- double f64;
- uint8_t b8;
- uint16_t b16;
- uint32_t b32;
- uint64_t b64;
- uint8_t b;
- uint32_t id;
- gridpos z;
- void *u;
-} tvalue;
-typedef enum ptype {
- PT_REAL = 1,
- PT_BIT = 2,
- PT_BOOL = 3,
- PT_POS = 4,
- PT_ID = 5,
- PT_UDATA = 6
-} ptype;
 typedef union pvalue {
- double r;
- uint64_t b;
- uint64_t id;
- gridpos z;
- void *u;
+ double f64; uint64_t u64; gridpos z; void *u;
 } pvalue;
+typedef union tvalue {
+ double f64; uint64_t u64; gridpos z; void *u;
+ float f32;
+ uint8_t u8;
+ uint16_t u16;
+ uint32_t u32;
+} tvalue;
 
 
-enum {
- POSITION_RESOLUTION = 31,
- POSITION_ORDER = ((POSITION_RESOLUTION)<<1)
-};
-typedef unsigned lexid;
-struct var_def {
- lexid id;
- const char *name;
- type type;
-};
-struct obj_def {
- lexid id;
- const char *name;
- size_t resolution;
- struct { size_t nalloc; size_t nuse; struct var_def *data; } vars;
-};
-struct env_def {
- lexid id;
- const char *name;
- size_t resolution;
- type type;
-};
-struct lex {
- struct { size_t nalloc; size_t nuse; struct obj_def *data; } objs;
- struct { size_t nalloc; size_t nuse; struct env_def *data; } envs;
-};
-struct lex *lex_create();
-void lex_destroy(struct lex *lex);
-struct obj_def *lex_add_obj(struct lex *lex);
-struct env_def *lex_add_env(struct lex *lex);
-struct var_def *lex_add_var(struct obj_def *obj);
-int unpackenum(uint64_t b);
-uint64_t packenum(int b);
-type tfitenum(unsigned max);
-size_t tsize(type t);
-ptype tpromote(type t);
 pvalue vpromote(tvalue v, type t);
 tvalue vdemote(pvalue v, type t);
-void vcopy(void *dest, tvalue v, type t);
 tvalue vbroadcast(tvalue v, type t);
-uint64_t broadcast64(uint64_t x, unsigned b);
+unsigned vbunpack(uint64_t b);
+uint64_t vbpack(unsigned b);
+double vexportd(pvalue v, type t);
+pvalue vimportd(double d, type t);
        
 typedef struct sim sim;
 typedef uint64_t sim_branchid;
-typedef enum sim_mem {
- SIM_ALLOC_STATIC = 0,
- SIM_ALLOC_VSTACK = 1,
- SIM_ALLOC_FRAME = 2
-} sim_mem;
+enum {
+ SIM_MUTABLE = 0x1,
+ SIM_FRAME = 0x2
+};
 sim *sim_create();
 void sim_destroy(sim *sim);
 void *sim_static_alloc(sim *sim, size_t sz, size_t align);
 void *sim_vstack_alloc(sim *sim, size_t sz, size_t align);
 void *sim_frame_alloc(sim *sim, size_t sz, size_t align);
-void *sim_alloc(sim *sim, size_t sz, size_t align, sim_mem where);
+void *sim_alloc(sim *sim, size_t sz, size_t align, int lifetime);
 int sim_is_frame_owned(sim *sim, void *p);
 unsigned sim_frame_id(sim *sim);
 void sim_savepoint(sim *sim);
@@ -150,77 +102,64 @@ void sim_exit(sim *sim);
 sim_branchid sim_branch(sim *sim, size_t n, sim_branchid *branches);
 sim_branchid sim_next_branch(sim *sim);
        
-typedef struct world world;
-typedef struct w_env {
- unsigned type : 32;
- unsigned zoom_order : 32;
- gridpos zoom_mask;
- struct grid grid;
-} w_env;
-typedef struct w_global {
- type type;
- tvalue value;
-} w_global;
-typedef struct w_vband {
- unsigned stride_bits : 16;
- unsigned type : 16;
- unsigned last_modify : 32;
+       
+struct vec_band {
+ unsigned stride;
+ unsigned tag;
  void *data;
-} w_vband;
-typedef struct w_objvec {
+};
+struct vec {
  unsigned n_alloc;
  unsigned n_used;
  unsigned n_bands;
- w_vband bands[];
-} w_objvec;
-typedef struct w_obj {
- int z_band;
- size_t vsize;
- w_objvec vtemplate;
-} w_obj;
-typedef struct w_objgrid {
- w_obj *obj;
+ struct vec_band bands[];
+};
+union vec_tpl {
+ void *p;
+ uint64_t u64;
+};
+struct vec_ref {
+ struct vec *vec;
+ unsigned idx;
+};
+struct vec_slice {
+ struct vec *vec;
+ unsigned from;
+ unsigned to;
+};
+void vec_init(struct vec *v, unsigned n_bands);
+void vec_init_range(struct vec *v, unsigned from, unsigned to, union vec_tpl *tpl);
+unsigned vec_copy_skip(struct vec *v, void **dst, unsigned n, unsigned *skip);
+unsigned vec_copy_skip_s(struct vec *v, void **dst, unsigned n, unsigned *skip);
+unsigned vec_header_size(unsigned n_bands);
+struct svgrid {
  struct grid grid;
-} w_objgrid;
-typedef struct w_objref {
- w_objvec *vec;
- size_t idx;
-} w_objref;
-typedef struct w_objtpl {
- tvalue defaults[0];
-} w_objtpl;
-world *w_create(sim *sim);
-void w_destroy(world *w);
-w_env *w_define_env(world *w, type type, size_t resolution);
-w_global *w_define_global(world *w, type type);
-w_obj *w_define_obj(world *w, size_t nv, type *vtypes);
-w_objgrid *w_define_objgrid(world *w, w_obj *obj, size_t order);
-void w_env_swap(world *w, w_env *e, void *data);
-size_t w_env_orderz(w_env *e);
-gridpos w_env_posz(w_env *e, gridpos pos);
-tvalue w_env_readpos(w_env *e, gridpos pos);
-void w_obj_swap(world *w, w_objvec *vec, lexid varid, void *data);
-void *w_vb_varp(w_vband *band, size_t idx);
-void w_vb_vcopy(w_vband *band, size_t idx, tvalue v);
-void *w_stride_varp(void *data, unsigned stride_bits, size_t idx);
-tvalue w_obj_read1(w_objref *ref, lexid varid);
-void w_obj_write1(w_objref *ref, lexid varid, tvalue value);
-size_t w_tpl_size(w_obj *obj);
-void w_tpl_create(w_obj *obj, w_objtpl *tpl);
-void *w_env_create_data(world *w, w_env *e);
-w_objvec *w_obj_create_vec(world *w, w_obj *obj);
-size_t w_objvec_alloc(world *w, w_objvec *vec, w_objtpl *tpl, size_t n);
-size_t w_objvec_delete(world *w, w_objvec *vec, size_t n, size_t *del);
-size_t w_objvec_delete_s(world *w, w_objvec *vec, size_t n, size_t *del);
-void *w_objvec_create_band(world *w, w_objvec *vec, lexid varid);
-void w_objgrid_alloc(world *w, w_objref *refs, w_objgrid *g, w_objtpl *tpl, size_t n,
-  gridpos *pos);
-void w_objgrid_alloc_s(world *w, w_objref *refs, w_objgrid *g, w_objtpl *tpl, size_t n,
-  gridpos *pos);
-void w_objref_delete(world *w, size_t n, w_objref *refs);
-void w_objref_delete_s(world *w, size_t n, w_objref *refs);
-gridpos w_objgrid_posz(w_objgrid *g, gridpos pos);
-w_objvec *w_objgrid_write(world *w, w_objgrid *g, gridpos z);
+ unsigned z_band;
+ struct vec tpl;
+};
+enum {
+ POSITION_RESOLUTION = 31,
+ POSITION_ORDER = ((POSITION_RESOLUTION)<<1)
+};
+enum {
+ SIM_DATA_MUTABLE = 0x4
+};
+void *sim_create_data(sim *sim, size_t size, size_t align, int lifetime);
+struct grid *sim_create_grid(sim *sim, size_t order, size_t size, int lifetime);
+struct svgrid *sim_create_svgrid(sim *sim, size_t order, unsigned z_band, struct vec *tpl);
+struct vec *sim_create_vec(sim *sim, struct vec *tpl, int lifetime);
+unsigned frame_alloc_vec(sim *sim, struct vec *v, unsigned n);
+void frame_delete_vec(sim *sim, struct vec *v, unsigned n, unsigned *del);
+void frame_clear_vec(sim *sim, struct vec *v);
+void frame_swap_band(sim *sim, struct vec *v, unsigned band, void *data);
+void frame_swap_grid(sim *sim, struct grid *g, void *data);
+void *frame_create_band(sim *sim, struct vec *v, unsigned band);
+void *frame_create_grid_data(sim *sim, struct grid *g);
+struct vec *frame_lazy_svgrid_vec(sim *sim, struct svgrid *g, gridpos z);
+unsigned frame_alloc_svgrid(sim *sim, struct vec_slice *ret, struct svgrid *g, unsigned n,
+  gridpos *z);
+unsigned frame_alloc_svgrid_s(sim *sim, struct vec_slice *ret, struct svgrid *g, unsigned n,
+  gridpos *z);
        
        
 typedef struct arena arena;
@@ -328,6 +267,14 @@ struct fhk_graph {
  struct fhk_einfo last_error;
  void *udata;
 };
+struct fhk_solver {
+ struct fhk_graph *G;
+ bm8 *reset_v;
+ bm8 *reset_m;
+ unsigned nv;
+ struct fhk_var **xs;
+ pvalue **res;
+};
 void fhk_reset(struct fhk_graph *G, fhk_vbmap vmask, fhk_mbmap mmask);
 void fhk_reset_mask(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
 void fhk_supp(bm8 *vmask, bm8 *mmask, struct fhk_var *y);
@@ -340,66 +287,47 @@ void fhk_copy_returns(arena *arena, struct fhk_model *m, size_t n_ret, struct fh
 void fhk_compute_links(arena *arena, struct fhk_graph *G);
 struct fhk_var *fhk_get_var(struct fhk_graph *G, unsigned idx);
 struct fhk_model *fhk_get_model(struct fhk_graph *G, unsigned idx);
+void fhk_solver_init(struct fhk_solver *s, struct fhk_graph *G, unsigned nv);
+void fhk_solver_destroy(struct fhk_solver *s);
+void fhk_solver_bind(struct fhk_solver *s, unsigned vidx, pvalue *res);
+int fhk_solver_step(struct fhk_solver *s, unsigned idx);
        
 typedef struct ex_func ex_func;
 int ex_exec(ex_func *f, pvalue *ret, pvalue *argv);
 void ex_destroy(ex_func *f);
-ex_func *ex_R_create(const char *fname, const char *func, int narg, ptype *argt, int nret,
-  ptype *rett);
-ex_func *ex_simoC_create(const char *libname, const char *func, int narg, ptype *argt, int nret,
-  ptype *rett);
+ex_func *ex_R_create(const char *fname, const char *func, int narg, type *argt, int nret,
+  type *rett);
+ex_func *ex_simoC_create(const char *libname, const char *func, int narg, type *argt, int nret,
+  type *rett);
        
 enum {
- GMAP_VAR = 0,
- GMAP_ENV,
- GMAP_GLOBAL,
- GMAP_VIRTUAL,
- GMAP_COMPUTED
+ GMAP_BIND_OBJECT,
+ GMAP_BIND_Z,
+ GMAP_BIND_GLOBAL
 };
-enum {
- GMAP_NEW_OBJECT = 0,
- GMAP_NEW_Z
-};
-typedef struct gmap_change {
- uint8_t type;
- union {
-  uint8_t order;
-  uint32_t objid;
- };
-} gmap_change;
-typedef struct gmap_type {
- unsigned support_type : 8;
- unsigned resolve_type : 8;
-} gmap_type;
+typedef struct gmap_support {
+ bool (*is_visible)(tvalue to, unsigned reason, tvalue parm);
+ bool (*is_constant)(tvalue to, unsigned reason, tvalue parm);
+} gmap_support;
+typedef tvalue (*gmap_resolve)(void *);
 struct gmap_any {
- gmap_type type; const char *name;
+ const gmap_support *supp; gmap_resolve resolve; tvalue udata; const char *name; unsigned target_type : 16;
 };
-struct gv_var {
- gmap_type type; const char *name;
- unsigned objid;
- lexid varid;
- w_objref *wbind;
+struct gv_vec {
+ const gmap_support *supp; gmap_resolve resolve; tvalue udata; const char *name; unsigned target_type : 16;
+ unsigned target_offset : 16;
+ unsigned target_band : 16;
+ struct vec_ref *bind;
 };
-struct gv_env {
- gmap_type type; const char *name;
- w_env *wenv;
- gridpos *zbind;
+struct gv_grid {
+ const gmap_support *supp; gmap_resolve resolve; tvalue udata; const char *name; unsigned target_type : 16;
+ unsigned target_offset : 16;
+ struct grid *grid;
+ gridpos *bind;
 };
-struct gv_global {
- gmap_type type; const char *name;
- w_global *wglob;
-};
-struct gv_computed {
- gmap_type type; const char *name;
-};
-struct gv_virtual {
- union {
-  struct { gmap_type type; const char *name; };
-  struct gv_var var;
-  struct gv_env env;
- };
- pvalue (*resolve)(void *udata);
- void *udata;
+struct gv_data {
+ const gmap_support *supp; gmap_resolve resolve; tvalue udata; const char *name; unsigned target_type : 16;
+ void **ref;
 };
 struct gmap_model {
  const char *name;
@@ -410,23 +338,22 @@ void gmap_bind(struct fhk_graph *G, unsigned idx, struct gmap_any *g);
 void gmap_unbind(struct fhk_graph *G, unsigned idx);
 void gmap_bind_model(struct fhk_graph *G, unsigned idx, struct gmap_model *m);
 void gmap_unbind_model(struct fhk_graph *G, unsigned idx);
-void gmap_mark_reachable(struct fhk_graph *G, bm8 *vmask, gmap_change change);
-void gmap_mark_supported(struct fhk_graph *G, bm8 *vmask, gmap_change change);
+void gmap_supp_obj_var(struct gmap_any *v, uint64_t objid);
+void gmap_supp_grid_env(struct gmap_any *v, uint64_t order);
+void gmap_supp_global(struct gmap_any *v);
+tvalue gmap_res_vec(void *v);
+tvalue gmap_res_grid(void *v);
+tvalue gmap_res_data(void *v);
+void gmap_mark_visible(struct fhk_graph *G, bm8 *vmask, unsigned reason, tvalue parm);
+void gmap_mark_nonconstant(struct fhk_graph *G, bm8 *vmask, unsigned reason, tvalue parm);
 void gmap_make_reset_masks(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
 void gmap_init(struct fhk_graph *G, bm8 *init_v);
-void gmap_reset(struct fhk_graph *G, bm8 *reset_v, bm8 *reset_m);
-struct gs_vec_args {
- struct fhk_graph *G;
- w_obj *wobj;
- w_objref *wbind;
- gridpos *zbind;
- bm8 *reset_v;
- bm8 *reset_m;
- size_t nv;
- struct fhk_var **xs;
- type *types;
+struct gmap_solver_vec_bind {
+ struct vec_ref *v_bind;
+ gridpos *z_bind;
+ int z_band;
 };
-void gmap_solve_vec(w_objvec *vec, void **res, struct gs_vec_args *arg);
+void gmap_solve_vec(struct gmap_solver_vec_bind *bind, struct fhk_solver *solver, struct vec *vec);
        
 typedef float vf32 __attribute__((aligned(16)));
 typedef double vf64 __attribute__((aligned(16)));

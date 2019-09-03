@@ -93,6 +93,6 @@
 
 // init vector size for object vectors
 // Note: this must be a multiple of M2_VECTOR_SIZE!
-#ifndef WORLD_INIT_VEC_SIZE
-#define WORLD_INIT_VEC_SIZE 128
+#ifndef SIM_INIT_VEC_SIZE
+#define SIM_INIT_VEC_SIZE 32
 #endif

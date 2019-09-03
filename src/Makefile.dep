@@ -1,22 +1,21 @@
-main.o: main.c def.h /usr/include/luajit-2.0/lua.h \
- /usr/include/luajit-2.0/luaconf.h /usr/include/luajit-2.0/lualib.h \
- /usr/include/luajit-2.0/lua.h /usr/include/luajit-2.0/lauxlib.h
+main.o: main.c def.h /usr/include/luajit-2.1/lua.h \
+ /usr/include/luajit-2.1/luaconf.h /usr/include/luajit-2.1/lualib.h \
+ /usr/include/luajit-2.1/lua.h /usr/include/luajit-2.1/lauxlib.h
 bitmap.o: bitmap.c bitmap.h def.h
-fhk_graph.o: fhk_graph.c bitmap.h def.h fhk.h arena.h lex.h list.h grid.h
-fhk_solve.o: fhk_solve.c def.h fhk.h bitmap.h arena.h lex.h list.h grid.h
-fhk_aux.o: fhk_aux.c fhk.h bitmap.h def.h arena.h lex.h list.h grid.h
-lex.o: lex.c lex.h def.h list.h grid.h bitmap.h
+fhk_graph.o: fhk_graph.c bitmap.h def.h fhk.h arena.h type.h grid.h
+fhk_solve.o: fhk_solve.c def.h fhk.h bitmap.h arena.h type.h grid.h
+fhk_aux.o: fhk_aux.c fhk.h bitmap.h def.h arena.h type.h grid.h
+type.o: type.c type.h grid.h bitmap.h def.h
 arena.o: arena.c def.h arena.h
 sim.o: sim.c arena.h def.h sim.h
+sim_ds.o: sim_ds.c sim.h sim_ds.h grid.h bitmap.h def.h vec.h
 grid.o: grid.c grid.h bitmap.h def.h
-save.o: save.c arena.h
-gmap.o: gmap.c gmap.h fhk.h bitmap.h def.h arena.h lex.h list.h grid.h \
- world.h sim.h exec.h
+vec.o: vec.c vec.h
+gmap.o: gmap.c gmap.h fhk.h bitmap.h def.h arena.h type.h grid.h exec.h \
+ vec.h sim_ds.h sim.h
 vmath.o: vmath.c vmath.h def.h
-world.o: world.c world.h lex.h def.h list.h grid.h bitmap.h sim.h
-exec_aux.o: exec_aux.c exec_aux.h lex.h def.h list.h grid.h bitmap.h
-exec_R.o: exec_R.c exec.h lex.h def.h list.h grid.h bitmap.h exec_aux.h
-exec_simoC.o: exec_simoC.c exec.h lex.h def.h list.h grid.h bitmap.h \
- exec_aux.h
-lua/m2_cdef.lua: lua_exports.h lex.h def.h list.h grid.h bitmap.h sim.h \
- world.h fhk.h arena.h exec.h gmap.h vmath.h
+exec_aux.o: exec_aux.c exec_aux.h type.h grid.h bitmap.h def.h list.h
+exec_R.o: exec_R.c exec.h type.h grid.h bitmap.h def.h exec_aux.h
+exec_simoC.o: exec_simoC.c exec.h type.h grid.h bitmap.h def.h exec_aux.h
+lua/m2_cdef.lua: lua_exports.h type.h grid.h bitmap.h def.h sim.h \
+ sim_ds.h vec.h fhk.h arena.h exec.h gmap.h vmath.h

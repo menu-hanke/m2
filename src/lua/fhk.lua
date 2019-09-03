@@ -12,20 +12,8 @@ local function copy_ival_cst(check, a, b)
 end
 
 local function copy_set_cst(check, values)
-	local mask = 0
-
-	for _,v in ipairs(values) do
-		if v<0 or v>63 then
-			error(string.format("invalid bitset value: %d", v))
-		end
-
-		-- XXX: not sure if lua actually has 64-bit integers,
-		-- maybe this should be done in C
-		mask = bit.bor(mask, tonumber(C.packenum(v)))
-	end
-
 	check.cst.type = C.FHK_BITSET
-	check.cst.setmask = mask
+	check.cst.setmask = typing.mask(values)
 end
 
 local function copy_cst(check, cst)
@@ -38,401 +26,430 @@ local function copy_cst(check, cst)
 	end
 end
 
-local function create_checks(checks)
-	if #checks == 0 then
-		return
+local function create_checks(checks, sv)
+	local vars, cs = {}, {}
+	for name,cst in pairs(checks) do
+		table.insert(vars, sv[name])
+		table.insert(cs, cst)
 	end
 
-	local ret = ffi.new("struct fhk_check[?]", #checks)
+	if #cs == 0 then
+		return nil, 0
+	end
 
-	for i=0, #checks-1 do
+	local ret = ffi.new("struct fhk_check[?]", #cs)
+
+	for i=0, #cs-1 do
 		local c = ret+i
-		local check = checks[i+1]
-		c.var = check.var.fhk_var
-		c.costs[C.FHK_COST_IN] = check.cost_in
-		c.costs[C.FHK_COST_OUT] = check.cost_out
-		copy_cst(c, check.cst)
+		local cst = cs[i+1]
+		local var = vars[i+1]
+		c.var = var.fhk_var
+		c.costs[C.FHK_COST_IN] = cst.cost_in
+		c.costs[C.FHK_COST_OUT] = cst.cost_out
+		copy_cst(c, cst)
 	end
 
-	return ret
+	return ret, #cs
 end
 
-local function copyvars(vs)
-	if #vs == 0 then
-		return
+local function copyvars(dest, vars, sv)
+	for i,name in ipairs(vars) do
+		dest[i-1] = sv[name].fhk_var
 	end
 
-	local ret = ffi.new("struct fhk_var *[?]", #vs)
-	for i,fv in ipairs(vs) do
-		ret[i-1] = fv.fhk_var
-	end
-
-	return ret
+	return dest
 end
 
-local function create_graph(cfg)
-	local arena = arena.create()
-	local models = collect(cfg.fhk_models)
-	local vars = collect(cfg.fhk_vars)
-	local G = ffi.gc(C.fhk_alloc_graph(arena, #vars, #models),
-		function() C.arena_destroy(arena) end)
+local function copyptypes(vars, sv)
+	local ret = ffi.new("type[?]", #vars)
+	for i,name in ipairs(vars) do
+		ret[i-1] = typing.promote(sv[name].type.desc)
+	end
+	return ret, #vars
+end
 
-	for i,m in ipairs(models) do
-		m.fhk_model = C.fhk_get_model(G, i-1)
+local function copy_graph(vars, models)
+	local sv, sm = {}, {}
+	local nv, nm = 0, 0
+
+	for name,def in pairs(models) do
+		sm[name] = { src=def }
+
+		for _,p in ipairs(def.params) do
+			sv[p] = true
+		end
+
+		for v,_ in pairs(def.checks) do
+			sv[v] = true
+		end
+
+		for _,r in ipairs(def.returns) do
+			sv[r] = true
+		end
+
+		nm = nm + 1
 	end
 
-	for i,v in ipairs(vars) do
-		v.fhk_var = C.fhk_get_var(G, i-1)
+	for name,_ in pairs(sv) do
+		if not vars[name] then
+			error(string.format("Missing definition for var '%s'", name))
+		end
+		sv[name] = { type=vars[name] }
+		nv = nv + 1
 	end
 
-	for _,m in ipairs(models) do
+	return sv, sm, nv, nm
+end
+
+local function assign_ptrs(G, sv, sm)
+	local nv, nm = 0, 0
+
+	for _,m in pairs(sm) do
+		m.fhk_model = C.fhk_get_model(G, nm)
+		nm = nm+1
+	end
+
+	for _,v in pairs(sv) do
+		v.fhk_var = C.fhk_get_var(G, nv)
+		nv = nv+1
+	end
+end
+
+local function build_models(G, arena, sv, sm)
+	for _,m in pairs(sm) do
 		local fm = m.fhk_model
 
-		fm.k = m.k or 1
-		fm.c = m.c or 1
+		fm.k = m.src.k or 1
+		fm.c = m.src.c or 1
 
 		if not m.k or not m.c then
 			io.stderr:write(string.format("warn: No cost given for model %s - defaulting to 1\n",
-				m.name))
+				m.src.name))
 		end
 
-		local checks = create_checks(m.checks)
-		C.fhk_copy_checks(arena, fm, #m.checks, checks)
+		local checks, ncheck = create_checks(m.src.checks, sv)
+		C.fhk_copy_checks(arena, fm, ncheck, checks)
 
-		local params = copyvars(m.params)
-		C.fhk_copy_params(arena, fm, #m.params, params)
+		local params = copyvars(ffi.new("struct fhk_var *[?]", #m.src.params), m.src.params, sv)
+		C.fhk_copy_params(arena, fm, #m.src.params, params)
 
-		local returns = copyvars(m.returns)
-		C.fhk_copy_returns(arena, fm, #m.returns, returns)
+		local returns = copyvars(ffi.new("struct fhk_var *[?]", #m.src.returns), m.src.returns, sv)
+		C.fhk_copy_returns(arena, fm, #m.src.returns, returns)
 	end
+end
 
+local function build_graph(vars, models)
+	local sv, sm, nv, nm = copy_graph(vars, models)
+	local arena = arena.create()
+	local G = ffi.gc(C.fhk_alloc_graph(arena, nv, nm), function() C.arena_destroy(arena) end)
+	assign_ptrs(G, sv, sm)
+	build_models(G, arena, sv, sm)
 	C.fhk_compute_links(arena, G)
-
-	return G
+	return G, sv, sm
 end
 
-local function create_exf(cfg)
-	for _,m in pairs(cfg.fhk_models) do
-		m.ex_func = exec.from_model(m)
+local function create_models(sv, sm)
+	local ret = {}
+
+	for name,model in pairs(sm) do
+		local argt, narg = copyptypes(model.src.params, sv)
+		local rett, nret = copyptypes(model.src.returns, sv)
+		ret[name] = exec.create(
+			model.src.impl,
+			narg, argt,
+			nret, rett
+		)
 	end
+
+	return ret
 end
+
+local graph_mt = { __index = {
+	vmask = function(self)
+		local ret = ffi.gc(C.bm_alloc(self.n_var), C.bm_free)
+		C.bm_zero(ret, self.n_var)
+		return ret
+	end,
+
+	init  = C.gmap_init,
+	reset = C.fhk_reset_mask
+}}
+
+ffi.metatype("struct fhk_graph", graph_mt)
 
 --------------------------------------------------------------------------------
 
-local gmap = {}
-local gmap_mt = {__index=gmap}
+local binder_mt = { __call = function(self, ...) return self.bind(...) end }
 
-local function gen_objids(cfg)
-	local id = 1
-	for _,obj in pairs(cfg.objs) do
-		obj.fhk_mapping_id = id
-		id = id+1
-	end
+local function binder(ctype)
+	local b = malloc.new(ctype)
+	return setmetatable({
+		bind = function(v)
+			b[0] = v
+		end,
+		ref  = b+0
+	}, binder_mt)
 end
 
-local function create_obj_binds(cfg)
-	for _,obj in pairs(cfg.objs) do
-		obj.fhk_mapping_bind = ffi.new("w_objref")
-	end
+local bind = {
+	z   = function() return binder("gridpos") end,
+	vec = function() return binder("struct vec_ref") end
+}
+
+local function bind_ns(b)
+	return setmetatable({}, {__index=function(self, k)
+		self[k] = b()
+		return self[k]
+	end})
 end
 
-local function create_z_bind(cfg)
-	return ffi.new("gridpos[1]")
-end
+local mapper_mt = { __index = {} }
 
-local function set_gv(gv, name, type)
-	gv.name = name
-	gv.type.support_type = type
-	gv.type.resolve_type = type
-	return gv
-end
-
-local function map_var(src)
-	local ret = set_gv(
-		ffi.new("struct gv_var"),
-		src.name,
-		C.GMAP_VAR
-	)
-
-	ret.objid = src.obj.fhk_mapping_id
-	ret.wbind = src.obj.fhk_mapping_bind
-	ret.varid = src.varid
-
-	return ret
-end
-
-local function map_env(src, zbind)
-	local ret = set_gv(
-		ffi.new("struct gv_env"),
-		src.name,
-		C.GMAP_ENV
-	)
-
-	ret.wenv = src.wenv
-	ret.zbind = zbind
-
-	return ret
-end
-
-local function map_global(src)
-	local ret = set_gv(
-		ffi.new("struct gv_global"),
-		src.name,
-		C.GMAP_GLOBAL
-	)
-
-	ret.wglob = src.wglob
-
-	return ret
-end
-
-local function map_computed(name)
-	return set_gv(
-		ffi.new("struct gv_computed"),
-		name,
-		C.GMAP_COMPUTED
-	)
-end
-
-local function map_virtual(name, kind, closure, udata, arg)
-	local ret = ffi.new("struct gv_virtual")
-
-	ret.name = name
-	ret.type.resolve_type = C.GMAP_VIRTUAL
-
-	if kind == "var" then
-		ret.type.support_type = C.GMAP_VAR
-		ret.var.objid = arg.fhk_mapping_id
-	elseif kind == "env" then
-		ret.type.support_type = C.GMAP_ENV
-		ret.env.wenv = arg.wenv
-	elseif kind == "global" then
-		ret.type.support_type = C.GMAP_GLOBAL
-	else
-		assert(false)
-	end
-
-	ret.resolve = closure
-	ret.udata = udata
-
-	return ret
-end
-
-local function bind_mapping(G, fv, mapping)
-	fv.fhk_mapping = mapping
-	C.gmap_bind(G, fv.fhk_var.idx, ffi.cast("struct gmap_any *", mapping))
-end
-
-local function bind_model(G, fm)
-	fm.fhk_mapping = ffi.new("struct gmap_model")
-	fm.fhk_mapping.name = fm.name
-	fm.fhk_mapping.f = fm.ex_func
-	C.gmap_bind_model(G, fm.fhk_model.idx, fm.fhk_mapping)
-end
-
-local function map_all(G, cfg, zbind)
-	for _,obj in pairs(cfg.objs) do
-		for name,var in pairs(obj.vars) do
-			local fv = cfg.fhk_vars[name]
-			if fv then
-				bind_mapping(G, fv, map_var(var))
-			end
-		end
-	end
-
-	for name,env in pairs(cfg.envs) do
-		local fv = cfg.fhk_vars[name]
-		if fv then
-			bind_mapping(G, fv, map_env(env))
-		end
-	end
-
-	for name,glob in pairs(cfg.globals) do
-		local fv = cfg.fhk_vars[name]
-		if fv then
-			bind_mapping(G, fv, map_global(glob))
-		end
-	end
-
-	for name,fv in pairs(cfg.fhk_vars) do
-		if fv.kind == "computed" then
-			bind_mapping(G, fv, map_computed(name))
-		end
-	end
-end
-
-local function create_mapping(G, cfg)
+local function hook(G, vars, models)
 	C.gmap_hook(G)
-	gen_objids(cfg)
-	create_obj_binds(cfg)
-	-- TODO: could create zbind here only if there are any envs
-	local zbind = create_z_bind()
-	map_all(G, cfg, zbind)
-	for _,fm in pairs(cfg.fhk_models) do
-		bind_model(G, fm)
+	return setmetatable({
+		G      = G,
+		vars   = vars,
+		models = models,
+		bind   = {
+			z   = bind_ns(bind.z),
+			vec = bind_ns(bind.vec)
+		}
+	}, mapper_mt)
+end
+
+function mapper_mt.__index:bind_mapping(mapping, name)
+	local v = self.vars[name]
+	assert(not v.mapping)
+	-- name is a table key of mapper so it will not be gc'd thanks to interning
+	-- (meaning we don't need to copy it over, this pointer will work)
+	mapping.name = name
+	mapping.target_type = v.type.desc
+	C.gmap_bind(self.G, v.fhk_var.idx, ffi.cast("struct gmap_any *", mapping))
+	v.mapping = mapping
+	return mapping
+end
+
+function mapper_mt.__index:vec(name, offset, band, bind)
+	local ret = malloc.new("struct gv_vec")
+	ret.resolve = C.gmap_res_vec
+	ret.target_offset = offset
+	ret.target_band = band
+	ret.bind = bind
+	return self:bind_mapping(ret, name)
+end
+
+function mapper_mt.__index:grid(name, offset, grid, bind)
+	local ret = malloc.new("struct gv_grid")
+	ret.resolve = C.gmap_res_grid
+	ret.target_offset = offset
+	ret.grid = grid
+	ret.bind = bind
+	return self:bind_mapping(ret, name)
+end
+
+function mapper_mt.__index:data(name, ref)
+	local ret = malloc.new("struct gv_data")
+	ret.resolve = C.gmap_res_data
+	ret.ref = ref
+	return self:bind_mapping(ret, name)
+end
+
+function mapper_mt.__index:mapping(name, ctype)
+	local ret = self.vars[name].udata
+	if ctype then
+		ret = ffi.cast(ctype .. "*", ret)
 	end
-
-	return setmetatable({G=G, zbind=zbind}, gmap_mt)
-end
-
-local function newbitmap(n)
-	local bm = C.bm_alloc(n)
-	C.bm_zero(bm, n)
-	return bm
-end
-
-local function objchange(objid)
-	local ret = ffi.new("gmap_change")
-	ret.type = C.GMAP_NEW_OBJECT
-	ret.objid = objid
 	return ret
 end
 
-local function zchange(order)
-	local ret = ffi.new("gmap_change")
-	ret.type = C.GMAP_NEW_Z
-	ret.order = order
+function mapper_mt.__index:bind_model(name, f)
+	local model = self.models[name]
+	assert(not model.mapping)
+	local ret = malloc.new("struct gmap_model")
+	ret.name = name
+	ret.f = f
+	C.gmap_bind_model(self.G, model.fhk_model.idx, ret)
+	model.mapping = ret
+	model.mapping_f = f -- XXX: hack to prevent gc
 	return ret
 end
 
-local function set_init_vars(vmask, cfg, vars)
-	local solve = ffi.new("fhk_vbmap")
-	solve.stable = 1
-
-	for _,v in ipairs(vars) do
-		local fv = cfg.fhk_vars[v]
-		vmask[fv.fhk_var.idx] = solve.u8
+function mapper_mt.__index:create_models()
+	local exf = create_models(self.vars, self.models)
+	for name,f in pairs(exf) do
+		self:bind_model(name, f)
 	end
 end
 
-local function create_obj_init(G, cfg, obj)
-	local init_v = newbitmap(G.n_var)
-	C.gmap_mark_reachable(G, init_v, objchange(obj.fhk_mapping_id))
-	if obj.position_var then
-		C.gmap_mark_reachable(G, init_v, zchange(C.POSITION_ORDER));
+function mapper_mt.__index:c_solver(names)
+	local ret = ffi.gc(ffi.new("struct fhk_solver"), C.fhk_solver_destroy)
+	C.fhk_solver_init(ret, self.G, #names)
+
+	for i,name in ipairs(names) do
+		local v = self.vars[name]
+		ret.xs[i-1] = v.fhk_var
 	end
+
+	return ret
+end
+
+function mapper_mt.__index:mark_visible(vmask, reason, parm)
+	C.gmap_mark_visible(self.G, vmask, reason, parm)
+end
+
+function mapper_mt.__index:mark_nonconstant(vmask, reason, parm)
+	C.gmap_mark_nonconstant(self.G, vmask, reason, parm)
+end
+
+function mapper_mt.__index:set_init_vmask(vmask, names)
+	local G = self.G
 
 	local given = ffi.new("fhk_vbmap")
 	given.given = 1
-	C.bm_and64(init_v, G.n_var, C.bmask8(given.u8))
+	C.bm_and64(vmask, G.n_var, C.bmask8(given.u8))
 
 	local stable = ffi.new("fhk_vbmap")
 	stable.stable = 1
-	C.bm_or64(init_v, G.n_var, C.bmask8(stable.u8))
+	C.bm_or64(vmask, G.n_var, C.bmask8(stable.u8))
 
-	return init_v
-end
-
-local function create_obj_reset(G, obj)
-	local reset_v, reset_m = newbitmap(G.n_var), newbitmap(G.n_mod)
-	C.gmap_mark_supported(G, reset_v, objchange(obj.fhk_mapping_id))
-	if obj.z_order then
-		C.gmap_mark_supported(G, reset_v, zchange(obj.z_order))
-	end
-	C.gmap_make_reset_masks(G, reset_v, reset_m)
-	return reset_v, reset_m
-end
-
-function gmap:create_vec_solver(cfg, obj, vars)
-	local nv = #vars
-	local init_v = create_obj_init(self.G, cfg, obj)
-	set_init_vars(init_v, cfg, vars)
-	local reset_v, reset_m = create_obj_reset(self.G, obj)
-	local xs = malloc.new("struct fhk_var *", nv)
-	local types = malloc.new("type", nv)
-
-	local arg = ffi.gc(ffi.new("struct gs_vec_args"), function()
-		C.free(init_v)
-		C.free(reset_v)
-		C.free(reset_m)
-		C.free(xs)
-		C.free(types)
-	end)
-
-	for i,v in ipairs(vars) do
-		xs[i-1] = cfg.fhk_vars[v].fhk_var
-		types[i-1] = obj.vars[v].type
-	end
-
-	arg.G = self.G
-	arg.wobj = obj.wobj
-	arg.wbind = obj.fhk_mapping_bind
-	arg.zbind = self.zbind
-	arg.reset_v = reset_v
-	arg.reset_m = reset_m
-	arg.nv = nv
-	arg.xs = xs
-	arg.types = types
-
-	local res = ffi.new("void *[?]", nv)
-
-	return function(vec, d)
-		for i,v in ipairs(d) do
-			res[i-1] = v.data
-		end
-
-		C.gmap_init(arg.G, init_v)
-		C.gmap_solve_vec(vec, res, arg)
+	for _,name in ipairs(names) do
+		-- clear the given flag from targets, no need to set any flags,
+		-- fhk will handle that in fhk_solve()
+		local fv = self.vars[name]
+		vmask[fv.fhk_var.idx] = stable.u8
 	end
 end
+
+local solver_func_mt = { __index = {} }
+
+local function solver_make_res(names, vs)
+	local ret = {}
+	for i,name in pairs(names) do
+		local ptype = typing.promote(vs[name].type.desc)
+		ret[name] = {
+			idx = i-1,
+			ctype = typing.desc_ctype[tonumber(ptype)] .. "*"
+		}
+	end
+	return ret
+end
+
+function mapper_mt.__index:solver(names)
+	return setmetatable({
+		mapper   = self,
+		solver   = self:c_solver(names),
+		init_v   = self.G:vmask(),
+		names    = names,
+		res_info = solver_make_res(names, self.vars)
+	}, solver_func_mt)
+end
+
+function solver_func_mt.__index:from(src)
+	src:mark_visible(self.mapper, self.init_v)
+	src:mark_nonconstant(self.mapper, self.solver.reset_v)
+	self.mapper:set_init_vmask(self.init_v, self.names)
+	self.solver:make_reset_masks()
+
+	local solver_func = src:solver_func(self.mapper, self.solver)
+	self.solve = function(...)
+		self.mapper.G:init(self.init_v)
+		solver_func(...)
+	end
+
+	return self
+end
+
+function solver_func_mt.__index:res(name)
+	local info = self.res_info[name]
+	return ffi.cast(info.ctype, self.solver.res[info.idx])
+end
+
+function solver_func_mt:__call(...)
+	return self.solve(...)
+end
+
+local solver_mt = { __index = {
+	make_reset_masks = function(self)
+		C.gmap_make_reset_masks(self.G, self.reset_v, self.reset_m)
+	end,
+
+	bind = C.fhk_solver_bind,
+	step = C.fhk_solver_step
+}}
+
+ffi.metatype("struct fhk_solver", solver_mt)
+
+local function cast_any(f)
+	return function(self, ...)
+		return f(ffi.cast("struct gmap_any *", self), ...)
+	end
+end
+
+local support = {
+	var    = cast_any(C.gmap_supp_obj_var),
+	env    = cast_any(C.gmap_supp_grid_env),
+	global = cast_any(C.gmap_supp_global)
+}
+
+local function solver_vec_bind(v_bind)
+	local ret = ffi.new("struct gmap_solver_vec_bind")
+	ret.v_bind = v_bind
+	ret.z_bind = nil
+	ret.z_band = -1
+	return ret
+end
+
+local solver_vec_bind_mt = { __index = {
+	bind_z = function(self, z_band, z_bind)
+		self.z_band = z_band
+		self.z_bind = z_bind
+		return self
+	end,
+
+	solve_vec = C.gmap_solve_vec
+}}
+
+ffi.metatype("struct gmap_solver_vec_bind", solver_vec_bind_mt)
 
 --------------------------------------------------------------------------------
 
 local function wrap_closure(type, closure)
-	-- Note: this is hacky and very slow.
-	-- Don't use lua virtuals for other than testing,
-	-- use C callbacks for performance
+	-- Note: this is hacky, fragile and slow.
+	-- It probably only works on 64-bit.
+	-- Don't use this for anything else than testing, for perf use C callbacks.
 
-	local ptype = C.tpromote(type)
-	local pvfield = typing.pvalue_map[tonumber(ptype)]
+	local tname = type.tname
 	return ffi.cast("uint64_t (*)(void *)", function(udata)
-		local r = ffi.new("pvalue")
-		r[pvfield] = closure(udata)
+		local r = ffi.new("tvalue")
+		r[tname] = closure(udata)
 		return r.b
 	end)
 end
 
-local function inject(env, mapping, cfg)
+local rebind = function(sim, solver, n)
+	local res_size = n * ffi.sizeof("pvalue")
 
-	env.fhk = {
-
-		vec_solver = function(obj, vars)
-			return mapping:create_vec_solver(cfg, obj, vars)
-		end,
-
-		virtual = function(arg, kind, name, closure, udata)
-			local fv = cfg.fhk_vars[name]
-			if type(closure) == "function" then
-				closure = wrap_closure(fv.src.type, closure)
-			end
-			local virt = map_virtual(name, kind, closure, udata, arg)
-			bind_mapping(mapping.G, fv, virt)
-		end,
-
-		gvirtual = function(...)
-			return env.fhk.virtual(nil, "global", ...)
-		end
-
-	}
-
-	env._obj_meta.__index.vec_solver = env.fhk.vec_solver
-
-	env._obj_meta.__index.virtual = function(self, ...)
-		return env.fhk.virtual(self, "var", ...)
-	end
-
-	env._obj_meta.__index.bind = function(self, ref)
-		ffi.copy(self.fhk_mapping_bind, ref, ffi.sizeof("w_objref"))
-	end
-
-	env._env_meta.__index.virtual = function(self, ...)
-		return env.fhk.virtual(self, "env", ...)
+	for i=0, tonumber(solver.nv)-1 do
+		local res = C.sim_alloc(sim, res_size, ffi.alignof("pvalue"), C.SIM_FRAME)
+		solver:bind(i, res)
 	end
 end
 
+local function inject(env, mapper)
+	env.fhk = {
+		solve  = function(...) return mapper:solver({...}) end,
+		expose = function(x) x:expose(mapper) end
+	}
+end
+
 return {
-	create_graph   = create_graph,
-	create_exf     = create_exf,
-	create_mapping = create_mapping,
-	inject         = inject
+	build_graph     = build_graph,
+	create_models   = create_models,
+	hook            = hook,
+	solver_vec_bind = solver_vec_bind,
+	bind            = bind,
+	support         = support,
+	inject          = inject,
+	rebind          = rebind
 }

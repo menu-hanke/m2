@@ -75,14 +75,15 @@ void *sim_frame_alloc(struct sim *sim, size_t sz, size_t align){
 	return f_alloc(TOP(sim), sz, align);
 }
 
-void *sim_alloc(struct sim *sim, size_t sz, size_t align, sim_mem where){
+void *sim_alloc(struct sim *sim, size_t sz, size_t align, int lifetime){
 	static void *(*const allocf[])(struct sim *, size_t, size_t) = {
-		[SIM_ALLOC_STATIC] = sim_static_alloc,
-		[SIM_ALLOC_FRAME]  = sim_frame_alloc,
-		[SIM_ALLOC_VSTACK] = sim_vstack_alloc
+		[0]                      = sim_static_alloc,
+		[SIM_MUTABLE]            = NULL,
+		[SIM_FRAME]              = sim_frame_alloc,
+		[SIM_MUTABLE|SIM_FRAME]  = sim_vstack_alloc,
 	};
 
-	return allocf[where](sim, sz, align);
+	return allocf[lifetime](sim, sz, align);
 }
 
 int sim_is_frame_owned(struct sim *sim, void *p){

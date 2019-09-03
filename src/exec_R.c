@@ -2,8 +2,7 @@
 
 #include "exec.h"
 #include "exec_aux.h"
-#include "lex.h"
-#include "def.h"
+#include "type.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -48,8 +47,8 @@ static SEXP make_call(struct ex_R_func *X, const char *func);
 static void add_call(SEXP call);
 static void remove_call(SEXP call);
 
-ex_func *ex_R_create(const char *fname, const char *func, int narg, ptype *argt, int nret,
-		ptype *rett){
+ex_func *ex_R_create(const char *fname, const char *func, int narg, type *argt, int nret,
+		type *rett){
 
 	init_R_embedded();
 	source(fname);
@@ -70,7 +69,7 @@ static int ex_R_exec(struct ex_R_func *X, pvalue *ret, pvalue *argv){
 	exa_export_double(X->proto.narg, X->proto.argt, argv);
 
 	for(SEXP s=CDR(X->call); s != R_NilValue; s=CDR(s), argv++)
-		*REAL(CAR(s)) = argv->r;
+		*REAL(CAR(s)) = argv->f64;
 
 	int err;
 

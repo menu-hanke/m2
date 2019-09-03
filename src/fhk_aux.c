@@ -1,6 +1,7 @@
 #include "fhk.h"
 #include "arena.h"
 #include "bitmap.h"
+#include "type.h"
 
 #include <stddef.h>
 #include <stdlib.h>
@@ -110,6 +111,36 @@ struct fhk_var *fhk_get_var(struct fhk_graph *G, unsigned idx){
 struct fhk_model *fhk_get_model(struct fhk_graph *G, unsigned idx){
 	assert(idx < G->n_mod);
 	return &G->models[idx];
+}
+
+void fhk_solver_init(struct fhk_solver *s, struct fhk_graph *G, unsigned nv){
+	s->G = G;
+	s->reset_v = bm_alloc(G->n_var);
+	s->reset_m = bm_alloc(G->n_mod);
+	s->nv = nv;
+	s->xs = malloc(nv * sizeof(*s->xs));
+	s->res = malloc(nv * sizeof(*s->res));
+	bm_zero(s->reset_v, G->n_var);
+	bm_zero(s->reset_m, G->n_mod);
+}
+
+void fhk_solver_destroy(struct fhk_solver *s){
+	bm_free(s->reset_v);
+	bm_free(s->reset_m);
+	free(s->xs);
+	free(s->res);
+}
+
+void fhk_solver_bind(struct fhk_solver *s, unsigned vidx, pvalue *res){
+	s->res[vidx] = res;
+}
+
+int fhk_solver_step(struct fhk_solver *s, unsigned idx){
+	fhk_reset_mask(s->G, s->reset_v, s->reset_m);
+	int r = fhk_solve(s->G, s->nv, s->xs);
+	for(unsigned i=0;i<s->nv;i++)
+		s->res[i][idx] = s->xs[i]->value;
+	return r;
 }
 
 static void init_vars(struct fhk_var *x, size_t n){

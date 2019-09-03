@@ -2,7 +2,7 @@
 
 #include "bitmap.h"
 #include "arena.h"
-#include "lex.h" /* for pvalue */
+#include "type.h"
 
 #include <stdint.h>
 #include <stddef.h>
@@ -164,6 +164,15 @@ struct fhk_graph {
 	void *udata;
 };
 
+struct fhk_solver {
+	struct fhk_graph *G;
+	bm8 *reset_v;
+	bm8 *reset_m;
+	unsigned nv;
+	struct fhk_var **xs;
+	pvalue **res;
+};
+
 /* fhk_graph.c */
 void fhk_reset(struct fhk_graph *G, fhk_vbmap vmask, fhk_mbmap mmask);
 void fhk_reset_mask(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
@@ -181,3 +190,7 @@ void fhk_copy_returns(arena *arena, struct fhk_model *m, size_t n_ret, struct fh
 void fhk_compute_links(arena *arena, struct fhk_graph *G);
 struct fhk_var *fhk_get_var(struct fhk_graph *G, unsigned idx);
 struct fhk_model *fhk_get_model(struct fhk_graph *G, unsigned idx);
+void fhk_solver_init(struct fhk_solver *s, struct fhk_graph *G, unsigned nv);
+void fhk_solver_destroy(struct fhk_solver *s);
+void fhk_solver_bind(struct fhk_solver *s, unsigned vidx, pvalue *res);
+int fhk_solver_step(struct fhk_solver *s, unsigned idx);

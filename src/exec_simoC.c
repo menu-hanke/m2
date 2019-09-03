@@ -1,6 +1,6 @@
 #include "exec.h"
 #include "exec_aux.h"
-#include "lex.h"
+#include "type.h"
 #include "def.h"
 
 #include <stdlib.h>
@@ -33,8 +33,8 @@ static const struct ex_impl EX_SIMOC = {
 static void init_simo_cif(struct ex_simoC_func *X);
 static struct simoC_lib *load_simo_lib(const char *filename);
 
-ex_func *ex_simoC_create(const char *libname, const char *func, int narg, ptype *argt, int nret,
-		ptype *rett){
+ex_func *ex_simoC_create(const char *libname, const char *func, int narg, type *argt, int nret,
+		type *rett){
 
 	struct ex_simoC_func *X = malloc(sizeof *X);
 	X->ex.impl = &EX_SIMOC;

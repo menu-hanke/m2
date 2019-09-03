@@ -73,3 +73,19 @@ function delegate(owner, f)
 	end
 end
 
+function lazy(fs)
+	return function(self, k)
+		if fs[k] then
+			local v = fs[k](self)
+			self[k] = v
+			return v
+		end
+	end
+end
+
+local _next_uniq = 1
+function nextuniq()
+	local ret = _next_uniq
+	_next_uniq = _next_uniq+1
+	return ret
+end

@@ -1,172 +1,96 @@
 local typing = require "typing"
-local ffi = require "ffi"
-local C = ffi.C
+
+local function create_enums(data)
+	local ret = {}
+
+	for name,t in pairs(data.types) do
+		if t.kind == "enum" then
+			local e = typing.newenum()
+			for k,i in pairs(t.def) do
+				e.values[k] = i
+			end
+			ret[name] = e
+		end
+	end
+
+	return ret
+end
+
+local function create_type(data, enums, types, t)
+	if types[t.name] then
+		return types[t.name]
+	end
+
+	if t._parsing then
+		error(string.format("Recursive type definition: '%s' references itself", t.name))
+	end
+
+	t._parsing = true
+
+	local tp = typing.newtype(t.name)
+	for name,vt in pairs(t.def) do
+		if data.types[vt] and data.types[vt].kind == "struct" then
+			create_type(data, enums, types, data.types[vt])
+		end
+		local desc = typing.builtin_types[vt] or types[vt] or enums[vt] or vt
+		if not desc.ctype then
+			error(string.format("Type not resolved: %s (in var '%s' of type '%s')",
+				tostring(vt), name, t.name))
+		end
+		tp.vars[name] = desc
+	end
+
+	t._parsing = nil
+	types[t.name] = tp
+end
+
+local function create_types(data, enums)
+	local types = {}
+
+	for name,t in pairs(data.types) do
+		if t.kind == "struct" then
+			create_type(data, enums, types, t)
+		end
+	end
+
+	return types
+end
+
+local function export_fhk_vars(data, types, enums)
+	local ret = {}
+
+	for name,vtype in pairs(data.vars) do
+		ret[name] = typing.builtin_types[vtype] or enums[vtype]
+
+		if not ret[name] then
+			error(string.format("Not an exportable type '%s' (of fhk var '%s')",
+				vtype, name))
+		end
+	end
+
+	for tname,_ in pairs(data.type_exports) do
+		if not types[tname] then
+			error(string.format("Can't export type '%s': no definition found", tname))
+		end
+
+		for name,vtype in pairs(types[tname].vars) do
+			if ret[name] and vtype ~= ret[name] then
+				error(string.format("Trying to export var '%s' as conflicting types ('%s' and '%s')",
+					name, vtype.ctype, ret[name].ctype))
+			end
+			if vtype.desc then
+				ret[name] = vtype
+			end
+		end
+	end
+
+	return ret
+end
 
 local function newconf()
 	local conf_env = get_builtin_file("conf_env.lua")
 	local env, data = dofile(conf_env)
 	return env, data
-end
-
-local function patch_enum_values(data)
-	for name,t in pairs(data.types) do
-		if t.kind == "enum" then
-			local maxv = 0
-
-			for _,i in pairs(t.def) do
-				if i > maxv then
-					maxv = i
-				end
-			end
-
-			if maxv >= 64 then
-				error(string.format("%s: enum values >64 not yet implemented", name))
-			end
-
-			t.type = C.tfitenum(maxv)
-
-			for k,i in pairs(t.def) do
-				t.def[k] = C.packenum(i)
-			end
-		end
-	end
-end
-
-local function resolve_dt(data, xs)
-	for _,x in pairs(xs) do
-		local dtype = x.type
-
-		if type(dtype) == "table" then
-			if dtype.type == "objvec" then
-				x.vector_type = dtype.obj
-				dtype = "u"
-			else
-				error(string.format("Invalid type constraint '%s' of '%s'", dtype.type, x.name))
-			end
-		end
-
-		if typing.builtin_types[dtype] then
-			x.type = typing.builtin_types[dtype]
-		elseif data.types[dtype] then
-			x.type = data.types[dtype].type
-		else
-			error(string.format("No definition found for type '%s' of '%s'", dtype, x.name))
-		end
-	end
-end
-
-local function resolve_types(data)
-	patch_enum_values(data)
-	resolve_dt(data, data.globals)
-	resolve_dt(data, data.envs)
-	resolve_dt(data, data.vars)
-	for _,o in pairs(data.objs) do
-		resolve_dt(data, o.vars)
-	end
-end
-
-local function link_graph(data)
-	local fhk_vars = setmetatable({}, {__index=function(self,k)
-		self[k] = { models={} }
-		return self[k]
-	end})
-
-	-- TODO: only take vars that are actually used by models
-
-	for _,o in pairs(data.objs) do
-		for _,v in pairs(o.vars) do
-			fhk_vars[v.name].src = v
-			fhk_vars[v.name].kind = "var"
-		end
-	end
-
-	for _,e in pairs(data.envs) do
-		fhk_vars[e.name].src = e
-		fhk_vars[e.name].kind = "env"
-	end
-
-	for _,g in pairs(data.globals) do
-		fhk_vars[g.name].src = g
-		fhk_vars[g.name].kind = "global"
-	end
-
-	for _,v in pairs(data.vars) do
-		fhk_vars[v.name].src = v
-		fhk_vars[v.name].kind = "computed"
-	end
-
-	setmetatable(fhk_vars, nil)
-
-	for _,m in pairs(data.fhk_models) do
-		for i,p in ipairs(m.params) do
-			local fv = fhk_vars[p]
-			if not fv then
-				error(string.format("No definition found for var '%s' (parameter of model '%s')",
-					p, m.name))
-			end
-
-			m.params[i] = fv
-			-- delete named version, only used for dupe checking in conf_env
-			m.params[p] = nil
-		end
-
-		for i,c in ipairs(m.checks) do
-			local fv = fhk_vars[c.var]
-			if not fv then
-				error(string.format("No definition found for var '%s' (constraint of model '%s')",
-					c.var, m.name))
-			end
-
-			c.var = fv
-		end
-
-		for i,r in ipairs(m.returns) do
-			local fv = fhk_vars[r]
-			if not fv then
-				error(string.format("No definition found for var '%s' (return value of model '%s')",
-					r, m.name))
-			end
-
-			m.returns[i] = fv
-			m.returns[r] = nil
-			table.insert(fv.models, m)
-		end
-	end
-
-	data.fhk_vars = fhk_vars
-end
-
-local function verify_names(data)
-	local _used = {}
-	local used = setmetatable({}, {__newindex=function(_, k, v)
-		if _used[k] then
-			error(string.format("Duplicate definition of name '%s'", k))
-		end
-		_used[k] = v
-	end})
-
-	for _,o in pairs(data.objs) do
-		used[o.name] = true
-		for _,v in pairs(o.vars) do
-			used[v.name] = true
-		end
-	end
-
-	for _,e in pairs(data.envs) do
-		used[e.name] = true
-	end
-
-	for _,v in pairs(data.vars) do
-		used[v.name] = true
-	end
-end
-
-local function verify_models(data)
-	for _,m in pairs(data.fhk_models) do
-		if not m.impl then
-			error(string.format("Missing impl for model '%s'", m.name))
-		end
-	end
 end
 
 local function read(...)
@@ -177,12 +101,16 @@ local function read(...)
 		env.read(f)
 	end
 
-	resolve_types(data)
-	link_graph(data)
-	verify_names(data)
-	verify_models(data)
+	local enums = create_enums(data)
+	local types = create_types(data, enums)
+	local fhk_vars = export_fhk_vars(data, types, enums)
 
-	return data
+	return {
+		enums = enums,
+		types = types,
+		fhk_vars = fhk_vars,
+		fhk_models = data.models
+	}
 end
 
 return {
