@@ -51,7 +51,7 @@ struct gv_grid {
 
 struct gv_data {
 	GV_HEADER;
-	void **ref;
+	void *ref;
 };
 
 struct gmap_model {

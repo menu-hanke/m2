@@ -349,7 +349,7 @@ struct gv_grid {
 };
 struct gv_data {
  const gmap_support *supp; gmap_resolve resolve; tvalue udata; const char *name; unsigned target_type : 16;
- void **ref;
+ void *ref;
 };
 struct gmap_model {
  const char *name;

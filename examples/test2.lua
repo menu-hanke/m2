@@ -1,3 +1,8 @@
+globals.new("SC")
+fhk.expose(globals)
+
+G.SC = 3.14
+
 local Tree = obj("Tree", types.tree)
 fhk.expose(Tree)
 

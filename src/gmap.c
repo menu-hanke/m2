@@ -90,7 +90,7 @@ tvalue gmap_res_grid(void *v){
 
 tvalue gmap_res_data(void *v){
 	struct gv_data *d = v;
-	return *(tvalue *) *d->ref;
+	return *((tvalue *) d->ref);
 }
 
 #define MARK_CALLBACK(cb)\

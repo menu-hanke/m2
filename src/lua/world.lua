@@ -182,8 +182,84 @@ end
 
 --------------------------------------------------------------------------------
 
+local globals_mt = { __index={} }
+
+local function globalns(sim)
+	local ns = {}
+
+	local define = function(name, ctype, static)
+		local lifetime = (static and 0) or (ffi.C.SIM_MUTABLE + ffi.C.SIM_FRAME)
+		local d = ffi.C.sim_create_data(sim, ffi.sizeof(ctype), ffi.alignof(ctype), lifetime)
+		ns[name] = ffi.cast(ctype .. "*", d)
+	end
+
+	return setmetatable({}, {
+		__index = function(_, name)
+			return ns[name][0]
+		end,
+
+		__newindex = function(_, name, value)
+			ns[name][0] = value
+		end
+	}), define, ns
+end
+
+local function globals(sim)
+	local G, define, ns = globalns(sim)
+	return setmetatable({
+		sim = sim,
+		G = G,
+		define = define,
+		ns = ns
+	}, globals_mt)
+end
+
+function globals_mt.__index:expose(mapper)
+	for name,p in pairs(self.ns) do
+		if mapper.vars[name] then
+			fhk.support.global(mapper:data(name, p))
+		end
+	end
+end
+
+function globals_mt.__index:mark_visible(mapper, vmask)
+	mapper:mark_visible(vmask, ffi.C.GMAP_BIND_GLOBAL, typing.tvalue.u64(0))
+end
+
+function globals_mt.__index:mark_nonconstant(mapper, vmask)
+	mapper:mark_nonconstant(vmask. ffi.C.GMAP_BIND_GLOBAL, typing.tvalue.u64(0))
+end
+
+function globals_mt.__index:solver_func(mapper, solver)
+	local values = ffi.cast("pvalue *", ffi.C.sim_static_alloc(self.sim,
+		solver.nv * ffi.sizeof("pvalue"), ffi.alignof("pvalue")))
+	
+	for i=0, tonumber(solver.nv)-1 do
+		solver:bind(i, values+i)
+	end
+
+	return function()
+		ffi.C.fhk_solver_step(solver, 0)
+	end
+end
+
+--------------------------------------------------------------------------------
+
+local function get_ctype(name, ctype, env)
+	if type(ctype) == "string" then return ctype end
+	if ctype and ctype.ctype then return ctype.ctype end
+	return env.fhk.typeof(name).ctype
+end
+
 local function inject(env, sim)
 	env.obj = delegate(sim, obj)
+
+	local gs = globals(sim)
+	env.globals = gs
+	env.G = gs.G
+
+	gs.new = function(name, ctype) gs.define(name, get_ctype(name, ctype, env), false) end
+	gs.static = function(name, ctype) gs.define(name, get_ctype(name, ctype, env), true) end
 end
 
 return {

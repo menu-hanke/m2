@@ -1,5 +1,5 @@
-tree_d <- function(age, species, a=1, b=2){
-	return((a+age)*species*b);
+tree_d <- function(age, species, SC, a=1, b=2){
+	return((a+age)*species*b + SC);
 }
 
 tree_h <- function(age, species){

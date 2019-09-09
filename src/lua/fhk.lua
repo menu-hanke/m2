@@ -451,7 +451,8 @@ end
 local function inject(env, mapper)
 	env.fhk = {
 		solve  = function(...) return mapper:solver({...}) end,
-		expose = function(x) x:expose(mapper) end
+		expose = function(x) x:expose(mapper) end,
+		typeof = function(x) return mapper.vars[x].type end
 	}
 end
 

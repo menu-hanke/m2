@@ -32,12 +32,16 @@ define.type.tree {
 	biomass = "biomass"
 }
 
+define.vars {
+	"SC"
+}
+
 fhk.export("tree")
 
 --------------------------------------------------------------------------------
 
 define.model.tree_d {
-	params  = { "age", "species" },
+	params  = { "age", "species", "SC" },
 	returns = { "d" },
 	coeffs  = { "a", "b" },
 	impl    = "R::examples/models2.r::tree_d"
