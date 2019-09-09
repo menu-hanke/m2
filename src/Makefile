@@ -54,8 +54,8 @@ CFLAGS = $(LUAJIT_CFLAGS) $(CCOPT) $(CCDEBUG) $(CCDEF) $(CCWARN) $(XCFLAGS)
 LDFLAGS = -rdynamic $(LUAJIT_LIB) $(CCOPT) $(CCDEBUG) $(XLDFLAGS)
 
 dep: $(M2_C) $(LUA_EXPORTS)
-	$(CC) $(CFLAGS) -MM $(M2_C) > Makefile.dep
-	$(CC) $(CFLAGS) -MM -MT $(LUA_FFI_API) $(LUA_EXPORTS) >> Makefile.dep
+	$(CC) $(CCOPT) $(CCDEBUG) $(CCDEF) $(XCFLAGS) -MM $(M2_C) > Makefile.dep
+	$(CC) $(CCOPT) $(CCDEBUG) $(CCDEF) $(XCFLAGS) -MM -MT $(LUA_FFI_API) $(LUA_EXPORTS) >> Makefile.dep
 
 # XXX: this is a turbo hacky way to do it
 # for whatever reason this is really fragile, it breaks if

@@ -1,6 +1,4 @@
-main.o: main.c def.h /usr/include/luajit-2.1/lua.h \
- /usr/include/luajit-2.1/luaconf.h /usr/include/luajit-2.1/lualib.h \
- /usr/include/luajit-2.1/lua.h /usr/include/luajit-2.1/lauxlib.h
+main.o: main.c def.h
 bitmap.o: bitmap.c bitmap.h def.h
 fhk_graph.o: fhk_graph.c bitmap.h def.h fhk.h arena.h type.h grid.h
 fhk_solve.o: fhk_solve.c def.h fhk.h bitmap.h arena.h type.h grid.h
