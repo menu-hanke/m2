@@ -7,12 +7,15 @@ XCFLAGS =
 XLDFLAGS = 
 
 MODEL_LANG    ?= R SimoC
+LUAPATH       ?= $(abspath lua)
 LUAJIT_CFLAGS ?= $(shell pkg-config --cflags luajit)
 LUAJIT_LIB    ?= $(shell pkg-config --libs luajit)
 R_CFLAGS      ?= $(shell pkg-config --cflags libR)
 R_LIB         ?= $(shell pkg-config --libs-only-l --libs-only-L libR)
 LIBFFI_CFLAGS ?= $(shell pkg-config --cflags libffi)
 LIBFFI_LIB    ?= $(shell pkg-config --libs libffi)
+
+XCFLAGS += -DM2_LUAPATH='"$(LUAPATH)"'
 
 M2_EXECUTABLE = m2
 LUA_FFI_API = lua/m2_cdef.lua
