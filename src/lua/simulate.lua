@@ -20,7 +20,7 @@ local function main(args)
 	local cfg = conf.read(args.config)
 	local _sim = sim.create()
 	local mapper = fhk.hook(fhk.build_graph(cfg.fhk_vars, cfg.fhk_models))
-	mapper:create_models()
+	mapper:create_models(cfg.calib)
 
 	local env = setmetatable({}, {__index=_G})
 	sim.inject(env, _sim)

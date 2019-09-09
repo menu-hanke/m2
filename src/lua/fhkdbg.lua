@@ -13,7 +13,7 @@ ffi.cdef [[
 
 	struct Lmodel_info {
 		const char *desc;
-		ex_func *f;
+		struct model *model;
 	};
 ]]
 
@@ -29,7 +29,7 @@ end
 
 local function hook_graph(G)
 	G.exec_model = function(G, udata, ret, args)
-		return modelinfo(udata).f(ret, args)
+		return modelinfo(udata).model(ret, args)
 	end
 
 	G.resolve_var = function(G, udata, value)
@@ -60,7 +60,7 @@ local function hook_udata(vars, models, exf)
 	for name,fm in pairs(models) do
 		local info = malloc.new("struct Lmodel_info")
 		info.desc = name
-		info.f = exf[name]
+		info.model = exf[name]
 		fm.info = info
 		fm.fhk_model.udata = info
 	end
@@ -215,7 +215,7 @@ end
 local function main(args)
 	local cfg = conf.read(args.config)
 	local G, vars, models = fhk.build_graph(cfg.fhk_vars, cfg.fhk_models)
-	local exf = fhk.create_models(vars, models)
+	local exf = fhk.create_models(vars, models, cfg.calib)
 	hook_udata(vars, models, exf)
 	hook_graph(G)
 

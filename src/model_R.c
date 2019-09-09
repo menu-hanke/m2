@@ -1,7 +1,8 @@
 #define R_NO_REMAP
 
-#include "exec.h"
-#include "exec_aux.h"
+#include "model.h"
+#include "model_aux.h"
+#include "model_R.h"
 #include "type.h"
 
 #include <stdlib.h>
@@ -16,9 +17,9 @@
 #define M2_R_HOME "/usr/lib/R"
 #endif
 
-struct ex_R_func {
-	ex_func ex;
-	struct exa_prototype proto;
+struct model_R {
+	struct model model;
+	enum mod_R_calib_mode mode;
 	SEXP call;
 };
 
@@ -31,67 +32,94 @@ struct GS {
 
 static struct GS *GS = NULL;
 
-static int ex_R_exec(struct ex_R_func *X, pvalue *ret, pvalue *argv);
-static void ex_R_destroy(struct ex_R_func *X);
+static int mod_R_call(struct model_R *m, pvalue *ret, pvalue *argv);
+static void mod_R_calibrate(struct model_R *m);
+static void mod_R_destroy(struct model_R *m);
 
-static const struct ex_impl EX_R = {
-	.exec    = (ex_exec_f) ex_R_exec,
-	.destroy = (ex_destroy_f) ex_R_destroy
+static const struct model_func MOD_R = {
+	.call      = (model_call_f) mod_R_call,
+	.calibrate = (model_calibrate_f) mod_R_calibrate,
+	.destroy   = (model_destroy_f) mod_R_destroy
 };
 
 static void init_R_embedded();
 static int source(const char *fname);
 static int sourcef(const char *fname);
 static SEXP eval(SEXP call, int *err);
-static SEXP make_call(struct ex_R_func *X, const char *func);
+static SEXP make_call(struct model_R *m, const char *func);
 static void add_call(SEXP call);
 static void remove_call(SEXP call);
 
-ex_func *ex_R_create(const char *fname, const char *func, int narg, type *argt, int nret,
-		type *rett){
-
+model *mod_R_create(struct mod_R_def *def){
 	init_R_embedded();
-	source(fname);
+	source(def->fname);
 
-	struct ex_R_func *X = malloc(sizeof *X);
-	X->ex.impl = &EX_R;
+	struct model_R *m = malloc(sizeof *m);
+	maux_initmodel(&m->model,
+			&MOD_R,
+			def->n_arg, def->atypes,
+			def->n_ret, def->rtypes,
+			def->n_coef
+	);
 
-	exa_init_prototype(&X->proto, narg, argt, nret, rett);
+	m->mode = def->mode;
 
-	SEXP call = make_call(X, func);
-	X->call = call;
+	SEXP call = make_call(m, def->func);
+	m->call = call;
 	add_call(call);
 
-	return (ex_func *) X;
+	return (model *) m;
 }
 
-static int ex_R_exec(struct ex_R_func *X, pvalue *ret, pvalue *argv){
-	exa_export_double(X->proto.narg, X->proto.argt, argv);
+static int mod_R_call(struct model_R *m, pvalue *ret, pvalue *argv){
+	maux_exportd(&m->model, argv);
 
-	for(SEXP s=CDR(X->call); s != R_NilValue; s=CDR(s), argv++)
+	SEXP s = CDR(m->call);
+	for(unsigned i=0;i<m->model.n_arg;i++,argv++,s=CDR(s))
 		*REAL(CAR(s)) = argv->f64;
 
 	int err;
 
-	SEXP r = eval(X->call, &err);
+	SEXP r = eval(m->call, &err);
 
-	if(!err){
-		assert(TYPEOF(r) == REALSXP && (unsigned)LENGTH(r) == X->proto.nret);
-		memcpy(ret, REAL(r), X->proto.nret * sizeof(*ret));
-
-		exa_import_double(X->proto.nret, X->proto.rett, ret);
-
-		return 0;
+	if(err){
+		maux_errf("R error: %d\n", err);
+		return MODEL_CALL_RUNTIME_ERROR;
 	}
 
-	dv("eval error: %d\n", err);
-	return 1;
+	if(TYPEOF(r) != REALSXP || (unsigned)LENGTH(r) != m->model.n_ret){
+		maux_errf("Invalid return (type: %d length: %d) expected (type: %d length: %d)",
+				TYPEOF(r), LENGTH(r), REALSXP, m->model.n_arg);
+		return MODEL_CALL_INVALID_RETURN;
+	}
+
+	memcpy(ret, REAL(r), m->model.n_ret * sizeof(*ret));
+	maux_importd(&m->model, ret);
+
+	return MODEL_CALL_OK;
 }
 
-static void ex_R_destroy(struct ex_R_func *X){
-	exa_destroy_prototype(&X->proto);
-	remove_call(X->call);
-	free(X);
+static void mod_R_calibrate(struct model_R *m){
+	SEXP s = CDR(m->call);
+
+	// skip args, after this s points to coefficients
+	for(unsigned i=0;i<m->model.n_arg;i++)
+		s = CDR(s);
+
+	if(m->mode == MOD_R_EXPAND){
+		for(unsigned i=0;i<m->model.n_coef;i++,s=CDR(s)){
+			*REAL(CAR(s)) = m->model.coefs[i];
+			//dv("calibrate coeff[%d] = %f\n", i, *REAL(CAR(s)));
+		}
+	}else{
+		memcpy(REAL(CAR(s)), m->model.coefs, m->model.n_coef * sizeof(*m->model.coefs));
+	}
+}
+
+static void mod_R_destroy(struct model_R *m){
+	maux_destroymodel(&m->model);
+	remove_call(m->call);
+	free(m);
 }
 
 static void init_R_embedded(){
@@ -128,7 +156,7 @@ static void init_R_embedded(){
 }
 
 static int source(const char *fname){
-	if(exa_get_file_data(fname))
+	if(maux_get_file_data(fname))
 		return 0;
 
 	dv("R: sourcing %s\n", fname);
@@ -137,7 +165,7 @@ static int source(const char *fname){
 		dv("R: error in source: %d\n", ret);
 		return ret;
 	}else{
-		exa_set_file_data(fname, (void *)1);
+		maux_set_file_data(fname, (void *)1);
 		return 0;
 	}
 }
@@ -168,7 +196,7 @@ static SEXP eval(SEXP call, int *err){
 	// XXX: you can get the error string using R_curErrorBuf()
 }
 
-static SEXP make_call(struct ex_R_func *X, const char *func){
+static SEXP make_call(struct model_R *m, const char *func){
 	SEXP fsym = Rf_install(func);
 	SEXP ret = Rf_lang1(fsym);
 
@@ -178,8 +206,17 @@ static SEXP make_call(struct ex_R_func *X, const char *func){
 
 	// all args are passed as real because R integers would be 32 bit anyway
 	// so no point in using them
-	for(unsigned i=0;i<X->proto.narg;i++)
+	for(unsigned i=0;i<m->model.n_arg;i++)
 		Rf_listAppend(ret, Rf_lang1(Rf_allocVector(REALSXP, 1)));
+
+	if(MODEL_ISCALIBRATED(&m->model)){
+		if(m->mode == MOD_R_EXPAND){
+			for(unsigned i=0;i<m->model.n_coef;i++)
+				Rf_listAppend(ret, Rf_lang1(Rf_allocVector(REALSXP, 1)));
+		}else{
+			Rf_listAppend(ret, Rf_allocVector(REALSXP, m->model.n_coef));
+		}
+	}
 
 	UNPROTECT(1);
 

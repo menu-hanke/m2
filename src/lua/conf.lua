@@ -108,6 +108,7 @@ local function read(...)
 	return {
 		enums = enums,
 		types = types,
+		calib = data.calib,
 		fhk_vars = fhk_vars,
 		fhk_models = data.models
 	}

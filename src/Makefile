@@ -6,8 +6,7 @@ CCWARN = -Wall -Wextra
 XCFLAGS = 
 XLDFLAGS = 
 
-EXEC_LANG     ?= R simoC
-
+MODEL_LANG    ?= R SimoC
 LUAJIT_CFLAGS ?= $(shell pkg-config --cflags luajit)
 LUAJIT_LIB    ?= $(shell pkg-config --libs luajit)
 R_CFLAGS      ?= $(shell pkg-config --cflags libR)
@@ -35,17 +34,15 @@ ubsan: CCDEBUG = -DDEBUG
 ubsan: default
 
 M2_O = main.o bitmap.o fhk_graph.o fhk_solve.o fhk_aux.o type.o arena.o sim.o sim_ds.o grid.o vec.o\
-	   gmap.o vmath.o exec_aux.o
+	   gmap.o vmath.o model_aux.o
 
-ifneq (,$(findstring R,$(EXEC_LANG)))
-	M2_O += exec_R.o
-	CCDEF += -DM2_EXEC_R
+ifneq (,$(findstring R,$(MODEL_LANG)))
+	M2_O += model_R.o
 	XLDFLAGS += $(R_LIB)
 endif
 
-ifneq (,$(findstring simoC,$(EXEC_LANG)))
-	M2_O += exec_simoC.o
-	CCDEF += -DM2_EXEC_SIMOC
+ifneq (,$(findstring SimoC,$(MODEL_LANG)))
+	M2_O += model_SimoC.o
 	XLDFLAGS += $(LIBFFI_LIB) -ldl
 endif
 
@@ -81,10 +78,10 @@ clean:
 
 include Makefile.dep
 
-exec_R.o: exec_R.c
+model_R.o: model_R.c
 	$(CC) $(CFLAGS) $(R_CFLAGS) -c $< -o $@
 
-exec_simoC.o: exec_simoC.c
+model_SimoC.o: model_SimoC.c
 	$(CC) $(CFLAGS) $(LIBFFI_CFLAGS) -c $< -o $@
 
 %.o: %.c

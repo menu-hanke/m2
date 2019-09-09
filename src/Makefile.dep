@@ -11,11 +11,14 @@ sim.o: sim.c arena.h def.h sim.h
 sim_ds.o: sim_ds.c sim.h sim_ds.h grid.h bitmap.h def.h vec.h
 grid.o: grid.c grid.h bitmap.h def.h
 vec.o: vec.c vec.h
-gmap.o: gmap.c gmap.h fhk.h bitmap.h def.h arena.h type.h grid.h exec.h \
+gmap.o: gmap.c gmap.h fhk.h bitmap.h def.h arena.h type.h grid.h model.h \
  vec.h sim_ds.h sim.h
 vmath.o: vmath.c vmath.h def.h
-exec_aux.o: exec_aux.c exec_aux.h type.h grid.h bitmap.h def.h list.h
-exec_R.o: exec_R.c exec.h type.h grid.h bitmap.h def.h exec_aux.h
-exec_simoC.o: exec_simoC.c exec.h type.h grid.h bitmap.h def.h exec_aux.h
+model_aux.o: model_aux.c model.h type.h grid.h bitmap.h def.h list.h
+model_R.o: model_R.c model.h type.h grid.h bitmap.h def.h model_aux.h \
+ model_R.h
+model_SimoC.o: model_SimoC.c model.h type.h grid.h bitmap.h def.h \
+ model_aux.h model_SimoC.h
 lua/m2_cdef.lua: lua_exports.h type.h grid.h bitmap.h def.h sim.h \
- sim_ds.h vec.h fhk.h arena.h exec.h gmap.h vmath.h
+ sim_ds.h vec.h fhk.h arena.h gmap.h model.h vmath.h model_all.h \
+ model_R.h model_aux.h model_SimoC.h

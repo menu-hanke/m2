@@ -1,5 +1,5 @@
 local ffi = require "ffi"
-local exec = require "exec"
+local models = require "model"
 local typing = require "typing"
 local arena = require "arena"
 local malloc = require "malloc"
@@ -148,17 +148,29 @@ local function build_graph(vars, models)
 	return G, sv, sm
 end
 
-local function create_models(sv, sm)
+local function create_models(sv, sm, calib)
+	calib = calib or {}
 	local ret = {}
 
 	for name,model in pairs(sm) do
-		local argt, narg = copyptypes(model.src.params, sv)
-		local rett, nret = copyptypes(model.src.returns, sv)
-		ret[name] = exec.create(
-			model.src.impl,
-			narg, argt,
-			nret, rett
-		)
+		local def = models.def(model.src.impl)
+		def.atypes, def.n_arg = copyptypes(model.src.params, sv)
+		def.rtypes, def.n_ret = copyptypes(model.src.returns, sv)
+
+		local cal = calib[name]
+		if cal then
+			def.n_coef = #model.src.coeffs
+		end
+
+		local mod = def()
+		ret[name] = mod
+
+		if cal then
+			for i,c in ipairs(model.src.coeffs) do
+				mod.coefs[i-1] = cal[c]
+			end
+			mod:calibrate()
+		end
 	end
 
 	return ret
@@ -263,20 +275,20 @@ function mapper_mt.__index:mapping(name, ctype)
 	return ret
 end
 
-function mapper_mt.__index:bind_model(name, f)
+function mapper_mt.__index:bind_model(name, mod)
 	local model = self.models[name]
 	assert(not model.mapping)
 	local ret = malloc.new("struct gmap_model")
 	ret.name = name
-	ret.f = f
+	ret.mod = mod
 	C.gmap_bind_model(self.G, model.fhk_model.idx, ret)
 	model.mapping = ret
 	model.mapping_f = f -- XXX: hack to prevent gc
 	return ret
 end
 
-function mapper_mt.__index:create_models()
-	local exf = create_models(self.vars, self.models)
+function mapper_mt.__index:create_models(calib)
+	local exf = create_models(self.vars, self.models, calib)
 	for name,f in pairs(exf) do
 		self:bind_model(name, f)
 	end

@@ -5,7 +5,7 @@
 #include "bitmap.h"
 #include "grid.h"
 #include "vec.h"
-#include "exec.h"
+#include "model.h"
 #include "def.h"
 
 #include <stdlib.h>
@@ -51,7 +51,7 @@ void gmap_bind_model(struct fhk_graph *G, unsigned idx, struct gmap_model *m){
 	dv("%smap %s (%p) -> fhk model[%u]\n",
 			G->models[idx].udata ? "(!) re" : "",
 			m->name,
-			m->f,
+			m->mod,
 			idx
 	);
 
@@ -177,7 +177,8 @@ static bool global_is_visible(tvalue to, unsigned reason, tvalue parm){
 
 static int G_model_exec(struct fhk_graph *G, void *udata, pvalue *ret, pvalue *args){
 	(void)G;
-	return ex_exec(((struct gmap_model *) udata)->f, ret, args);
+	struct model *m = ((struct gmap_model *) udata)->mod;
+	return MODEL_CALL(m, ret, args);
 }
 
 static int G_resolve_var(struct fhk_graph *G, void *udata, pvalue *value){

@@ -39,6 +39,7 @@ fhk.export("tree")
 define.model.tree_d {
 	params  = { "age", "species" },
 	returns = { "d" },
+	coeffs  = { "a", "b" },
 	impl    = "R::examples/models2.r::tree_d"
 }
 
@@ -47,3 +48,5 @@ define.model.tree_h {
 	returns = { "h" },
 	impl    = "R::examples/models2.r::tree_h"
 }
+
+read.calib "examples/calib.json"

@@ -94,4 +94,4 @@ define.model.cy_d {
 	impl    = "R::examples/models1.r::cy_d"
 }
 
-fhk.read_coeff "examples/coeff.json"
+read.cost "examples/cost.json"

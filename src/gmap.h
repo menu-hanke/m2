@@ -3,7 +3,7 @@
 #include "fhk.h"
 #include "bitmap.h"
 #include "type.h"
-#include "exec.h"
+#include "model.h"
 #include "grid.h"
 #include "vec.h"
 
@@ -56,7 +56,7 @@ struct gv_data {
 
 struct gmap_model {
 	const char *name;
-	ex_func *f;
+	struct model *mod;
 };
 
 void gmap_hook(struct fhk_graph *G);

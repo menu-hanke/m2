@@ -292,14 +292,36 @@ void fhk_solver_destroy(struct fhk_solver *s);
 void fhk_solver_bind(struct fhk_solver *s, unsigned vidx, pvalue *res);
 int fhk_solver_step(struct fhk_solver *s, unsigned idx);
        
-typedef struct ex_func ex_func;
-int ex_exec(ex_func *f, pvalue *ret, pvalue *argv);
-void ex_destroy(ex_func *f);
-ex_func *ex_R_create(const char *fname, const char *func, int narg, type *argt, int nret,
-  type *rett);
-ex_func *ex_simoC_create(const char *libname, const char *func, int narg, type *argt, int nret,
-  type *rett);
        
+enum {
+ MODEL_CALL_OK = 0,
+ MODEL_CALL_RUNTIME_ERROR = 1,
+ MODEL_CALL_INVALID_RETURN = 2
+};
+enum {
+ MODEL_CALIBRATED = 0x1,
+ MODEL_INTERPOLATE = 0x2
+};
+typedef struct model model;
+typedef int (*model_call_f)(model *, pvalue *ret, pvalue *argv);
+typedef void (*model_calibrate_f)(model *);
+typedef void (*model_destroy_f)(model *);
+struct model_func {
+ model_call_f call;
+ model_calibrate_f calibrate;
+ model_destroy_f destroy;
+};
+struct model {
+ const struct model_func *func;
+ unsigned flags;
+ unsigned n_arg;
+ unsigned n_ret;
+ unsigned n_coef;
+ type *atypes;
+ type *rtypes;
+ double *coefs;
+};
+const char *model_error();
 enum {
  GMAP_BIND_OBJECT,
  GMAP_BIND_Z,
@@ -331,7 +353,7 @@ struct gv_data {
 };
 struct gmap_model {
  const char *name;
- ex_func *f;
+ struct model *mod;
 };
 void gmap_hook(struct fhk_graph *G);
 void gmap_bind(struct fhk_graph *G, unsigned idx, struct gmap_any *g);
@@ -360,4 +382,33 @@ typedef double vf64 __attribute__((aligned(16)));
 void vset_f64(vf64 *d, double c, size_t n);
 void vadd_f64s(vf64 *d, vf64 *a, double c, size_t n);
 void vadd_f64v(vf64 *d, vf64 *a, const vf64 *restrict b, size_t n);
+       
+       
+void *maux_get_file_data(const char *file);
+void maux_set_file_data(const char *file, void *udata);
+void maux_initmodel(struct model *m, const struct model_func *func, unsigned n_arg, type *atypes,
+  unsigned n_ret, type *rtypes, unsigned n_coef);
+void maux_destroymodel(struct model *m);
+void maux_exportd(struct model *m, pvalue *argv);
+void maux_importd(struct model *m, pvalue *retv);
+void maux_errf(const char *fmt, ...);
+enum mod_R_calib_mode {
+ MOD_R_EXPAND,
+ MOD_R_PASS_VECTOR
+};
+struct mod_R_def {
+ unsigned n_arg; unsigned n_ret; type *atypes; type *rtypes;
+ const char *fname;
+ const char *func;
+ unsigned n_coef;
+ enum mod_R_calib_mode mode;
+};
+model *mod_R_create(struct mod_R_def *def);
+       
+struct mod_SimoC_def {
+ unsigned n_arg; unsigned n_ret; type *atypes; type *rtypes;
+ const char *libname;
+ const char *func;
+};
+model *mod_SimoC_create(struct mod_SimoC_def *def);
 ]]

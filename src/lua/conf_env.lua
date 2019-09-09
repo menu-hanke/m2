@@ -1,9 +1,24 @@
 local typing = require "typing"
 local env = setmetatable({ define={} }, {__index=_G})
 
+local function read_json(fname)
+	if not fname then
+		error("Missing file name")
+	end
+
+	local f = io.open(fname)
+	if not f then
+		error(string.format("Failed to read file '%s'", fname))
+	end
+
+	local data = f:read("*a")
+	local decode = require "json.decode"
+	return decode(data)
+end
+
 -- This is global, use it to read config files
 -- Note that this also works inside config files
-function env.read(fname)
+env.read = setmetatable({}, {__call = function(_, fname)
 	if not fname then
 		error("Missing file name to read()", 2)
 	end
@@ -15,6 +30,17 @@ function env.read(fname)
 	end
 
 	f()
+end})
+
+--------------------------------------------------------------------------------
+
+local calib = {}
+
+env.read.calib = function(fname)
+	local cals = read_json(fname)
+	for k,v in pairs(cals) do
+		calib[k] = v
+	end
 end
 
 --------------------------------------------------------------------------------
@@ -155,6 +181,7 @@ env.define.model = namespace(function(name, def)
 		name = name,
 		params = totable(def.params or {}),
 		returns = totable(def.returns or {}),
+		coeffs = totable(def.coeffs or {}),
 		checks = def.checks or {},
 		impl = parse_impl(def.impl)
 	}
@@ -174,41 +201,29 @@ env.define.vars = function(defs)
 	end
 end
 
+env.read.cost = function(fname)
+	local costs = read_json(fname)
+
+	for k,v in pairs(costs) do
+		local m = models[k]
+
+		if m then
+			-- TODO: calibrated params also go here
+			m.k = v.k
+			m.c = v.c
+		end
+
+		-- TODO: this should probably cache the costs and then merge them to model
+		-- when parsing conf because now this must be called after model definitions
+		-- or it silently ignores costs
+	end
+end
+
 env.fhk = {
 	export = function(...)
 		local ts = {...}
 		for _,t in ipairs(ts) do
 			type_exports[t] = true
-		end
-	end,
-
-	read_coeff = function(fname)
-		if not fname then
-			error("Missing file name to read_calib()", 2)
-		end
-
-		local f = io.open(fname)
-		if not f then
-			error(string.format("Failed to read file '%s'", fname), 2)
-		end
-
-		local data = f:read("*a")
-		local decode = require "json.decode"
-
-		local coeffs = decode(data)
-
-		for k,v in pairs(coeffs) do
-			local m = models[k]
-
-			if m then
-				-- TODO: calibrated params also go here
-				m.k = v.k
-				m.c = v.c
-			end
-
-			-- TODO: this should probably cache the costs and then merge them to model
-			-- when parsing conf because now this must be called after model definitions
-			-- or it silently ignores costs
 		end
 	end
 }
@@ -216,6 +231,7 @@ env.fhk = {
 --------------------------------------------------------------------------------
 
 return env, {
+	calib = calib,
 	types = types,
 	models = models,
 	vars = vars,
