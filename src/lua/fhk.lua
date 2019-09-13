@@ -259,6 +259,17 @@ function mapper_mt.__index:data(name, ref)
 	return self:bind_mapping(ret, name)
 end
 
+function mapper_mt.__index:bind_computed()
+	for name,v in pairs(self.vars) do
+		if not v.mapping then
+			local map = malloc.new("struct gmap_any")
+			map.resolve = nil
+			map.supp = nil
+			self:bind_mapping(map, name)
+		end
+	end
+end
+
 function mapper_mt.__index:mapping(name, ctype)
 	local ret = self.vars[name].udata
 	if ctype then
@@ -443,9 +454,14 @@ end
 local function inject(env, mapper)
 	env.fhk = {
 		solve  = function(...) return mapper:solver({...}) end,
+		bind   = function(x, ...) x:bind(mapper, ...) end,
 		expose = function(x) x:expose(mapper) end,
 		typeof = function(x) return mapper.vars[x].type end
 	}
+
+	env.on("sim:prepare", function()
+		mapper:bind_computed()
+	end)
 end
 
 return {
