@@ -96,7 +96,7 @@ tvalue gmap_res_data(void *v){
 #define MARK_CALLBACK(cb)\
 	for(size_t i=0;i<G->n_var;i++){\
 		struct gmap_any *v = G->vars[i].udata;\
-		if(v && cb(v->udata, reason, parm)){\
+		if(v && v->supp && cb(v->udata, reason, parm)){\
 			vmask[i] = 0xff;\
 		}\
 	}\
