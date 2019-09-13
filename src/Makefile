@@ -23,8 +23,8 @@ LUA_EXPORTS = lua_exports.h
 
 default: $(M2_EXECUTABLE)
 
-profile: CCOPT += -g3 -pg
-profile: default
+valgrind: CCOPT = -g3 -O3 -march=x86-64 -fopenmp -flto -ffast-math
+valgrind: default
 
 debug: CCOPT = -g3 -fopenmp
 debug: CCDEBUG = -DDEBUG
