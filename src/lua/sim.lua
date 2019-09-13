@@ -196,6 +196,7 @@ local function inject(env, sim)
 	env.on = delegate(sim, sim.on)
 	env.branch = delegate(sim, sim.branch)
 	env.event = delegate(sim, sim.event)
+	env.simulate = funct
 	env.simulate = delegate(sim, sim.simulate)
 end
 
@@ -230,6 +231,13 @@ function sim:on(event, f, prio)
 	self.chains[event]:add(create_callback(f, prio))
 end
 
+function sim:prepare()
+	if not self._prepared then
+		self:event("sim:prepare")
+		self._prepared = true
+	end
+end
+
 function sim:simulate(rec)
 	self:simulate_instr(make_instr(self, getrecord(rec)))
 end
@@ -237,6 +245,7 @@ end
 function sim:simulate_instr(instr)
 	assert(not self._frame)
 	self._frame = create_frame(instr, 1)
+	self:prepare()
 	self._frame:exec()
 	self._frame = nil
 end
