@@ -87,6 +87,54 @@ local function export_fhk_vars(data, types, enums)
 	return ret
 end
 
+local function create_check(cst, vtypes, vname, mname)
+	local vt = vtypes[vname]
+	if not vt then
+		error(string.format("Undefined var '%s' (in constraints of model '%s')", vname, mname))
+	end
+
+	if cst.type == "any" or cst.type == "none" then
+		local mask = 0ULL
+		for _,v in ipairs(cst.values) do
+			if type(v) == "string" then
+				if vt.kind ~= "enum" then
+					error(string.format("Enum member '%s' given as constraint for '%s' but its"
+						.." type is '%s' (%s), not enum", v, vname, vt.kind, vt.ctype))
+				end
+
+				if not vt.values[v] then
+					error(string.format("Not a valid enum member '%s' (constraint '%s' of model '%s')",
+						v, vname, mname))
+				end
+
+				v = vt.values[v]
+			end
+
+			mask = bit.bor(mask, v)
+		end
+
+		if cst.type == "none" then
+			mask = bit.bnot(mask)
+		end
+
+		cst.type = "set"
+		cst.values = nil
+		cst.mask = mask
+	end
+
+	return cst
+end
+
+local function create_models(data, vtypes)
+	for name,model in pairs(data.models) do
+		for vname,cst in pairs(model.checks) do
+			model.checks[vname] = create_check(cst, vtypes, vname, model.name)
+		end
+	end
+
+	return data.models
+end
+
 local function newconf()
 	local conf_env = get_builtin_file("conf_env.lua")
 	local env, data = dofile(conf_env)
@@ -104,13 +152,14 @@ local function read(...)
 	local enums = create_enums(data)
 	local types = create_types(data, enums)
 	local fhk_vars = export_fhk_vars(data, types, enums)
+	local fhk_models = create_models(data, fhk_vars)
 
 	return {
 		enums = enums,
 		types = types,
 		calib = data.calib,
 		fhk_vars = fhk_vars,
-		fhk_models = data.models
+		fhk_models = fhk_models
 	}
 end
 

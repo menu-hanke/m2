@@ -160,12 +160,16 @@ local function make_check(cst, cost_in, cost_out)
 	return cst
 end
 
-function env.set(...)
-	return make_check({type="set", values={...}})
+function env.any(...)
+	return make_check({type="any", values={...}})
 end
 
-function env.ival(a, b)
-	return make_check({type="ival", a=a, b=b})
+function env.none(...)
+	return make_check({type="none", values={...}})
+end
+
+function env.between(a, b)
+	return make_check({type="interval", a = a or -math.huge, b = b or math.huge})
 end
 
 local function parse_impl(impl)
@@ -177,12 +181,19 @@ local function parse_impl(impl)
 end
 
 env.define.model = namespace(function(name, def)
+	local checks = def.checks or {}
+	for var,cst in pairs(checks) do
+		if type(cst) == "string" then
+			checks[var] = env.any(cst)
+		end
+	end
+
 	_models[name] = {
 		name = name,
 		params = totable(def.params or {}),
 		returns = totable(def.returns or {}),
 		coeffs = totable(def.coeffs or {}),
-		checks = def.checks or {},
+		checks = checks,
 		impl = parse_impl(def.impl)
 	}
 end)

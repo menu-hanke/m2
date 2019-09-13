@@ -5,22 +5,14 @@ local arena = require "arena"
 local malloc = require "malloc"
 local C = ffi.C
 
-local function copy_ival_cst(check, a, b)
-	check.cst.type = C.FHK_RIVAL
-	check.cst.rival.min = a
-	check.cst.rival.max = b
-end
-
-local function copy_set_cst(check, values)
-	check.cst.type = C.FHK_BITSET
-	check.cst.setmask = typing.mask(values)
-end
-
 local function copy_cst(check, cst)
-	if cst.type == "ival" then
-		copy_ival_cst(check, cst.a, cst.b)
+	if cst.type == "interval" then
+		check.type = C.FHK_RIVAL
+		check.rival.min = a
+		check.rival.max = b
 	elseif cst.type == "set" then
-		copy_set_cst(check, cst.values)
+		check.type = C.FHK_BITSET
+		check.setmask = cst.mask
 	else
 		error(string.format("invalid cst type '%s'", cst.type))
 	end
@@ -46,7 +38,7 @@ local function create_checks(checks, sv)
 		c.var = var.fhk_var
 		c.costs[C.FHK_COST_IN] = cst.cost_in
 		c.costs[C.FHK_COST_OUT] = cst.cost_out
-		copy_cst(c, cst)
+		copy_cst(c.cst, cst)
 	end
 
 	return ret, #cs
