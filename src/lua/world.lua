@@ -270,6 +270,10 @@ function objvec_mt.__index:alloc(num)
 	return tonumber(ffi.C.frame_alloc_vec(self.obj.sim, self.vec, num))
 end
 
+function objvec_mt.__index:bind(mapper, idx)
+	self.obj.vcallbacks.bind(self, mapper, idx)
+end
+
 --------------------------------------------------------------------------------
 
 local globals_mt = { __index={} }
