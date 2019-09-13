@@ -1,3 +1,4 @@
+local typing = require "typing"
 local ffi = require "ffi"
 local C = ffi.C
 
@@ -9,9 +10,16 @@ local bitmap_types = {
 }
 
 ffi.cdef [[
-	struct Lvec_f64 {
+	struct Lvec {
 		size_t n;
-		vf64 *data;
+		vreal *data;
+	};
+
+	struct Lvec_masked {
+		size_t n;
+		vreal *data;
+		vmask *mask;
+		vmask m;
 	};
 ]]
 
@@ -52,13 +60,33 @@ end
 
 ------------------------
 
-local vf64 = {
-	init = function() end,
-	set = function(self, c) C.vset_f64(self.data, c, self.n) end,
-	add = vbinop(C.vadd_f64s, C.vadd_f64v)
-}
+ffi.metatype("struct Lvec", { __index = {
+	set   = function(self, c) C.vsetc(self.data, c, self.n) end,
+	add   = vbinop(C.vaddc, C.vaddv),
+	sorti = function(self)
+		-- TODO: this allocation is NYI, use arena etc.
+		local ret = ffi.new("unsigned[?]", self.n)
+		C.vsorti(ret, self.data, self.n)
+		return ret
+	end,
+	mask  = function(self, mask, m)
+		local ret = ffi.new("struct Lvec_masked")
+		ret.n = self.n
+		ret.data = self.data
+		ret.mask = mask
+		ret.m = m
+		return ret
+	end,
+	sum   = function(self) return (C.vsum(self.data, self.n)) end,
+	psumi = function(self, dest, idx) return (C.vpsumi(dest, self.data, idx, self.n)) end
+}})
 
-ffi.metatype("struct Lvec_f64", {__index=vf64})
+ffi.metatype("struct Lvec_masked", { __index = {
+	sum   = function(self) return C.vsumm(self.data, self.mask. self.m, self.n) end,
+	psumi = function(self, dest, idx)
+		return (C.vpsumim(dest, self.data, idx, self.mask, self.m, self.n))
+	end
+}})
 
 ------------------------
 
@@ -83,47 +111,78 @@ local function maskf(f, xmask)
 	end
 end
 
-local function bitmapind(size, xmask)
+local function bitmapind(size, xmask, expand)
 	local set = maskf(C.bm_set64, xmask)
+	local vmask
+
+	if size == ffi.sizeof("vmask") then
+		vmask = function(self) return self.data end
+	elseif expand then
+		vmask = function(self)
+			-- TODO: NYI, replace with sim alloc
+			local ret = ffi.new("vmask[?]", self.n)
+			expand(ret, self.data, self.n)
+			return ret
+		end
+	end
+
 	return {
-		init = function(self) self.n8 = self.n*size end,
-		set  = function(self, x) set(self.bm8, self.n8, x) end,
-		zero = function(self) C.bm_zero(self.bm8, self.n8) end,
-		copy = function(self, other)
+		init  = function(self) self.n8 = self.n*size end,
+		set   = function(self, x) set(self.bm8, self.n8, x) end,
+		zero  = function(self) C.bm_zero(self.bm8, self.n8) end,
+		copy  = function(self, other)
 			assert(other.n8 == self.n8 and other ~= self)
 			C.bm_copy(self.bm8, other.bm8, self.n8)
 		end,
-		not_ = function(self) C.bm_not(self.bm8, self.n8) end,
-		and_ = bitmapop(maskf(C.bm_and64, xmask), C.bm_and),
-		or_  = bitmapop(maskf(C.bm_or64, xmask),  C.bm_or),
-		xor  = bitmapop(maskf(C.bm_xor64, xmask), C.bm_xor)
+		vmask = vmask,
+		not_  = function(self) C.bm_not(self.bm8, self.n8) end,
+		and_  = bitmapop(maskf(C.bm_and64, xmask), C.bm_and),
+		or_   = bitmapop(maskf(C.bm_or64, xmask),  C.bm_or),
+		xor   = bitmapop(maskf(C.bm_xor64, xmask), C.bm_xor)
 	}
 end
 
-ffi.metatype("struct Lbitmap_b8",  {__index=bitmapind(1, C.bmask8)})
-ffi.metatype("struct Lbitmap_b16", {__index=bitmapind(2, C.bmask16)})
-ffi.metatype("struct Lbitmap_b32", {__index=bitmapind(4, C.bmask32)})
+ffi.metatype("struct Lbitmap_b8",  {__index=bitmapind(1, C.bmask8,  C.vmexpand8)})
+ffi.metatype("struct Lbitmap_b16", {__index=bitmapind(2, C.bmask16, C.vmexpand16)})
+ffi.metatype("struct Lbitmap_b32", {__index=bitmapind(4, C.bmask32, C.vmexpand32)})
 ffi.metatype("struct Lbitmap_b64", {__index=bitmapind(8)})
 
 ------------------------
 
-local vtypes = {
-	[tonumber(ffi.C.T_F64)] = "struct Lvec_f64",
+local bitmaps = {
 	[tonumber(ffi.C.T_B8)]  = "struct Lbitmap_b8",
 	[tonumber(ffi.C.T_B16)] = "struct Lbitmap_b16",
 	[tonumber(ffi.C.T_B32)] = "struct Lbitmap_b32",
 	[tonumber(ffi.C.T_B64)] = "struct Lbitmap_b64"
 }
 
-local function vec(data, type, n)
-	local t = vtypes[tonumber(type)]
-	local ret = ffi.new(t)
-	ret.n = n
+local function vec(data, n)
+	local ret = ffi.new("struct Lvec")
 	ret.data = data
+	ret.n = n
+	return ret
+end
+
+local function bitmap(type, data, n)
+	local t = bitmaps[tonumber(type.desc)]
+	-- TODO: the union here causes NYI
+	local ret = ffi.new(t)
+	ret.data = data
+	ret.n = n
 	ret:init()
 	return ret
 end
 
+local function typed(type, data, n)
+	if typing.promote(type.desc) == ffi.C.T_B64 then
+		return bitmap(type, data, n)
+	elseif type.desc == typing.builtin_types.real.desc then
+		return vec(data, n)
+	end
+end
+
 return {
-	vec=vec
+	vec    = vec,
+	bitmap = bitmap,
+	typed  = typed
 }

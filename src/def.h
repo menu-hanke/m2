@@ -31,6 +31,17 @@
 
 #endif // ifndef M2_VECTOR_SIZE
 
+// use float for a bit of speedup for vector operations (you most likely don't need to change this)
+// (see vmath.c)
+#ifndef M2_VECTOR_REAL
+#define M2_VECTOR_REAL double
+#endif
+
+#ifndef M2_VECTOR_MASK
+#include <stdint.h>
+#define M2_VECTOR_MASK uint64_t
+#endif
+
 // round n to next multiple of m where m=2^k
 #define ALIGN(n, m) (((n) + (m) - 1) & ~((m) - 1))
 
@@ -69,7 +80,7 @@
 
 // max size for save stack
 #ifndef SIM_VSTACK_SIZE
-#define SIM_VSTACK_SIZE (1 << 16)
+#define SIM_VSTACK_SIZE (1 << 20)
 #endif
 
 // size for initial chunk of static arena
