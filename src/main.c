@@ -17,7 +17,6 @@ static int l_main(lua_State *L, int argc, char **argv);
 static int L_traceback(lua_State *L);
 
 int main(int argc, char **argv){
-	// it's ok to leak the lua state since we just exit anyway
 	lua_State *L = luaL_newstate();
 	luaL_openlibs(L);
 	return l_main(L, argc, argv);
@@ -63,7 +62,10 @@ static int l_main(lua_State *L, int argc, char **argv){
 		return -2;
 	}
 
-	return lua_tointeger(L, -1);
+	int ret = lua_tointeger(L, -1);
+
+	lua_close(L);
+	return ret;
 }
 
 static int L_traceback(lua_State *L){

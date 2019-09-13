@@ -21,13 +21,7 @@ local function flag(name)
 	end
 end
 
-local m2args = {
-	jv = flag("jit_v"),
-	jp = flag("jit_p"),
-	jP = opt("jit_p")
-}
-
-local subargs = {
+local cmdargs = {
 
 	simulate = {
 		c = opt("config"),
@@ -60,7 +54,7 @@ local function parse_args(args)
 		iter()
 	end
 
-	local ad = subargs[cmd]
+	local ad = cmdargs[cmd]
 
 	if not ad then
 		error(string.format("Unknown command '%s'", cmd))
@@ -78,12 +72,15 @@ local function parse_args(args)
 			error(string.format("Invalid argument: '%s'", flag))
 		end
 
-		local cb = ad[flag:sub(2)] or m2args[flag:sub(2)]
-		if not cb then
+		local cb = ad[flag:sub(2)]
+		if cb then
+			cb(ret, iter)
+		elseif flag:sub(2, 2) == "j" then
+			local module, args = flag:match("(%w+)=?([%w,]*)", 3)
+			require("jit."..module).start(args and unpack(split(args)))
+		else
 			error(string.format("Unknown flag: '%s'", flag))
 		end
-
-		cb(ret, iter)
 	end
 
 	return cmd, ret
@@ -93,23 +90,6 @@ end
 
 function main(args)
 	local cmd, args = parse_args(args)
-
-	if args.jit_v then
-		(require "jit.v").on()
-	end
-
-	if args.jit_p then
-		local opt = type(args.jit_p) ~= "boolean" and args.jit_p or nil
-		(require "jit.p").start(opt)
-	end
-
 	require(cmd).main(args)
-
-	collectgarbage() --debug
-
-	if args.jit_p then
-		(require "jit.p").stop()
-	end
-
 	return 0
 end
