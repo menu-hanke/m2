@@ -1,4 +1,5 @@
 local ffi = require "ffi"
+local vmath = require "vmath"
 local fhk = require "fhk"
 local typing = require "typing"
 
@@ -80,6 +81,61 @@ end
 
 --------------------------------------------------------------------------------
 
+local rvec_mt = {
+	__index = function(self, idx) return self.wrap(self.data[idx]) end,
+	__newindex = function(self, idx, v) self.data[idx] = self.unwrap(v) end
+}
+
+local function refvec(wrap, unwrap)
+	return function(data)
+		return setmetatable({wrap=wrap, unwrap=unwrap, data=data}, rvec_mt)
+	end
+end
+
+--------------------------------------------------------------------------------
+
+local obj_callbacks = callbacks {
+	mark_visible = function(self, mapper, vmask)
+		mapper:mark_visible(vmask, ffi.C.GMAP_BIND_OBJECT, typing.tvalue.u64(self.id))
+	end,
+
+	mark_nonconstant = function(self, mapper, vmask)
+		mapper:mark_nonconstant(vmask, ffi.C.GMAP_BIND_OBJECT, typing.tvalue.u64(self.id))
+	end
+}
+
+local zobj_callbacks = callbacks {
+	mark_visible = function(self, mapper, vmask)
+		mapper:mark_visible(vmask, ffi.C.GMAP_BIND_Z, typing.tvalue.u64(ffi.C.POSITION_ORDER))
+	end,
+
+	bind_solver = function(self, mapper, svb)
+		local z_bind = mapper.bind.z.global
+		svb:bind_z(self.z_band, z_bind.ref)
+	end
+}
+
+local svobj_callbacks = callbacks {
+	mark_nonconstant = function(self, mapper, vmask)
+		mapper:mark_nonconstant(vmask, ffi.C.GMAP_BIND_Z, typing.tvalue.u64(self.svgrid.grid.order))
+	end
+}
+
+local objvec_callbacks = callbacks {
+	bind = function(self, mapper, idx)
+		local vbind = mapper.bind.vec[self.obj.name]
+		vbind.ref.vec = self.vec
+		vbind.ref.idx = idx
+	end
+}
+
+local zobjvec_callbacks = callbacks {
+	bind = function(self, mapper, idx)
+		local zb = ffi.cast("gridpos *", self.vec.bands[self.obj.z_band].data)
+		mapper.bind.z.global(zb[idx])
+	end
+}
+
 local obj_mt = { __index={} }
 local objvec_mt = { __index={} }
 
@@ -91,7 +147,10 @@ local function obj(sim, name, type)
 		type       = type,
 		bands      = band_names_map(type),
 		band_ctype = band_ctypes(type),
+		typehints  = {},
 		tpl        = vec_template(type),
+		callbacks  = obj_callbacks,
+		vcallbacks = objvec_callbacks,
 		id         = nextuniq()
 	}, obj_mt)
 end
@@ -100,6 +159,8 @@ function obj_mt.__index:spatial(zname)
 	assert(not self.z_band)
 	assert(self.type.vars[zname].ctype == "gridpos")
 	self.z_band = self.bands[zname]
+	self.callbacks = self.callbacks + zobj_callbacks
+	self.vcallbacks = self.vcallbacks + zobjvec_callbacks
 	return self
 end
 
@@ -107,14 +168,35 @@ function obj_mt.__index:grid(order)
 	assert(self.z_band)
 	assert(not self.svgrid)
 	self.svgrid = ffi.C.sim_create_svgrid(self.sim, order, self.z_band, self.tpl)
+	self.callbacks = self.callbacks + svobj_callbacks
 	return self
 end
 
-function obj_mt.__index:vec()
+function obj_mt.__index:vec(ref)
 	return setmetatable({
 		obj = self,
-		vec = ffi.C.sim_create_vec(self.sim, self.tpl, ffi.C.SIM_FRAME + ffi.C.SIM_MUTABLE)
+		vec = ref or ffi.C.sim_create_vec(self.sim, self.tpl, ffi.C.SIM_FRAME + ffi.C.SIM_MUTABLE)
 	}, objvec_mt)
+end
+
+function obj_mt.__index:typeof(name)
+	return self.type.vars[name]
+end
+
+function obj_mt.__index:hint(name, ref)
+	self.typehints[name] = ref
+end
+
+function obj_mt.__index:refvec()
+	return refvec(
+		function(ptr)
+			return self:vec(ffi.cast("struct vec *", ptr))
+		end,
+
+		function(vec)
+			return vec.vec
+		end
+	)
 end
 
 function obj_mt.__index:expose(mapper)
@@ -127,30 +209,24 @@ function obj_mt.__index:expose(mapper)
 end
 
 function obj_mt.__index:mark_visible(mapper, vmask)
-	mapper:mark_visible(vmask, ffi.C.GMAP_BIND_OBJECT, typing.tvalue.u64(self.id))
-	if self.z_band then
-		mapper:mark_visible(vmask, ffi.C.GMAP_BIND_Z, typing.tvalue.u64(ffi.C.POSITION_ORDER))
-	end
+	self.callbacks.mark_visible(self, mapper, vmask)
 end
 
 function obj_mt.__index:mark_nonconstant(mapper, vmask)
-	mapper:mark_nonconstant(vmask, ffi.C.GMAP_BIND_OBJECT, typing.tvalue.u64(self.id))
-	if self.svgrid then
-		mapper:mark_nonconstant(vmask, ffi.C.GMAP_BIND_Z, typing.tvalue.u64(self.svgrid.grid.order))
-	end
+	self.callbacks.mark_nonconstant(self, mapper, vmask)
 end
 
 function obj_mt.__index:solver_func(mapper, solver)
 	local v_bind = mapper.bind.vec[self.name]
 	local svb = fhk.solver_vec_bind(v_bind.ref)
-	if self.z_band then
-		local z_bind = mapper.bind.z.global
-		svb:bind_z(self.z_band, z_bind.ref)
+	if self.callbacks.bind_solver then
+		self.callbacks.bind_solver(self, mapper, svb)
 	end
 
 	local sim = self.sim
 	return function(vec)
-		fhk.rebind(sim, solver, vec:len())
+		-- TODO: allow configuring if this should allocate vec:len() or vec.n_alloc
+		fhk.rebind(sim, solver, vec.vec.n_alloc)
 		svb:solve_vec(solver, vec.vec)
 	end
 end
@@ -162,13 +238,27 @@ end
 function objvec_mt.__index:band(name)
 	local band = self.obj.bands[name]
 	local ctype = self.obj.band_ctype[band]
-	return ffi.cast(ctype, self.vec.bands[band].data)
+	local data = self.vec.bands[band].data
+	-- Note: use parenthesis here to prevent tailcall to builtin ffi.cast (this aborts the trace)
+	return (ffi.cast(ctype, data))
+end
+
+function objvec_mt.__index:bandv(name)
+	local data = self:band(name)
+	if self.obj.typehints[name] then
+		return self.obj.typehints[name](data)
+	else
+		local type = self.obj:typeof(name)
+		return vmath.typed(type, data, self:len())
+	end
 end
 
 function objvec_mt.__index:newband(name)
 	local band = self.obj.bands[name]
 	local ctype = self.obj.band_ctype[band]
-	return ffi.cast(ctype, ffi.C.frame_create_band(self.obj.sim, self.vec, band))
+	local data = ffi.C.frame_create_band(self.obj.sim, self.vec, band)
+	-- see comment in band()
+	return (ffi.cast(ctype, data))
 end
 
 function objvec_mt.__index:swap(name, data)

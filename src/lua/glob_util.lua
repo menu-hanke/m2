@@ -92,3 +92,28 @@ function nextuniq()
 	_next_uniq = _next_uniq+1
 	return ret
 end
+
+local callbacks_mt = {
+	__add = function(self, other)
+		local ret = setmetatable({}, callbacks_mt)
+		for k,v in pairs(self) do
+			ret[k] = v
+		end
+		for k,v in pairs(other) do
+			if ret[k] then
+				local w = ret[k]
+				ret[k] = function(...)
+					w(...)
+					v(...)
+				end
+			else
+				ret[k] = v
+			end
+		end
+		return ret
+	end
+}
+
+function callbacks(tab)
+	return setmetatable(tab, callbacks_mt)
+end
