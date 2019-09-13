@@ -11,7 +11,14 @@ local plots = Plot:vec()
 
 local function update_ba(idx, G)
 	local trees = plots:bandv("trees")[idx]
-	local ba = trees:bandv("ba")
+
+	local f = trees:band("f")
+	local d = trees:bandv("dbh")
+	local ba = trees:newbandv("ba")
+	d:area(ba.data)
+	ba:mul(f)
+	ba:mul(1/10000.0) -- XXX: skaalaus että yksiköt menee oikein
+
 	local ba_L = trees:newband("ba_L")
 	local ba_Lma = trees:newband("ba_Lma")
 	local ba_Lku = trees:newband("ba_Lku")
@@ -25,6 +32,7 @@ local function update_ba(idx, G)
 	ba:mask(spe, bit.bnot(enum.species.manty + enum.species.kuusi)):psumi(ba_Lko, ind)
 
 	G[idx] = ba:sum()
+	trees:swap("ba", ba.data)
 	trees:swap("ba_L", ba_L)
 	trees:swap("ba_Lma", ba_Lma)
 	trees:swap("ba_Lku", ba_Lku)
@@ -74,12 +82,24 @@ local function readplots(data)
 	print(string.format("Luettiin %d koealaa, yhteensä %d puuta", #data, ntrees))
 end
 
-local update_id = fhk.solve("i_d"):from(Tree)
+local update_growstep = fhk.solve("i_d", "sur"):from(Tree)
 
 local function grow_plot(idx)
 	fhk.bind(plots, idx)
 	local trees = plots:bandv("trees")[idx]
-	update_id(trees)
+
+	update_growstep(trees)
+	local i_d = update_growstep:res("i_d")
+	local sur = update_growstep:res("sur")
+
+	local f = trees:bandv("f")
+	local d = trees:bandv("dbh")
+	local newf = trees:newband("f")
+	local newd = trees:newband("dbh")
+	f:mul(sur, newf)
+	d:add(i_d, newd)
+	trees:swap("f", newf)
+	trees:swap("dbh", newd)
 end
 
 local function grow()
@@ -105,7 +125,9 @@ end)
 
 on("grow", function(step)
 	G.step = step
-	grow()
+	for i=1, 100 do
+		grow()
+	end
 end)
 
 --------------------------------------------------------------------------------

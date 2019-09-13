@@ -227,12 +227,21 @@ function obj_mt.__index:solver_func(mapper, solver)
 	return function(vec)
 		-- TODO: allow configuring if this should allocate vec:len() or vec.n_alloc
 		fhk.rebind(sim, solver, vec.vec.n_alloc)
-		svb:solve_vec(solver, vec.vec)
+		return (svb:solve_vec(solver, vec.vec))
 	end
 end
 
 function objvec_mt.__index:len()
 	return self.vec.n_used
+end
+
+function objvec_mt.__index:typedvec(name, data)
+	if self.obj.typehints[name] then
+		return self.obj.typehints[name](data)
+	else
+		local type = self.obj:typeof(name)
+		return vmath.typed(type, data, self:len())
+	end
 end
 
 function objvec_mt.__index:band(name)
@@ -244,13 +253,7 @@ function objvec_mt.__index:band(name)
 end
 
 function objvec_mt.__index:bandv(name)
-	local data = self:band(name)
-	if self.obj.typehints[name] then
-		return self.obj.typehints[name](data)
-	else
-		local type = self.obj:typeof(name)
-		return vmath.typed(type, data, self:len())
-	end
+	return self:typedvec(name, self:band(name))
 end
 
 function objvec_mt.__index:newband(name)
@@ -259,6 +262,10 @@ function objvec_mt.__index:newband(name)
 	local data = ffi.C.frame_create_band(self.obj.sim, self.vec, band)
 	-- see comment in band()
 	return (ffi.cast(ctype, data))
+end
+
+function objvec_mt.__index:newbandv(name)
+	return self:typedvec(name, self:newband(name))
 end
 
 function objvec_mt.__index:swap(name, data)
@@ -333,7 +340,7 @@ function globals_mt.__index:solver_func(mapper, solver)
 	end
 
 	return function()
-		ffi.C.fhk_solver_step(solver, 0)
+		return (ffi.C.fhk_solver_step(solver, 0))
 	end
 end
 

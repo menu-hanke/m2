@@ -35,6 +35,7 @@ fhk.export "plot"
 define.vars {
 	"step", -- time step
 	"i_d",  -- d increment
+	"sur",  -- survival probability
 }
 
 define.model.gro_manty {
@@ -59,4 +60,28 @@ define.model.gro_lehti {
 	returns = { "i_d" },
 	coeffs  = { "c_0", "c_sqrtd", "c_d", "c_logG", "c_baL", "c_logts", "c_omt", "c_vt", "c_ct", "c_raha" },
 	impl    = "R::examples/models_cal.r::gro_lehti"
+}
+
+define.model.sur_manty {
+	params  = { "step", "dbh", "ba_L", "atyyppi" },
+	checks  = { spe = "manty" },
+	returns = { "sur" },
+	coeffs  = { "c_0", "c_sqrtd", "c_d", "c_baL", "c_suo" },
+	impl    = "R::examples/models_cal.r::sur_manty"
+}
+
+define.model.sur_kuusi {
+	params  = { "step", "dbh", "ba_Lku", "atyyppi" },
+	checks  = { spe = "kuusi" },
+	returns = { "sur" },
+	coeffs  = { "c_0", "c_sqrtd", "c_d", "c_baLku", "c_suo" },
+	impl    = "R::examples/models_cal.r::sur_kuusi"
+}
+
+define.model.sur_lehti {
+	params  = { "step", "dbh", "ba_Lma", "ba_Lku", "ba_Lko", "atyyppi", "spe" },
+	checks  = { spe = any("rauduskoivu", "hieskoivu", "haapa", "muu") },
+	returns = { "sur" },
+	coeffs  = { "c_0", "c_sqrtd", "c_d", "c_baLma", "c_baLkuko", "c_suo", "c_koivu", "c_haapa" },
+	impl    = "R::examples/models_cal.r::sur_lehti"
 }

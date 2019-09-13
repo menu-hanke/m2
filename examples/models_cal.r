@@ -5,6 +5,13 @@ lerp5 <- function(f){
 	}
 }
 
+exp5 <- function(f){
+	function(step, ...){
+		r <- f(...)
+		(r ^ (step/5))
+	}
+}
+
 growf <- function(f){
 	function(mtyyppi, d, G, ...){
 		if(d < 0.001)
@@ -18,6 +25,18 @@ growf <- function(f){
 
 		gro <- f(omt, vt, ct, d, G, ...)
 		gro <- min(max(gro, 0.001), 5.0)
+		gro
+	}
+}
+
+survivf <- function(f){
+	function(d, ...){
+		d <- min(max(d, 5.0), 150.0)
+		a <- f(d, ...)
+		a <- min(max(a, 30.0), -30.0)
+		a <- exp(a)
+		p <- 1.0 / (1.0 + a)
+		p
 	}
 }
 
@@ -78,5 +97,55 @@ gro_lehti <- lerp5(growf(function(omt, vt, ct, d, G, ba_Lku, ba_Lko, ts, spe,
 		+ c_vt * vt
 		+ c_ct * ct
 		+ c_raha * d * raha
+	)
+}))
+
+#------------------------------------------------------------------------------
+
+sur_manty <- exp5(survivf(function(d, ba_L, atyyppi,
+	c_0=1.41223, c_sqrtd=1.8852, c_d=-0.21317, c_baL=-0.25637, c_suo=-0.39878){
+
+	suo <- as.integer(atyyppi > 1)
+
+	-(
+	  c_0
+	  + c_sqrtd * sqrt(d)
+	  + c_d * d
+	  + c_baL * ba_L/log(d + 1)
+	  + c_suo * suo
+	)
+}))
+
+sur_kuusi <- exp5(survivf(function(d, ba_Lku, atyyppi,
+	c_0=5.01677, c_sqrtd=0.36902, c_d=-0.07504, c_baLku=-0.2319, c_suo=-0.2319){
+
+	suo <- as.integer(atyyppi > 1)
+
+	-(
+	  c_0
+	  + c_sqrtd * sqrt(d)
+	  + c_d * d
+	  + c_baLku * ba_Lku/log(d + 1)
+	  + c_suo * suo
+	)
+}))
+
+sur_lehti <- exp5(survivf(function(d, ba_Lma, ba_Lku, ba_Lko, atyyppi, spe,
+	c_0=1.60895, c_sqrtd=0.71578, c_d=-0.08236, c_baLma=-0.04814, c_baLkuko=-0.13481,
+	c_suo=-0.31789, c_koivu=0.56311, c_haapa=1.40145){
+	
+	suo <- as.integer(atyyppi > 1)
+	koivu <- as.integer(spe == 3 || spe == 4)
+	haapa <- as.integer(spe == 5)
+
+	-(
+	  c_0
+	  + c_sqrtd * sqrt(d)
+	  + c_d * d
+	  + c_baLma * ba_Lma/log(d + 1)
+	  + c_baLkuko * (ba_Lku + ba_Lko)/log(d + 1)
+	  + c_suo * suo
+	  + c_koivu * koivu
+	  + c_haapa * haapa
 	)
 }))
