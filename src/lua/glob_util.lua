@@ -73,13 +73,16 @@ function delegate(owner, f)
 	end
 end
 
-function lazy(fs)
+function lazy(fs, index)
+	index = index or {}
 	return function(self, k)
 		if fs[k] then
 			local v = fs[k](self)
 			self[k] = v
 			return v
 		end
+
+		return index[k]
 	end
 end
 

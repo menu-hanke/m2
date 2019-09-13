@@ -2,21 +2,39 @@ local ffi = require "ffi"
 local C = ffi.C
 
 local typedef_f = {}
-local typedef_mt = { __index=lazy(typedef_f) }
+local typedef_mt = { __index = lazy(typedef_f, {kind="struct"}) }
 local frozen_mt = {}
 
+local builtin_mt = { __index = { kind = "builtin" } }
+
+local function builtin(tname, desc, ctype)
+	return setmetatable({tname=tname, desc=desc, ctype=ctype}, builtin_mt)
+end
+
 local builtin_types = {
---  Lua name | tvalue name | enum type        | C data type
-	real32 = { tname="f32",  desc=C.T_F32,      ctype="float" },
-	real   = { tname="f64",  desc=C.T_F64,      ctype="double" },
-	bit8   = { tname="u8",   desc=C.T_B8,       ctype="uint8_t" },
-	bit16  = { tname="u16",  desc=C.T_B16,      ctype="uint16_t" },
-	bit32  = { tname="u32",  desc=C.T_B32,      ctype="uint32_t" },
-	bit64  = { tname="u64",  desc=C.T_B64,      ctype="uint64_t" },
-	id     = { tname="u64",  desc=C.T_ID,       ctype="uint64_t" },
-	z      = { tname="z",    desc=C.T_POSITION, ctype="gridpos" },
-	udata  = { tname="u",    desc=C.T_USERDATA, ctype="void *" }
+--  Lua name           | tvalue name  | enum type   | C data type
+	real32   = builtin("f32",         C.T_F32,      "float"),
+	real64   = builtin("f64",         C.T_F64,      "double"),
+	bit8     = builtin("u8",          C.T_B8,       "uint8_t"),
+	bit16    = builtin("u16",         C.T_B16,      "uint16_t"),
+	bit32    = builtin("u32",         C.T_B32,      "uint32_t"),
+	bit64    = builtin("u64",         C.T_B64,      "uint64_t"),
+	id       = builtin("u64",         C.T_ID,       "uint64_t"),
+	z        = builtin("z",           C.T_POSITION, "gridpos"),
+	udata    = builtin("u",           C.T_USERDATA, "void *")
 }
+
+local function select_builtin(ctype, ...)
+	for _,t in ipairs({...}) do
+		if ffi.sizeof(ctype) == ffi.sizeof(t.ctype) then
+			return t
+		end
+	end
+end
+
+builtin_types.real = select_builtin("vreal", builtin_types.real32, builtin_types.real64)
+builtin_types.mask = select_builtin("vmask", builtin_types.bit8, builtin_types.bit16,
+	builtin_types.bit32, builtin_types.bit64)
 
 local desc_ctype = {}
 
@@ -72,7 +90,7 @@ end
 --------------------------------------------------------------------------------
 
 local enum_f = {}
-local enum_mt = { __index = lazy(enum_f) }
+local enum_mt = { __index = lazy(enum_f, {kind="enum"}) }
 local enum_values_mt = {}
 
 local function newenum()
@@ -139,6 +157,18 @@ local function mask(bits)
 	return ret
 end
 
+local function inject(env)
+	env.import = {
+		enum = C.vbpack,
+		bool = function(v) return v and 1 or 0 end
+	}
+
+	env.export = {
+		enum = C.vbunpack,
+		bool = function(v) return v ~= 0 end
+	}
+end
+
 return {
 	builtin_types = builtin_types,
 	desc_ctype    = desc_ctype,
@@ -149,5 +179,6 @@ return {
 	enumct        = enumct,
 	tvalue        = tvalue,
 	promote       = promote,
-	mask          = mask
+	mask          = mask,
+	inject        = inject
 }

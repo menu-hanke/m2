@@ -1,6 +1,7 @@
 local conf = require "conf"
 local sim = require "sim"
 local world = require "world"
+local typing = require "typing"
 local fhk = require "fhk"
 
 local function inject_types(env, cfg)
@@ -24,6 +25,7 @@ local function main(args)
 
 	local env = setmetatable({}, {__index=_G})
 	sim.inject(env, _sim)
+	typing.inject(env)
 	fhk.inject(env, mapper)
 	world.inject(env, _sim._sim)
 	inject_types(env, cfg)
