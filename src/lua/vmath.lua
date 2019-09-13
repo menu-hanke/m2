@@ -44,16 +44,13 @@ end
 local function vbinop(scalarf, vectorf)
 	return function(self, x, dest)
 		if not dest then
-			dest = self
+			dest = self.data
 		end
 
-		assert(getmetatable(self) == getmetatable(dest) and self.n == dest.n)
-
 		if type(x) == "number" then
-			scalarf(dest.data, self.data, x, self.n)
+			scalarf(dest, self.data, x, self.n)
 		else
-			assert(x ~= self and getmetatable(x) == getmetatable(self) and x.n == self.n)
-			vectorf(dest.data, self.data, x.data, self.n)
+			vectorf(dest, self.data, x, self.n)
 		end
 	end
 end
@@ -63,6 +60,8 @@ end
 ffi.metatype("struct Lvec", { __index = {
 	set   = function(self, c) C.vsetc(self.data, c, self.n) end,
 	add   = vbinop(C.vaddc, C.vaddv),
+	mul   = vbinop(C.vmulc, C.vmulv),
+	area  = function(self, dest) C.varead(dest, self.data, self.n) end,
 	sorti = function(self)
 		-- TODO: this allocation is NYI, use arena etc.
 		local ret = ffi.new("unsigned[?]", self.n)

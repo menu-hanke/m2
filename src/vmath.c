@@ -8,6 +8,10 @@
 
 #include <stddef.h>
 #include <stdlib.h>
+#include <math.h>
+
+/* cast so it also works with floats, otherwise we get unwanted conversions */
+#define PI ((vreal) M_PI)
 
 static int cmp_idx(const void *a, const void *b, void *u);
 
@@ -36,6 +40,21 @@ void vaddc(vreal *d, vreal *a, vreal c, size_t n){
 /* add vector b to a and store to d */
 void vaddv(vreal *d, vreal *a, const vreal *restrict b, size_t n){
 	V(n, d[i] = a[i] + b[i]);
+}
+
+/* multiply a by constan c and store to d */
+void vmulc(vreal *d, vreal *a, vreal c, size_t n){
+	V(n, d[i] = a[i] * c);
+}
+
+/* multiply a and b element-wise and store to d */
+void vmulv(vreal *d, vreal *a, const vreal *restrict b, size_t n){
+	V(n, d[i] = a[i] * b[i]);
+}
+
+/* compute area given diameter in a and store to d */
+void varead(vreal *d, vreal *a, size_t n){
+	V(n, d[i] = PI * a[i] * a[i] / 4);
 }
 
 /* sort indices of a */
