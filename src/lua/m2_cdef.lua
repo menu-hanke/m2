@@ -375,7 +375,7 @@ struct gmap_solver_vec_bind {
  gridpos *z_bind;
  int z_band;
 };
-void gmap_solve_vec(struct gmap_solver_vec_bind *bind, struct fhk_solver *solver, struct vec *vec);
+int gmap_solve_vec(struct gmap_solver_vec_bind *bind, struct fhk_solver *solver, struct vec *vec);
        
 typedef double vreal;
 typedef uint64_t vmask;

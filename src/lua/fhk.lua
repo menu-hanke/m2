@@ -146,6 +146,7 @@ local function create_models(sv, sm, calib)
 
 	for name,model in pairs(sm) do
 		local def = models.def(model.src.impl)
+
 		def.atypes, def.n_arg = copyptypes(model.src.params, sv)
 		def.rtypes, def.n_ret = copyptypes(model.src.returns, sv)
 
@@ -155,6 +156,12 @@ local function create_models(sv, sm, calib)
 		end
 
 		local mod = def()
+
+		if mod == ffi.NULL then
+			error(string.format("Error while creating model '%s': %s",
+				name, models.error()))
+		end
+
 		ret[name] = mod
 
 		if cal then
@@ -336,6 +343,51 @@ function mapper_mt.__index:set_init_vmask(vmask, names)
 	end
 end
 
+function mapper_mt.__index:failed()
+	local fv = self.G.last_error.var
+	local fm = self.G.last_error.model
+	local var, model
+
+	if fv ~= ffi.NULL then
+		for name,v in pairs(self.vars) do
+			if ffi.cast("void *", v.mapping) == fv.udata then
+				var = name
+				break
+			end
+		end
+	end
+
+	if fm ~= ffi.NULL then
+		for name,m in pairs(self.models) do
+			if ffi.cast("void *", m.mapping) == fm.udata then
+				model = name
+				break
+			end
+		end
+	end
+
+	local context = {"fhk: solver failed"}
+
+	if var then
+		table.insert(context, string.format("\t* Caused by this variable: %s", var))
+	end
+
+	if model then
+		table.insert(context, string.format("\t* Caused by this model: %s", model))
+	end
+
+	local err = self.G.last_error.err
+	if err == ffi.C.FHK_MODEL_FAILED then
+		table.insert(context, "Model crashed (details below):")
+		table.insert(context, models.error())
+	else
+		table.insert(context, string.format("\t* The error code was: %d", err))
+	end
+
+	error(table.concat(context, "\n"))
+end
+
+
 local solver_func_mt = { __index = {} }
 
 local function solver_make_res(names, vs)
@@ -369,7 +421,10 @@ function solver_func_mt.__index:from(src)
 	local solver_func = src:solver_func(self.mapper, self.solver)
 	self.solve = function(...)
 		self.mapper.G:init(self.init_v)
-		solver_func(...)
+		local r = solver_func(...)
+		if r and r ~= ffi.C.FHK_OK then
+			self.mapper:failed()
+		end
 	end
 
 	return self

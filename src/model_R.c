@@ -45,6 +45,7 @@ static const struct model_func MOD_R = {
 static void init_R_embedded();
 static int source(const char *fname);
 static int sourcef(const char *fname);
+static void rerror();
 static SEXP eval(SEXP call, int *err);
 static SEXP make_call(struct model_R *m, const char *func);
 static void add_call(SEXP call);
@@ -52,7 +53,8 @@ static void remove_call(SEXP call);
 
 model *mod_R_create(struct mod_R_def *def){
 	init_R_embedded();
-	source(def->fname);
+	if(source(def->fname))
+		return NULL;
 
 	struct model_R *m = malloc(sizeof *m);
 	maux_initmodel(&m->model,
@@ -83,7 +85,7 @@ static int mod_R_call(struct model_R *m, pvalue *ret, pvalue *argv){
 	SEXP r = eval(m->call, &err);
 
 	if(err){
-		maux_errf("R error: %d\n", err);
+		rerror();
 		return MODEL_CALL_RUNTIME_ERROR;
 	}
 
@@ -162,12 +164,12 @@ static int source(const char *fname){
 	dv("R: sourcing %s\n", fname);
 	int ret = sourcef(fname);
 	if(ret){
-		dv("R: error in source: %d\n", ret);
+		rerror();
 		return ret;
-	}else{
-		maux_set_file_data(fname, (void *)1);
-		return 0;
 	}
+
+	maux_set_file_data(fname, (void *)1);
+	return 0;
 }
 
 static int sourcef(const char *fname){
@@ -181,6 +183,10 @@ static int sourcef(const char *fname){
 	return err;
 }
 
+static void rerror(){
+	maux_errf("R error: %s", R_curErrorBuf());
+}
+
 static SEXP eval(SEXP call, int *err){
 	// XXX: R_tryEval catches errors but is slower since it sets some error handlers etc.
 	// Rf_eval is the faster alternative but on error it longjumps to some weird place
@@ -192,8 +198,6 @@ static SEXP eval(SEXP call, int *err){
 #else
 	return R_tryEvalSilent(call, R_GlobalEnv, err);
 #endif
-
-	// XXX: you can get the error string using R_curErrorBuf()
 }
 
 static SEXP make_call(struct model_R *m, const char *func){

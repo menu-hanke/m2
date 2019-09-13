@@ -19,8 +19,9 @@
 
 #endif // ifdef DEBUG
 
-#define DIEF(err, fmt, mes)\
-	do{ fprintf(stderr, "Fatal error: "); fprintf(stderr, (fmt), (mes)); exit(err); } while(0)
+#define M2_EXIT_OK                0
+#define M2_EXIT_MODEL_LOAD_FAILED 100
+#define M2_EXIT_MODEL_CALL_FAILED 101
 
 #ifndef M2_VECTOR_SIZE
 

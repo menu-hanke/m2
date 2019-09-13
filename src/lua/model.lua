@@ -53,5 +53,6 @@ local function def(impl)
 end
 
 return {
-	def = def
+	def   = def,
+	error = function() return ffi.string(ffi.C.model_error()) end
 }

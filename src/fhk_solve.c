@@ -24,7 +24,6 @@ struct state {
 	struct heap *heap;
 	unsigned cycle : 1;
 	jmp_buf exc_env;
-	struct fhk_einfo error;
 	DD(char debugv[64]);
 	DD(char debugm[64]);
 };
@@ -95,10 +94,8 @@ int fhk_solve(struct fhk_graph *G, size_t nv, struct fhk_var **ys){
 	s.G = G;
 	s.cycle = 0;
 
-	if(setjmp(s.exc_env)){
-		// TODO
-		assert(0);
-	}
+	if(setjmp(s.exc_env))
+		return G->last_error.err;
 
 	for(size_t i=0;i<nv;i++){
 		struct fhk_var *y = ys[i];
@@ -733,6 +730,7 @@ static void exec_chain(struct state *s, struct fhk_var *y){
 
 	y->value = *return_ptr(m, y);
 	bm->has_value = 1;
+	dv("solved %s -> %f / %#lx\n", ddescv(s, y), y->value.f64, y->value.u64);
 
 	if(s->G->chain_solved)
 		s->G->chain_solved(s->G, y->udata, y->value);
