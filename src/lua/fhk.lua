@@ -324,6 +324,15 @@ function mapper_mt.__index:mark_nonconstant(vmask, reason, parm)
 	C.gmap_mark_nonconstant(self.G, vmask, reason, parm)
 end
 
+function mapper_mt.__index:mark(vmask, names, mark)
+	mark = mark or 0xff
+
+	for _,name in ipairs(names) do
+		local fv = self.vars[name]
+		vmask[fv.fhk_var.idx] = mark
+	end
+end
+
 function mapper_mt.__index:set_init_vmask(vmask, names)
 	local G = self.G
 
@@ -335,12 +344,8 @@ function mapper_mt.__index:set_init_vmask(vmask, names)
 	stable.stable = 1
 	C.bm_or64(vmask, G.n_var, C.bmask8(stable.u8))
 
-	for _,name in ipairs(names) do
-		-- clear the given flag from targets, no need to set any flags,
-		-- fhk will handle that in fhk_solve()
-		local fv = self.vars[name]
-		vmask[fv.fhk_var.idx] = stable.u8
-	end
+	-- clear given bit for targets
+	self:mark(vmask, names, stable.u8)
 end
 
 function mapper_mt.__index:failed()
@@ -416,6 +421,7 @@ function solver_func_mt.__index:from(src)
 	src:mark_visible(self.mapper, self.init_v)
 	src:mark_nonconstant(self.mapper, self.solver.reset_v)
 	self.mapper:set_init_vmask(self.init_v, self.names)
+	self.mapper:mark(self.solver.reset_v, self.names)
 	self.solver:make_reset_masks()
 
 	local solver_func = src:solver_func(self.mapper, self.solver)
