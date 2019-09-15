@@ -85,8 +85,8 @@ void vpsumi(vreal *d, const vreal *restrict a, unsigned *idx, size_t n){
 	vreal sum = 0;
 	for(size_t i=0;i<n;i++){
 		unsigned k = idx[i];
-		sum += a[k];
 		d[k] = sum;
+		sum += a[k];
 	}
 }
 
@@ -95,9 +95,9 @@ void vpsumim(vreal *d, const vreal *restrict a, unsigned *idx, vmask *m, vmask m
 	vreal sum = 0;
 	for(size_t i=0;i<n;i++){
 		unsigned k = idx[i];
+		d[k] = sum;
 		if(m[k] & mask)
 			sum += a[k];
-		d[k] = sum;
 	}
 }
 
