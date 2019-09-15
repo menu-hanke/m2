@@ -41,6 +41,15 @@ end
 
 ------------------------
 
+local function vecstr(data, n)
+	local s = {}
+	for i=0, tonumber(n)-1 do
+		local sf = string.format("%010f", tonumber(data[i]))
+		table.insert(s, sf)
+	end
+	return table.concat(s, "  ")
+end
+
 local function vbinop(scalarf, vectorf)
 	return function(self, x, dest)
 		if not dest then
@@ -57,37 +66,63 @@ end
 
 ------------------------
 
-ffi.metatype("struct Lvec", { __index = {
-	set   = function(self, c) C.vsetc(self.data, c, self.n) end,
-	add   = vbinop(C.vaddc, C.vaddv),
-	mul   = vbinop(C.vmulc, C.vmulv),
-	area  = function(self, dest) C.varead(dest, self.data, self.n) end,
-	sorti = function(self)
-		-- TODO: this allocation is NYI, use arena etc.
-		local ret = ffi.new("unsigned[?]", self.n)
-		C.vsorti(ret, self.data, self.n)
-		return ret
-	end,
-	mask  = function(self, mask, m)
-		local ret = ffi.new("struct Lvec_masked")
-		ret.n = self.n
-		ret.data = self.data
-		ret.mask = mask
-		ret.m = m
-		return ret
-	end,
-	sum   = function(self) return (C.vsum(self.data, self.n)) end,
-	psumi = function(self, dest, idx) return (C.vpsumi(dest, self.data, idx, self.n)) end
-}})
+ffi.metatype("struct Lvec", {
+	__index = {
+		set   = function(self, c) C.vsetc(self.data, c, self.n) end,
+		add   = vbinop(C.vaddc, C.vaddv),
+		mul   = vbinop(C.vmulc, C.vmulv),
+		area  = function(self, dest) C.varead(dest, self.data, self.n) end,
+		sorti = function(self)
+			-- TODO: this allocation is NYI, use arena etc.
+			local ret = ffi.new("unsigned[?]", self.n)
+			C.vsorti(ret, self.data, self.n)
+			return ret
+		end,
+		mask  = function(self, mask, m)
+			local ret = ffi.new("struct Lvec_masked")
+			ret.n = self.n
+			ret.data = self.data
+			ret.mask = mask
+			ret.m = m
+			return ret
+		end,
+		sum   = function(self) return (C.vsum(self.data, self.n)) end,
+		psumi = function(self, dest, idx) return (C.vpsumi(dest, self.data, idx, self.n)) end
+	},
+
+	__tostring = function(self) return vecstr(self.data, self.n) end
+})
 
 ffi.metatype("struct Lvec_masked", { __index = {
-	sum   = function(self) return C.vsumm(self.data, self.mask. self.m, self.n) end,
+	sum   = function(self) return C.vsumm(self.data, self.mask, self.m, self.n) end,
 	psumi = function(self, dest, idx)
 		return (C.vpsumim(dest, self.data, idx, self.mask, self.m, self.n))
 	end
 }})
 
 ------------------------
+
+local function binarystr(d, n)
+	local bs = {}
+
+	for i=1, n do
+		bs[i] = (d%2 == 1) and "1" or "0"
+		d = d / 2ULL
+	end
+
+	return table.concat(bs, "")
+end
+
+local function bitmapstr(data, n, size)
+	size = size or 8
+	local chunks = {}
+
+	for i=0, tonumber(n)-1 do
+		chunks[i+1] = binarystr(data[i], size)
+	end
+
+	return table.concat(chunks, "\t")
+end
 
 local function bitmapop(maskf, bitmapf)
 	return function(self, x)
@@ -110,7 +145,7 @@ local function maskf(f, xmask)
 	end
 end
 
-local function bitmapind(size, xmask, expand)
+local function bitmapmt(size, xmask, expand)
 	local set = maskf(C.bm_set64, xmask)
 	local vmask
 
@@ -126,25 +161,29 @@ local function bitmapind(size, xmask, expand)
 	end
 
 	return {
-		init  = function(self) self.n8 = self.n*size end,
-		set   = function(self, x) set(self.bm8, self.n8, x) end,
-		zero  = function(self) C.bm_zero(self.bm8, self.n8) end,
-		copy  = function(self, other)
-			assert(other.n8 == self.n8 and other ~= self)
-			C.bm_copy(self.bm8, other.bm8, self.n8)
-		end,
-		vmask = vmask,
-		not_  = function(self) C.bm_not(self.bm8, self.n8) end,
-		and_  = bitmapop(maskf(C.bm_and64, xmask), C.bm_and),
-		or_   = bitmapop(maskf(C.bm_or64, xmask),  C.bm_or),
-		xor   = bitmapop(maskf(C.bm_xor64, xmask), C.bm_xor)
+		__index = {
+			init  = function(self) self.n8 = self.n*size end,
+			set   = function(self, x) set(self.bm8, self.n8, x) end,
+			zero  = function(self) C.bm_zero(self.bm8, self.n8) end,
+			copy  = function(self, other)
+				assert(other.n8 == self.n8 and other ~= self)
+				C.bm_copy(self.bm8, other.bm8, self.n8)
+			end,
+			vmask = vmask,
+			not_  = function(self) C.bm_not(self.bm8, self.n8) end,
+			and_  = bitmapop(maskf(C.bm_and64, xmask), C.bm_and),
+			or_   = bitmapop(maskf(C.bm_or64, xmask),  C.bm_or),
+			xor   = bitmapop(maskf(C.bm_xor64, xmask), C.bm_xor)
+		},
+		
+		__tostring = function(self) return bitmapstr(self.data, self.n, size) end
 	}
 end
 
-ffi.metatype("struct Lbitmap_b8",  {__index=bitmapind(1, C.bmask8,  C.vmexpand8)})
-ffi.metatype("struct Lbitmap_b16", {__index=bitmapind(2, C.bmask16, C.vmexpand16)})
-ffi.metatype("struct Lbitmap_b32", {__index=bitmapind(4, C.bmask32, C.vmexpand32)})
-ffi.metatype("struct Lbitmap_b64", {__index=bitmapind(8)})
+ffi.metatype("struct Lbitmap_b8",  bitmapmt(1, C.bmask8,  C.vmexpand8))
+ffi.metatype("struct Lbitmap_b16", bitmapmt(2, C.bmask16, C.vmexpand16))
+ffi.metatype("struct Lbitmap_b32", bitmapmt(4, C.bmask32, C.vmexpand32))
+ffi.metatype("struct Lbitmap_b64", bitmapmt(8))
 
 ------------------------
 
@@ -181,7 +220,9 @@ local function typed(type, data, n)
 end
 
 return {
-	vec    = vec,
-	bitmap = bitmap,
-	typed  = typed
+	vec       = vec,
+	vecstr    = vecstr,
+	bitmap    = bitmap,
+	bitmapstr = bitmapstr,
+	typed     = typed
 }
