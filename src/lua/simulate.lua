@@ -1,41 +1,33 @@
 local conf = require "conf"
-local sim = require "sim"
-local world = require "world"
-local typing = require "typing"
-local fhk = require "fhk"
-
-local function inject_types(env, cfg)
-	env.enum = {}
-	for name,e in pairs(cfg.enums) do
-		env.enum[name] = e.values
-	end
-
-	env.types = cfg.types
-end
+local sim_env = require "sim_env"
 
 local function main(args)
-	if not args.scripts then
-		error("No scripts given, give some with -s")
-	end
+	if not args.scripts then error("No scripts given, give some with -s") end
+	if not args.instr then error("No instructions, give some with -I") end
 
 	local cfg = conf.read(args.config)
-	local _sim = sim.create()
-	local mapper = fhk.hook(fhk.build_graph(cfg.fhk_vars, cfg.fhk_models))
-	mapper:create_models(cfg.calib)
-
-	local env = setmetatable({}, {__index=_G})
-	sim.inject(env, _sim)
-	typing.inject(env)
-	fhk.inject(env, mapper)
-	world.inject(env, _sim._sim)
-	inject_types(env, cfg)
+	local env = sim_env.from_conf(cfg)
 
 	for _,s in ipairs(args.scripts) do
-		local f, err = loadfile(s, nil, env)
-		if err then
-			error(err)
+		env:run_file(s)
+	end
+
+	local instr = env:run_file(args.instr)
+
+	if args.input then
+		local data = readjson(args.input)
+		local sim = env.sim
+		sim:savepoint()
+		for i,v in ipairs(data) do
+			io.stderr:write(string.format("[%s] %d/%d\n", args.input, i, #data))
+			sim:enter()
+			env:setup(v)
+			env:simulate(instr)
+			sim:exit()
+			sim:restore()
 		end
-		f()
+	else
+		env:simulate(instr)
 	end
 end
 

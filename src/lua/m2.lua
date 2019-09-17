@@ -25,7 +25,9 @@ local cmdargs = {
 
 	simulate = {
 		c = opt("config"),
-		s = addopt("scripts")
+		s = addopt("scripts"),
+		i = opt("input"),
+		I = opt("instr")
 	},
 
 	fhkdbg = {

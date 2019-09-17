@@ -179,8 +179,9 @@ local function create_sim()
 	local _sim = ffi.gc(C.sim_create(), C.sim_destroy)
 
 	return setmetatable({
-		chains=chains,
-		_sim=_sim
+		chains = chains,
+		_sim   = _sim,
+		_frame = create_frame({}, 1)
 	}, sim_mt)
 end
 
@@ -188,15 +189,19 @@ local function choice(id, param)
 	return {id=id, param=param}
 end
 
+local function generator(f)
+	return function(...) return coroutine.wrap(f(...)) end
+end
+
 local function inject(env, sim)
 	env.sim = sim
 	env.record = record
 	env.choice = choice
+	env.generator = generator
 	-- shortcuts
 	env.on = delegate(sim, sim.on)
 	env.branch = delegate(sim, sim.branch)
 	env.event = delegate(sim, sim.event)
-	env.simulate = funct
 	env.simulate = delegate(sim, sim.simulate)
 end
 
@@ -231,23 +236,31 @@ function sim:on(event, f, prio)
 	self.chains[event]:add(create_callback(f, prio))
 end
 
-function sim:prepare()
-	if not self._prepared then
-		self:event("sim:prepare")
-		self._prepared = true
-	end
-end
-
 function sim:simulate(rec)
 	self:simulate_instr(make_instr(self, getrecord(rec)))
 end
 
 function sim:simulate_instr(instr)
-	assert(not self._frame)
+	local f = self._frame
 	self._frame = create_frame(instr, 1)
-	self:prepare()
 	self._frame:exec()
-	self._frame = nil
+	self._frame = f
+end
+
+function sim:enter()
+	C.sim_enter(self._sim)
+end
+
+function sim:savepoint()
+	C.sim_savepoint(self._sim)
+end
+
+function sim:restore()
+	C.sim_restore(self._sim)
+end
+
+function sim:exit()
+	C.sim_exit(self._sim)
 end
 
 function sim:branch(instr, branches)

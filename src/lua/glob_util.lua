@@ -117,3 +117,11 @@ local callbacks_mt = {
 function callbacks(tab)
 	return setmetatable(tab, callbacks_mt)
 end
+
+function readjson(fname)
+	local decode = require "json.decode"
+	local fp = io.open(fname)
+	local ret = decode(fp:read("*a"))
+	fp:close()
+	return ret
+end
