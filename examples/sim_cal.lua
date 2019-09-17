@@ -232,12 +232,3 @@ end)
 on("grow", function()
 	grow()
 end)
-
---------------------------------------------------------------------------------
-
-local instr = record()
-
-instr.init()
-instr.grow()
-
-simulate(instr)
