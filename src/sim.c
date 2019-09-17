@@ -102,6 +102,9 @@ void sim_savepoint(struct sim *sim){
 	if(!f->vstack_copy)
 		f->vstack_copy = arena_alloc(sim->static_arena, SIM_VSTACK_SIZE, alignof(sim->vstack));
 
+	dv("[%u] @ %u -- savepoint %p -> %p (%zu bytes)\n", sim->depth, f->fid, sim->vstack,
+			f->vstack_copy, f->vstack_ptr);
+
 	memcpy(f->vstack_copy, sim->vstack, f->vstack_ptr);
 	f->saved = 1;
 }
@@ -109,6 +112,9 @@ void sim_savepoint(struct sim *sim){
 void sim_restore(struct sim *sim){
 	struct frame *f = TOP(sim);
 	assert(f->saved);
+
+	dv("[%u] @ %u -- restore vstack %p -> %p (%zu bytes)\n", sim->depth, f->fid, f->vstack_copy,
+			sim->vstack, f->vstack_ptr);
 
 	memcpy(sim->vstack, f->vstack_copy, f->vstack_ptr);
 }

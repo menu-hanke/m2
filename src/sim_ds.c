@@ -64,6 +64,7 @@ struct vec *sim_create_vec(sim *sim, struct vec *tpl, int lifetime){
 	unsigned size = vec_header_size(tpl->n_bands);
 	struct vec *ret = sim_alloc(sim, size, alignof(*ret), lifetime);
 	memcpy(ret, tpl, size);
+	dv("vec<%p>: %u bands (header size=%u) life=%#x\n", ret, tpl->n_bands, size, lifetime);
 	return ret;
 }
 
