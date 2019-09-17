@@ -328,7 +328,7 @@ function globals_mt.__index:mark_visible(mapper, vmask)
 end
 
 function globals_mt.__index:mark_nonconstant(mapper, vmask)
-	mapper:mark_nonconstant(vmask. ffi.C.GMAP_BIND_GLOBAL, typing.tvalue.u64(0))
+	mapper:mark_nonconstant(vmask, ffi.C.GMAP_BIND_GLOBAL, typing.tvalue.u64(0))
 end
 
 function globals_mt.__index:solver_func(mapper, solver)
@@ -352,15 +352,25 @@ local function get_ctype(name, ctype, env)
 	return env.fhk.typeof(name).ctype
 end
 
+local function globalsfunc(env, static)
+	return function(names, ctype)
+		names = type(names) == "string" and {names} or names
+		ctype = type(ctype) == "string" and ctype or (ctype and ctype.ctype)
+		for _,name in ipairs(names) do
+			env.globals.define(name, ctype or env.fhk.typeof(name).ctype, static)
+		end
+	end
+end
+
 local function inject(env, sim)
 	env.obj = delegate(sim, obj)
 
 	local gs = globals(sim)
+	gs.dynamic = globalsfunc(env, false)
+	gs.static = globalsfunc(env, true)
+
 	env.globals = gs
 	env.G = gs.G
-
-	gs.new = function(name, ctype) gs.define(name, get_ctype(name, ctype, env), false) end
-	gs.static = function(name, ctype) gs.define(name, get_ctype(name, ctype, env), true) end
 end
 
 return {
