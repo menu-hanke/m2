@@ -15,7 +15,7 @@ define.vars {
 
 define.model.Mb_1 {
 	params  = {"x", "c"},
-	checks  = { c = set(1, 2, 3) },
+	checks  = { c = any(1, 2, 3) },
 	returns = {"y", "y2"},
 	impl    = "R::examples/models1.r::Mb_1"
 }
@@ -28,21 +28,21 @@ define.model.Mb_2 {
 
 -- "better" but more specific model for case c=4
 define.model.Mb_2v2 {
-	checks  = { c = set(4) },
+	checks  = { c = any(4) },
 	returns = "z",
 	impl    = "R::examples/models1.r::Mb_2v2"
 }
 
 define.model.Mb_3 {
 	params  = "z",
-	checks  = { z = ival(0, math.huge) },
+	checks  = { z = between(0, math.huge) },
 	returns = {"y", "y2"},
 	impl    = "R::examples/models1.r::Mb_3"
 }
 
 define.model.Mb_4 {
 	params  = "z",
-	checks  = { z = ival(-math.huge, 0) },
+	checks  = { z = between(-math.huge, 0) },
 	returns = "w",
 	impl    = "R::examples/models1.r::Mb_4"
 }

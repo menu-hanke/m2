@@ -8,8 +8,8 @@ local C = ffi.C
 local function copy_cst(check, cst)
 	if cst.type == "interval" then
 		check.type = C.FHK_RIVAL
-		check.rival.min = a
-		check.rival.max = b
+		check.rival.min = cst.a
+		check.rival.max = cst.b
 	elseif cst.type == "set" then
 		check.type = C.FHK_BITSET
 		check.setmask = cst.mask
