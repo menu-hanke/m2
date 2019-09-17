@@ -231,7 +231,9 @@ end
 
 function mapper_mt.__index:bind_mapping(mapping, name)
 	local v = self.vars[name]
-	assert(not v.mapping)
+	if v.mapping then
+		error(string.format("Variable '%s' already has this mapping -> %s", name, v.mapping))
+	end
 	-- name is a table key of mapper so it will not be gc'd thanks to interning
 	-- (meaning we don't need to copy it over, this pointer will work)
 	mapping.name = name
