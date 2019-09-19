@@ -27,77 +27,106 @@ static int cmp_idx(const void *a, const void *b, void *u);
 		for(size_t i=0;i<n;i++){ step; }\
 	} while(0)
 
-/* set all elements of d to constant c */
+/* set constant
+ * d <- c */
 void vsetc(vreal *d, vreal c, size_t n){
 	V(n, d[i] = c);
 }
 
-/* add constant c to a and store to d */
-void vaddc(vreal *d, vreal *a, vreal c, size_t n){
-	V(n, d[i] = a[i] + c);
+/* scale and add constant
+ * d <- ax + b */
+void vsaddc(vreal *d, vreal a, vreal *x, vreal b, size_t n){
+	V(n, d[i] = a*x[i] + b);
 }
 
-/* add vector b to a and store to d */
-void vaddv(vreal *d, vreal *a, const vreal *restrict b, size_t n){
-	V(n, d[i] = a[i] + b[i]);
+/* add constant
+ * d <- x + c */
+void vaddc(vreal *d, vreal *x, vreal c, size_t n){
+	vsaddc(d, 1, x, c, n);
 }
 
-/* multiply a by constan c and store to d */
-void vmulc(vreal *d, vreal *a, vreal c, size_t n){
-	V(n, d[i] = a[i] * c);
+/* add scaled vector
+ * d <- x + ay */
+void vaddsv(vreal *d, vreal *x, vreal a, const vreal *restrict y, size_t n){
+	V(n, d[i] = x[i] + a*y[i]);
 }
 
-/* multiply a and b element-wise and store to d */
-void vmulv(vreal *d, vreal *a, const vreal *restrict b, size_t n){
-	V(n, d[i] = a[i] * b[i]);
+/* add vector
+ * d <- x + y */
+void vaddv(vreal *d, vreal *x, const vreal *restrict y, size_t n){
+	vaddsv(d, x, 1, y, n);
 }
 
-/* compute area given diameter in a and store to d */
-void varead(vreal *d, vreal *a, size_t n){
-	V(n, d[i] = PI * a[i] * a[i] / 4);
+/* scale vector
+ * d <- ax */
+void vscale(vreal *d, vreal *x, vreal a, size_t n){
+	V(n, d[i] = a*x[i]);
 }
 
-/* sort indices of a */
-void vsorti(unsigned *idx, vreal *a, size_t n){
+/* multiply element-wise
+ * d <- x * y */
+void vmulv(vreal *d, vreal *x, const vreal *restrict y, size_t n){
+	V(n, d[i] = x[i] * y[i]);
+}
+
+/* generalized reflection of x around y
+ * d <- y + a*(y - x) */
+void vrefl(vreal *d, vreal a, vreal *x, const vreal *restrict y, size_t n){
+	V(n, d[i] = y[i] + a*(y[i] - x[i]));
+}
+
+/* area from diameter
+ * d <- (pi/4)*x^2 */
+void varead(vreal *d, vreal *x, size_t n){
+	V(n, d[i] = (PI/4) * x[i] * x[i]);
+}
+
+/* sort indices largest first
+ * x[idx[i]] >= x[idx[j]] when i >= j */
+void vsorti(unsigned *idx, vreal *x, size_t n){
 	for(size_t i=0;i<n;i++)
 		idx[i] = i;
 
 	// TODO: replace qsort here with inlined sort
-	qsort_r(idx, n, sizeof(*idx), cmp_idx, a);
+	qsort_r(idx, n, sizeof(*idx), cmp_idx, x);
 }
 
-/* sum elements of a */
-vreal vsum(vreal *a, size_t n){
+/* sum elements
+ * sum(x[i] : i=1..n) */
+vreal vsum(vreal *x, size_t n){
 	vreal ret = 0;
-	V(n, ret += a[i]);
+	V(n, ret += x[i]);
 	return ret;
 }
 
-/* sum elements of a selected by mask */
-vreal vsumm(vreal *a, vmask *m, vmask mask, size_t n){
+/* sum elements selected by mask
+ * sum(x[i] : m[i]&mask, i=1..n)*/
+vreal vsumm(vreal *x, vmask *m, vmask mask, size_t n){
 	vreal ret = 0;
-	V(n, if(m[i] & mask) ret += a[i]);
+	V(n, if(m[i] & mask) ret += x[i]);
 	return ret;
 }
 
-/* prefix sum a sorted by idx to d */
-void vpsumi(vreal *d, const vreal *restrict a, unsigned *idx, size_t n){
+/* prefix sum by index sorting
+ * d[idx[i]] <- sum(x[idx[j]] : j=1..i) */
+void vpsumi(vreal *d, const vreal *restrict x, unsigned *idx, size_t n){
 	vreal sum = 0;
 	for(size_t i=0;i<n;i++){
 		unsigned k = idx[i];
 		d[k] = sum;
-		sum += a[k];
+		sum += x[k];
 	}
 }
 
-/* prefix sum a sorted by idx selected by mask to d */
-void vpsumim(vreal *d, const vreal *restrict a, unsigned *idx, vmask *m, vmask mask, size_t n){
+/* prefix sum by index sorting selected by mask
+ * d[idx[i]] <- sum(x[idx[j]] : m[ixd[j]]&mask, j=1..i) */
+void vpsumim(vreal *d, const vreal *restrict x, unsigned *idx, vmask *m, vmask mask, size_t n){
 	vreal sum = 0;
 	for(size_t i=0;i<n;i++){
 		unsigned k = idx[i];
 		d[k] = sum;
 		if(m[k] & mask)
-			sum += a[k];
+			sum += x[k];
 	}
 }
 

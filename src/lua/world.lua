@@ -270,7 +270,7 @@ end
 
 function objvec_mt.__index:swap(name, data)
 	local band = self.obj.bands[name]
-	ffi.C.frame_swap_band(self.obj.sim, self.vec, band, data)
+	ffi.C.frame_swap_band(self.obj.sim, self.vec, band, vmath.todata(data))
 end
 
 function objvec_mt.__index:alloc(num)

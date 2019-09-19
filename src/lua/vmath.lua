@@ -1,4 +1,5 @@
 local typing = require "typing"
+local malloc = require "malloc"
 local ffi = require "ffi"
 local C = ffi.C
 
@@ -24,17 +25,19 @@ ffi.cdef [[
 ]]
 
 for b,t in pairs(bitmap_types) do
-	-- Note: don't access bm8 in lua code, luajit has strict aliasing.
-	-- Using bm8 for C calls is safe since luajit shouldn't be able to reorder accesses
-	-- across C call boundaries.
+	-- This struct is a hack to make luajit happy, the bm8 and uint*_t pointers always
+	-- point to the same data but the bm8 is used for C calls.
+	-- Absolutely don't access the bm8 pointer in lua code, this breaks strict aliasing.
+	-- It's fine to pass it to C since luajit can't reorder writes/reads accross the
+	-- call boundary.
+	-- Ideally we would only have a single pointer here but this is preferable to
+	-- spamming ffi.cast
 	ffi.cdef(string.format([[
 		struct Lbitmap_%s {
 			size_t n;
 			size_t n8;
-			union {
-				bm8 *bm8;
-				%s *data;
-			};
+			bm8 *bm8;
+			%s *data;
 		}
 	]], b, t))
 end
@@ -50,33 +53,57 @@ local function vecstr(data, n)
 	return table.concat(s, "  ")
 end
 
+local vreal_type = ffi.typeof("vreal")
+local function isscalar(x)
+	return type(x) == "number" or ffi.typeof(x) == vreal_type
+end
+
+local vptr_type = ffi.typeof("vreal *")
+local function todata(x)
+	-- TODO? maybe this should accept void pointers also
+	return ffi.typeof(x) == vptr_type and x or x.data
+end
+
 local function vbinop(scalarf, vectorf)
 	return function(self, x, dest)
-		if not dest then
-			dest = self.data
-		end
+		dest = dest and todata(dest) or self.data
 
-		if type(x) == "number" then
+		if isscalar(x) then
 			scalarf(dest, self.data, x, self.n)
 		else
-			vectorf(dest, self.data, x, self.n)
+			x = todata(x)
+			assert(dest ~= x)
+			vectorf(dest, self.data, todata(x), self.n)
 		end
 	end
 end
 
 ------------------------
 
+local function vsubc(d, x, c, n) C.vaddc(d, x, -c, n) end
+local function vsubv(d, x, y, n) C.vaddsv(d, x, -1, y, n) end
+
 ffi.metatype("struct Lvec", {
 	__index = {
 		set   = function(self, c) C.vsetc(self.data, c, self.n) end,
 		add   = vbinop(C.vaddc, C.vaddv),
-		mul   = vbinop(C.vmulc, C.vmulv),
-		area  = function(self, dest) C.varead(dest, self.data, self.n) end,
-		sorti = function(self)
+		saddc = function(self, a, b, dest)
+			C.vsaddc(dest and todata(dest) or self.data, a, self.data, b, self.n)
+		end,
+		adds  = function(self, a, y, dest)
+			C.vaddsv(dest and todata(dest) or self.data, self.data, a, todata(y), self.n)
+		end,
+		sub   = vbinop(vsubc, vsubv),
+		mul   = vbinop(C.vscale, C.vmulv),
+		refl  = function(self, a, y, dest)
+			C.vrefl(dest and todata(dest) or self.data, a, self.data, todata(y), self.n)
+		end,
+		area  = function(self, dest) C.varead(todata(dest), self.data, self.n) end,
+		sorti = function(self, dest)
 			-- TODO: this allocation is NYI, use arena etc.
-			local ret = ffi.new("unsigned[?]", self.n)
-			C.vsorti(ret, self.data, self.n)
-			return ret
+			dest = dest or ffi.new("unsigned[?]", self.n)
+			C.vsorti(dest, self.data, self.n)
+			return dest
 		end,
 		mask  = function(self, mask, m)
 			local ret = ffi.new("struct Lvec_masked")
@@ -87,7 +114,7 @@ ffi.metatype("struct Lvec", {
 			return ret
 		end,
 		sum   = function(self) return (C.vsum(self.data, self.n)) end,
-		psumi = function(self, dest, idx) return (C.vpsumi(dest, self.data, idx, self.n)) end
+		psumi = function(self, dest, idx) return (C.vpsumi(todata(dest), self.data, idx, self.n)) end
 	},
 
 	__tostring = function(self) return vecstr(self.data, self.n) end
@@ -96,7 +123,7 @@ ffi.metatype("struct Lvec", {
 ffi.metatype("struct Lvec_masked", { __index = {
 	sum   = function(self) return C.vsumm(self.data, self.mask, self.m, self.n) end,
 	psumi = function(self, dest, idx)
-		return (C.vpsumim(dest, self.data, idx, self.mask, self.m, self.n))
+		return (C.vpsumim(todata(dest), self.data, idx, self.mask, self.m, self.n))
 	end
 }})
 
@@ -124,9 +151,14 @@ local function bitmapstr(data, n, size)
 	return table.concat(chunks, "\t")
 end
 
+local mask_type = ffi.typeof("uint64_t")
+local function isscalarmask(x)
+	return type(x) == "number" or ffi.typeof(x) == mask_type
+end
+
 local function bitmapop(maskf, bitmapf)
 	return function(self, x)
-		if type(x) == "number" then
+		if isscalarmask(x) then
 			maskf(self.bm8, self.n8, x)
 		else
 			assert(x ~= self and x.n == self.n and x.n8 == self.n8)
@@ -201,11 +233,20 @@ local function vec(data, n)
 	return ret
 end
 
+local function freevec(v)
+	C.free(v.data)
+end
+
+local function allocvec(n)
+	local data = malloc.new_nogc("vreal", n)
+	return ffi.gc(vec(data, n), freevec)
+end
+
 local function bitmap(type, data, n)
 	local t = bitmaps[tonumber(type.desc)]
-	-- TODO: the union here causes NYI
 	local ret = ffi.new(t)
 	ret.data = data
+	ret.bm8 = data
 	ret.n = n
 	ret:init()
 	return ret
@@ -221,8 +262,10 @@ end
 
 return {
 	vec       = vec,
+	allocvec  = allocvec,
 	vecstr    = vecstr,
 	bitmap    = bitmap,
 	bitmapstr = bitmapstr,
-	typed     = typed
+	typed     = typed,
+	todata    = todata
 }
