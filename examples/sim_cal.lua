@@ -10,10 +10,10 @@ local function update_ba(trees)
 	local f = trees:band("f")
 	local d = trees:bandv("dbh")
 	local ba = trees:newbandv("ba")
-	d:area(ba.data)
+	d:area(ba)
 	ba:mul(f)
 	ba:mul(1/10000.0) -- XXX: skaalaus että yksiköt menee oikein
-	trees:swap("ba", ba.data)
+	trees:swap("ba", ba)
 end
 
 local function update_baL(trees)

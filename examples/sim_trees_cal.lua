@@ -12,10 +12,10 @@ globals.dynamic {
 
 fhk.expose(globals)
 
-local Tree = obj("Tree", types.tree)
+Tree = obj("Tree", types.tree)
 fhk.expose(Tree)
 
-local trees = Tree:vec()
+trees = Tree:vec()
 
 local function update_ba()
 	local f = trees:band("f")

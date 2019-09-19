@@ -30,6 +30,14 @@ local cmdargs = {
 		I = opt("instr")
 	},
 
+	calibrate = {
+		c = opt("config"),
+		s = addopt("scripts"),
+		i = opt("input"),
+		p = opt("coefs"),
+		C = opt("calibrator")
+	},
+
 	fhkdbg = {
 		c = opt("config"),
 		i = opt("input"),

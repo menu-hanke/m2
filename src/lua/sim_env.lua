@@ -22,6 +22,10 @@ local function from_conf(cfg)
 	return ret
 end
 
+function simenv_mt.__index:inject(name, value)
+	self.env[name] = value
+end
+
 function simenv_mt.__index:inject_base()
 	require("sim").inject(self.env, self.sim)
 	require("world").inject(self.env, self.sim._sim)
@@ -29,6 +33,7 @@ function simenv_mt.__index:inject_base()
 end
 
 function simenv_mt.__index:inject_fhk(mapper)
+	self.mapper = mapper
 	require("fhk").inject(self.env, mapper)
 end
 

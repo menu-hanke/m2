@@ -264,6 +264,22 @@ function sim:exit()
 	C.sim_exit(self._sim)
 end
 
+function sim:alloc(size, align, life)
+	return (C.sim_alloc(self._sim, size, align, life))
+end
+
+function sim:allocator(ct, life)
+	local rt = ct .. "*"
+	local size = ffi.sizeof(ct)
+	local align = ffi.alignof(ct)
+	life = life or ffi.C.SIM_FRAME
+
+	return function(n)
+		n = n or 1
+		return (ffi.cast(rt, self:alloc(n * size, align, life)))
+	end
+end
+
 function sim:branch(instr, branches)
 	local f = self._frame
 	if f.exit then

@@ -1,0 +1,500 @@
+{
+  "models": {
+    "gro_manty": {
+      "c_0": {
+        "value": -7.1552,
+        "std": 0.271391,
+        "min": -10.7328,
+        "max": -3.5776,
+        "optimize": true
+      },
+      "c_sqrtd": {
+        "value": 0.4415,
+        "std": 0.027407,
+        "min": 0.2207,
+        "max": 0.6622,
+        "optimize": false
+      },
+      "c_d": {
+        "value": -0.0685,
+        "std": 0.003147,
+        "min": -0.1027,
+        "max": -0.0342,
+        "optimize": false
+      },
+      "c_logG": {
+        "value": -0.2027,
+        "std": 0.011555,
+        "min": -0.3041,
+        "max": -0.1014,
+        "optimize": false
+      },
+      "c_baL": {
+        "value": -0.1236,
+        "std": 0.002998,
+        "min": -0.1854,
+        "max": -0.0618,
+        "optimize": false
+      },
+      "c_logts": {
+        "value": 1.1198,
+        "std": 0.038722,
+        "min": 0.5599,
+        "max": 1.6796,
+        "optimize": false
+      },
+      "c_omt": {
+        "value": 0.1438,
+        "std": 0.01971,
+        "min": 0.0719,
+        "max": 0.2157,
+        "optimize": false
+      },
+      "c_vt": {
+        "value": -0.1754,
+        "std": 0.013045,
+        "min": -0.2632,
+        "max": -0.0877,
+        "optimize": false
+      },
+      "c_ct": {
+        "value": -0.5163,
+        "std": 0.019845,
+        "min": -0.7744,
+        "max": -0.2581,
+        "optimize": false
+      },
+      "c_suo": {
+        "value": -0.2425,
+        "std": 0.012894,
+        "min": -0.3637,
+        "max": -0.1212,
+        "optimize": false
+      }
+    },
+    "gro_kuusi": {
+      "c_0": {
+        "value": -12.7527,
+        "std": 0.491659,
+        "min": -19.129,
+        "max": -6.3763,
+        "optimize": true
+      },
+      "c_sqrtd": {
+        "value": 0.1693,
+        "std": 0.0336,
+        "min": 0.0846,
+        "max": 0.2539,
+        "optimize": false
+      },
+      "c_d": {
+        "value": -0.0301,
+        "std": 0.003663,
+        "min": -0.0451,
+        "max": -0.015,
+        "optimize": false
+      },
+      "c_logG": {
+        "value": -0.1875,
+        "std": 0.021432,
+        "min": -0.2812,
+        "max": -0.0937,
+        "optimize": false
+      },
+      "c_baL": {
+        "value": -0.0563,
+        "std": 0.005265,
+        "min": -0.0845,
+        "max": -0.0282,
+        "optimize": false
+      },
+      "c_baLku": {
+        "value": -0.087,
+        "std": 0.005895,
+        "min": -0.1305,
+        "max": -0.0435,
+        "optimize": false
+      },
+      "c_logts": {
+        "value": 1.9747,
+        "std": 0.070301,
+        "min": 0.9874,
+        "max": 2.9621,
+        "optimize": false
+      },
+      "c_omt": {
+        "value": 0.2688,
+        "std": 0.021395,
+        "min": 0.1344,
+        "max": 0.4032,
+        "optimize": false
+      },
+      "c_vt": {
+        "value": -0.2145,
+        "std": 0.031676,
+        "min": -0.3217,
+        "max": -0.1072,
+        "optimize": false
+      },
+      "c_ct": {
+        "value": -0.6179,
+        "std": 0.093027,
+        "min": -0.9268,
+        "max": -0.3089,
+        "optimize": false
+      }
+    },
+    "gro_lehti": {
+      "c_0": {
+        "value": -8.6306,
+        "std": 0.51058203,
+        "min": -12.9459,
+        "max": -4.3153,
+        "optimize": true
+      },
+      "c_sqrtd": {
+        "value": 0.5097,
+        "std": 0.034940833,
+        "min": 0.2549,
+        "max": 0.7646,
+        "optimize": false
+      },
+      "c_d": {
+        "value": -0.0829,
+        "std": 0.00469067,
+        "min": -0.1244,
+        "max": -0.0415,
+        "optimize": false
+      },
+      "c_logG": {
+        "value": -0.3864,
+        "std": 0.016784131,
+        "min": -0.5796,
+        "max": -0.1932,
+        "optimize": false
+      },
+      "c_baL": {
+        "value": -0.0545,
+        "std": 0.004603,
+        "min": -0.0817,
+        "max": -0.0272,
+        "optimize": false
+      },
+      "c_logts": {
+        "value": 1.3163,
+        "std": 0.073015,
+        "min": 0.6582,
+        "max": 1.9745,
+        "optimize": false
+      },
+      "c_omt": {
+        "value": 0.2566,
+        "std": 0.020555,
+        "min": 0.1283,
+        "max": 0.385,
+        "optimize": false
+      },
+      "c_vt": {
+        "value": -0.2256,
+        "std": 0.029932,
+        "min": -0.3383,
+        "max": -0.1128,
+        "optimize": false
+      },
+      "c_ct": {
+        "value": -0.3237,
+        "std": 0.063465,
+        "min": -0.4855,
+        "max": -0.1618,
+        "optimize": false
+      },
+      "c_raha": {
+        "value": 0.0253,
+        "std": 0.001031,
+        "min": 0.0126,
+        "max": 0.0379,
+        "optimize": false
+      }
+    },
+    "sur_manty": {
+      "c_0": {
+        "value": 1.41223,
+        "std": 0.409223,
+        "min": 0.7061,
+        "max": 2.1183,
+        "optimize": true
+      },
+      "c_sqrtd": {
+        "value": 1.8852,
+        "std": 0.194994,
+        "min": 0.9426,
+        "max": 2.8278,
+        "optimize": false
+      },
+      "c_d": {
+        "value": -0.21317,
+        "std": 0.024921,
+        "min": -0.3198,
+        "max": -0.1066,
+        "optimize": false
+      },
+      "c_baL": {
+        "value": -0.25637,
+        "std": 0.017946,
+        "min": -0.3846,
+        "max": -0.1282,
+        "optimize": false
+      },
+      "c_suo": {
+        "value": -0.39878,
+        "std": 0.102725,
+        "min": -0.5982,
+        "max": -0.1994,
+        "optimize": false
+      }
+    },
+    "sur_kuusi": {
+      "c_0": {
+        "value": 5.01677,
+        "std": 0.69092,
+        "min": 2.5084,
+        "max": 7.5252,
+        "optimize": true
+      },
+      "c_sqrtd": {
+        "value": 0.36902,
+        "std": 0.307773,
+        "min": 0.1845,
+        "max": 0.5535,
+        "optimize": false
+      },
+      "c_d": {
+        "value": -0.07504,
+        "std": 0.035463,
+        "min": -0.1126,
+        "max": -0.0375,
+        "optimize": false
+      },
+      "c_baLku": {
+        "value": -0.2319,
+        "std": 0.024919,
+        "min": -0.3479,
+        "max": -0.116,
+        "optimize": false
+      },
+      "c_suo": {
+        "value": -0.47361,
+        "std": 0.152433,
+        "min": -0.7104,
+        "max": -0.2368,
+        "optimize": false
+      }
+    },
+    "sur_lehti": {
+      "c_0": {
+        "value": 1.60895,
+        "std": 0.320572,
+        "min": 0.8045,
+        "max": 2.4134,
+        "optimize": true
+      },
+      "c_sqrtd": {
+        "value": 0.71578,
+        "std": 0.16681,
+        "min": 0.3579,
+        "max": 1.0737,
+        "optimize": false
+      },
+      "c_d": {
+        "value": -0.08236,
+        "std": 0.023742,
+        "min": -0.1235,
+        "max": -0.0412,
+        "optimize": false
+      },
+      "c_baLma": {
+        "value": -0.04814,
+        "std": 0.016582845,
+        "min": -0.0722,
+        "max": -0.0241,
+        "optimize": false
+      },
+      "c_baLkuko": {
+        "value": -0.13481,
+        "std": 0.012705,
+        "min": -0.2022,
+        "max": -0.0674,
+        "optimize": false
+      },
+      "c_suo": {
+        "value": -0.31789,
+        "std": 0.100982,
+        "min": -0.4768,
+        "max": -0.1589,
+        "optimize": false
+      },
+      "c_koivu": {
+        "value": 0.56311,
+        "std": 0.17719,
+        "min": 0.2816,
+        "max": 0.8447,
+        "optimize": false
+      },
+      "c_haapa": {
+        "value": 1.40145,
+        "std": 0.10605,
+        "min": 0.7007,
+        "max": 2.1022,
+        "optimize": false
+      }
+    },
+    "ingrowth_manty": {
+      "c_0": {
+        "value": -7.609,
+        "std": 3.354,
+        "min": -11.4135,
+        "max": -3.8045,
+        "optimize": true
+      },
+      "c_logts": {
+        "value": 2.048,
+        "std": 0.476,
+        "min": 1.024,
+        "max": 3.072,
+        "optimize": false
+      },
+      "c_sqrtG": {
+        "value": -0.476,
+        "std": 0.045,
+        "min": -0.714,
+        "max": -0.238,
+        "optimize": false
+      },
+      "c_omt": {
+        "value": -1.457,
+        "std": 0.662,
+        "min": -2.1855,
+        "max": -0.7285,
+        "optimize": false
+      },
+      "c_vt": {
+        "value": 0.751,
+        "std": 0.123,
+        "min": 0.3755,
+        "max": 1.1265,
+        "optimize": false
+      }
+    },
+    "ingrowth_kuusi": {
+      "c_0": {
+        "value": -10.998,
+        "std": 6.2,
+        "min": -16.497,
+        "max": -5.499,
+        "optimize": true
+      },
+      "c_logts": {
+        "value": 2.493,
+        "std": 0.878,
+        "min": 1.2465,
+        "max": 3.7395,
+        "optimize": false
+      },
+      "c_sqrtG": {
+        "value": -0.696,
+        "std": 0.177,
+        "min": -1.044,
+        "max": -0.348,
+        "optimize": false
+      },
+      "c_sqrtGma": {
+        "value": 0.55,
+        "std": 0.196,
+        "min": 0.275,
+        "max": 0.825,
+        "optimize": false
+      },
+      "c_vtct": {
+        "value": -1.651,
+        "std": 0.525,
+        "min": -2.4765,
+        "max": -0.8255,
+        "optimize": false
+      }
+    },
+    "ingrowth_koivu": {
+      "c_0": {
+        "value": 2.231,
+        "std": 3.947,
+        "min": 1.1155,
+        "max": 3.3465,
+        "optimize": true
+      },
+      "c_logts": {
+        "value": 0.813,
+        "std": 0.562,
+        "min": 0.4065,
+        "max": 1.2195,
+        "optimize": false
+      },
+      "c_sqrtG": {
+        "value": -0.785,
+        "std": 0.177,
+        "min": -1.1775,
+        "max": -0.3925,
+        "optimize": false
+      },
+      "c_sqrtGma": {
+        "value": 0.374,
+        "std": 0.204,
+        "min": 0.187,
+        "max": 0.561,
+        "optimize": false
+      },
+      "c_vtct": {
+        "value": -0.666,
+        "std": 0.205,
+        "min": -0.999,
+        "max": -0.333,
+        "optimize": false
+      }
+    },
+    "ingrowth_leppa": {
+      "c_0": {
+        "value": -18.275,
+        "std": 10.939,
+        "min": -27.4125,
+        "max": -9.1375,
+        "optimize": true
+      },
+      "c_logts": {
+        "value": 3.462,
+        "std": 1.546,
+        "min": 1.731,
+        "max": 5.193,
+        "optimize": false
+      },
+      "c_sqrtG": {
+        "value": -0.171,
+        "std": 0.061,
+        "min": -0.2565,
+        "max": -0.0855,
+        "optimize": false
+      },
+      "c_omt": {
+        "value": 1.063,
+        "std": 0.345,
+        "min": 0.5315,
+        "max": 1.5945,
+        "optimize": false
+      },
+      "c_vtct": {
+        "value": -0.949,
+        "std": 0.92,
+        "min": -1.4235,
+        "max": -0.4745,
+        "optimize": false
+      }
+    }
+  }
+}

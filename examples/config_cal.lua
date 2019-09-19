@@ -52,7 +52,7 @@ define.model.gro_kuusi {
 	params  = { "step", "mtyyppi", "dbh", "G", "ba", "ba_L", "ba_Lku", "ts" },
 	checks  = { spe = "kuusi" },
 	returns = { "i_d" },
-	coeffs  = { "c_0", "c_sqrtd", "c_d", "c_logG", "c_baL", "ca_baLku", "c_logts", "c_omt", "c_vt", "c_ct" },
+	coeffs  = { "c_0", "c_sqrtd", "c_d", "c_logG", "c_baL", "c_baLku", "c_logts", "c_omt", "c_vt", "c_ct" },
 	impl    = "R::examples/models_cal.r::gro_kuusi"
 }
 
