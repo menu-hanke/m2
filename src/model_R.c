@@ -61,7 +61,7 @@ model *mod_R_create(struct mod_R_def *def){
 			&MOD_R,
 			def->n_arg, def->atypes,
 			def->n_ret, def->rtypes,
-			def->n_coef
+			def->n_coef, def->flags
 	);
 
 	m->mode = def->mode;

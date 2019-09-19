@@ -149,10 +149,11 @@ local function create_models(sv, sm, calib)
 
 		def.atypes, def.n_arg = copyptypes(model.src.params, sv)
 		def.rtypes, def.n_ret = copyptypes(model.src.returns, sv)
+		def.n_coef = #model.src.coeffs
 
 		local cal = calib[name]
 		if cal then
-			def.n_coef = #model.src.coeffs
+			def:calibrated()
 		end
 
 		local mod = def()
@@ -166,6 +167,11 @@ local function create_models(sv, sm, calib)
 
 		if cal then
 			for i,c in ipairs(model.src.coeffs) do
+				if not cal[c] then
+					error(string.format("Missing coefficient '%s' for model '%s'",
+						c, name))
+				end
+
 				mod.coefs[i-1] = cal[c]
 			end
 			mod:calibrate()
@@ -295,7 +301,7 @@ function mapper_mt.__index:bind_model(name, mod)
 	ret.mod = mod
 	C.gmap_bind_model(self.G, model.fhk_model.idx, ret)
 	model.mapping = ret
-	model.mapping_f = f -- XXX: hack to prevent gc
+	model.mapping_mod = mod
 	return ret
 end
 

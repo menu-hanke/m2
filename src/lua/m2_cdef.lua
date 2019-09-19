@@ -397,8 +397,12 @@ void vmexpand32(vmask *m, uint32_t *mask, size_t n);
        
 void *maux_get_file_data(const char *file);
 void maux_set_file_data(const char *file, void *udata);
-void maux_initmodel(struct model *m, const struct model_func *func, unsigned n_arg, type *atypes,
-  unsigned n_ret, type *rtypes, unsigned n_coef);
+void maux_initmodel(
+  struct model *m, const struct model_func *func,
+  unsigned n_arg, type *atypes,
+  unsigned n_ret, type *rtypes,
+  unsigned n_coef, unsigned flags
+);
 void maux_destroymodel(struct model *m);
 void maux_exportd(struct model *m, pvalue *argv);
 void maux_importd(struct model *m, pvalue *retv);
@@ -408,7 +412,7 @@ enum mod_R_calib_mode {
  MOD_R_PASS_VECTOR
 };
 struct mod_R_def {
- unsigned n_arg; unsigned n_ret; type *atypes; type *rtypes;
+ unsigned n_arg; unsigned n_ret; type *atypes; type *rtypes; unsigned flags;
  const char *fname;
  const char *func;
  unsigned n_coef;
@@ -417,7 +421,7 @@ struct mod_R_def {
 model *mod_R_create(struct mod_R_def *def);
        
 struct mod_SimoC_def {
- unsigned n_arg; unsigned n_ret; type *atypes; type *rtypes;
+ unsigned n_arg; unsigned n_ret; type *atypes; type *rtypes; unsigned flags;
  const char *libname;
  const char *func;
 };

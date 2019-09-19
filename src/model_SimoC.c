@@ -31,6 +31,8 @@ static int init_simo_cif(struct model_SimoC *m);
 static void *load_simo_lib(const char *filename);
 
 model *mod_SimoC_create(struct mod_SimoC_def *def){
+	assert(!(def->flags & MODEL_CALIBRATED));
+
 	void *handle = load_simo_lib(def->libname);
 	if(!handle)
 		return NULL;
@@ -48,7 +50,7 @@ model *mod_SimoC_create(struct mod_SimoC_def *def){
 			&MOD_SIMOC,
 			def->n_arg, def->atypes,
 			def->n_ret, def->rtypes,
-			0
+			0, def->flags
 	);
 
 	if(init_simo_cif(m)){

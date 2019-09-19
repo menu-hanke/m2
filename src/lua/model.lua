@@ -8,34 +8,61 @@ ffi.metatype("struct model", {
 	}
 })
 
-local def_mt = {
-	__call     = function(self) return self._create(self._def) end,
-	__index    = function(self, k) return self._def[k] end,
-	__newindex = function(self, k, v) self._def[k] = v end
-}
+local function init_defbase(def)
+	def.n_arg = 0
+	def.n_ret = 0
+	def.flags = 0
+end
 
--- Put the create functions as names rather than references to functions since each implementation
--- is optional, so the symbol may be missing
-local impls = {
-	R = {
-		init = function(def, impl)
-			def.fname = impl.file
-			def.func = impl.func
-			def.mode = ffi.C.MOD_R_EXPAND
-		end,
+local def_func = { __index = {
+	calibrated = function(self)
+		self.flags = bit.bor(self.flags, ffi.C.MODEL_CALIBRATED)
+		return self
+	end
+}}
+
+local function mod(info)
+	return function()
+		ffi.metatype(info.def, {
+			__call  = ffi.C[info.create],
+			__index = info.func
+		})
+
+		return info.def
+	end
+end
+
+-- Init these lazily.
+-- Support for each language is optional and may not be compiled in, so symbol definitions
+-- may be missing and we can't just init them all eagerly.
+local impls = setmetatable({}, {__index = lazy {
+
+	R = mod {
 		create = "mod_R_create",
-		def = "struct mod_R_def"
+		def    = "struct mod_R_def",
+		func   = setmetatable({
+			init = function(self, impl)
+				init_defbase(self)
+				self.fname = impl.file
+				self.func = impl.func
+				self.mode = ffi.C.MOD_R_EXPAND
+			end
+		}, def_func)
 	},
 
-	SimoC = {
-		init = function(def, impl)
-			def.libname = impl.file
-			def.func = impl.func
-		end,
+	SimoC = mod {
 		create = "mod_SimoC_create",
-		def = "struct mod_SimoC_def"
+		def    = "struct mod_SimoC_def",
+		func   = setmetatable({
+			init = function(self, impl)
+				init_defbase(self)
+				self.libname = impl.file
+				self.func = impl.func
+			end
+		}, def_func)
 	}
-}
+
+}})
 
 local function def(impl)
 	local i = impls[impl.lang]
@@ -44,12 +71,9 @@ local function def(impl)
 		error(string.format("Unsupported model lang: %s", impl.lang))
 	end
 
-	local def = ffi.new(i.def)
-	i.init(def, impl)
-	return setmetatable({
-		_create = ffi.C[i.create],
-		_def = def
-	}, def_mt)
+	local ret = ffi.new(i)
+	ret:init(impl)
+	return ret
 end
 
 return {

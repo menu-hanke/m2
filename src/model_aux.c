@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 
 struct file_udata {
 	const char *filename;
@@ -40,11 +41,14 @@ void maux_set_file_data(const char *file, void *udata){
 	f->udata = udata;
 }
 
-void maux_initmodel(struct model *m, const struct model_func *func, unsigned n_arg, type *atypes,
-		unsigned n_ret, type *rtypes, unsigned n_coef){
+void maux_initmodel(
+	struct model *m, const struct model_func *func,
+	unsigned n_arg, type *atypes,
+	unsigned n_ret, type *rtypes,
+	unsigned n_coef, unsigned flags){
 
 	m->func = func;
-	m->flags = n_coef ? MODEL_CALIBRATED : 0;
+	m->flags = flags;
 	m->n_arg = n_arg;
 	m->n_ret = n_ret;
 	m->n_coef = n_coef;
@@ -52,7 +56,14 @@ void maux_initmodel(struct model *m, const struct model_func *func, unsigned n_a
 	m->rtypes = malloc(n_ret * sizeof(type));
 	memcpy(m->atypes, atypes, n_arg * sizeof(type));
 	memcpy(m->rtypes, rtypes, n_ret * sizeof(type));
-	m->coefs = n_coef ? malloc(n_coef * sizeof(*m->coefs)) : NULL;
+
+	if(n_coef){
+		m->coefs = malloc(n_coef * sizeof(*m->coefs));
+		for(unsigned i=0;i<n_coef;i++)
+			m->coefs[i] = NAN;
+	}else{
+		m->coefs = NULL;
+	}
 }
 
 void maux_destroymodel(struct model *m){
