@@ -193,22 +193,10 @@ local function generator(f)
 	return function(...) return coroutine.wrap(f(...)) end
 end
 
-local function inject(env, sim)
-	env.sim = sim
-	env.record = record
-	env.choice = choice
-	env.generator = generator
-	-- shortcuts
-	env.on = delegate(sim, sim.on)
-	env.branch = delegate(sim, sim.branch)
-	env.event = delegate(sim, sim.event)
-	env.simulate = delegate(sim, sim.simulate)
-end
-
 local function make_instr(sim, rec)
 	local instr = {}
 
-	for i,v in ipairs(rec) do
+	for i,v in ipairs(getrecord(rec)) do
 		local chain = sim.chains[v.f]
 		local narg = v.narg
 		local args = v.args
@@ -219,6 +207,19 @@ local function make_instr(sim, rec)
 	end
 
 	return instr
+end
+
+local function inject(env, sim)
+	env.sim = sim
+	env.record = record
+	env.choice = choice
+	env.generator = generator
+	-- shortcuts
+	env.on = delegate(sim, sim.on)
+	env.branch = delegate(sim, sim.branch)
+	env.event = delegate(sim, sim.event)
+	env.simulate = delegate(sim, sim.simulate)
+	env.make_instr = delegate(sim, make_instr)
 end
 
 function sim:on(event, f, prio)
@@ -237,7 +238,7 @@ function sim:on(event, f, prio)
 end
 
 function sim:simulate(rec)
-	self:simulate_instr(make_instr(self, getrecord(rec)))
+	self:simulate_instr(make_instr(self, rec))
 end
 
 function sim:simulate_instr(instr)
