@@ -436,7 +436,7 @@ enum mod_Lua_calib_mode {
 };
 struct mod_Lua_def {
  unsigned n_arg; unsigned n_ret; type *atypes; type *rtypes; unsigned flags;
- const char *fname;
+ const char *module;
  const char *func;
  unsigned n_coef;
  enum mod_Lua_calib_mode mode;

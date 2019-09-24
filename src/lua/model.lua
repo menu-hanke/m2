@@ -60,6 +60,19 @@ local impls = setmetatable({}, {__index = lazy {
 				self.func = impl.func
 			end
 		}, def_func)
+	},
+
+	Lua = mod {
+		create = "mod_Lua_create",
+		def    = "struct mod_Lua_def",
+		func   = setmetatable({
+			init = function(self, impl)
+				init_defbase(self)
+				self.module = impl.file
+				self.func = impl.func
+				self.mode = ffi.C.MOD_LUA_EXPAND
+			end
+		}, def_func)
 	}
 
 }})

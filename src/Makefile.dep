@@ -14,7 +14,9 @@ gmap.o: gmap.c gmap.h fhk.h bitmap.h def.h arena.h type.h grid.h vec.h \
 vmath.o: vmath.c vmath.h def.h
 model/aux.o: model/aux.c model/model.h model/../type.h model/../grid.h \
  model/../bitmap.h model/../def.h model/../list.h
-model/model_Lua.o: model/model_Lua.c
+model/model_Lua.o: model/model_Lua.c model/model_Lua.h model/aux.h \
+ model/model.h model/../type.h model/../grid.h model/../bitmap.h \
+ model/../def.h
 model/model_R.o: model/model_R.c model/model_R.h model/aux.h model/model.h \
  model/../type.h model/../grid.h model/../bitmap.h model/../def.h
 model/model_SimoC.o: model/model_SimoC.c model/model_SimoC.h model/aux.h \

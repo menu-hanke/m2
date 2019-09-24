@@ -7,7 +7,7 @@ CCWARN   = -Wall -Wextra
 XCFLAGS  = 
 XLDFLAGS = 
 
-MODEL_LANG    ?= R SimoC
+MODEL_LANG    ?= R SimoC Lua
 LUAPATH       ?= $(abspath lua)
 LUAJIT_CFLAGS ?= $(shell pkg-config --cflags luajit)
 LUAJIT_LIB    ?= $(shell pkg-config --libs luajit)
