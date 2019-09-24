@@ -3,9 +3,9 @@
 #include "fhk.h"
 #include "bitmap.h"
 #include "type.h"
-#include "model.h"
 #include "grid.h"
 #include "vec.h"
+#include "model/model.h"
 
 #include <stdint.h>
 #include <stdbool.h>

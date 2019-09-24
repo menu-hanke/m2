@@ -1,8 +1,6 @@
 #pragma once
 
-#include "model.h"
-#include "model_aux.h"
-#include "type.h"
+#include "aux.h"
 
 enum mod_R_calib_mode {
 	MOD_R_EXPAND,

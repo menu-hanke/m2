@@ -1,8 +1,6 @@
 #pragma once
 
-#include "model.h"
-#include "model_aux.h"
-#include "type.h"
+#include "aux.h"
 
 struct mod_SimoC_def {
 	MODEL_INIT_DEF;

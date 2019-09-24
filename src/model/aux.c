@@ -1,8 +1,7 @@
 #define _GNU_SOURCE // for vasprintf
 
 #include "model.h"
-#include "type.h"
-#include "list.h"
+#include "../list.h"
 
 #include <stdarg.h>
 #include <stdlib.h>

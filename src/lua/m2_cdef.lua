@@ -429,4 +429,17 @@ struct mod_SimoC_def {
  const char *func;
 };
 model *mod_SimoC_create(struct mod_SimoC_def *def);
+       
+enum mod_Lua_calib_mode {
+ MOD_LUA_EXPAND,
+ MOD_LUA_PASS_TABLE
+};
+struct mod_Lua_def {
+ unsigned n_arg; unsigned n_ret; type *atypes; type *rtypes; unsigned flags;
+ const char *fname;
+ const char *func;
+ unsigned n_coef;
+ enum mod_Lua_calib_mode mode;
+};
+model *mod_Lua_create(struct mod_Lua_def *def);
 ]]

@@ -5,5 +5,4 @@
 #include "arena.h"
 #include "gmap.h"
 #include "vmath.h"
-#include "model.h"
-#include "model_all.h"
+#include "model/all.h"

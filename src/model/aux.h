@@ -1,7 +1,6 @@
 #pragma once
 
 #include "model.h"
-#include "type.h"
 
 #include <stdarg.h>
 

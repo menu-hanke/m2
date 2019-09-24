@@ -1,8 +1,5 @@
-#include "model.h"
-#include "model_aux.h"
 #include "model_SimoC.h"
-#include "type.h"
-#include "def.h"
+#include "../def.h"
 
 #include <stdlib.h>
 #include <string.h>

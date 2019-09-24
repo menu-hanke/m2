@@ -5,8 +5,8 @@
 #include "bitmap.h"
 #include "grid.h"
 #include "vec.h"
-#include "model.h"
 #include "def.h"
+#include "model/model.h"
 
 #include <stdlib.h>
 #include <string.h>

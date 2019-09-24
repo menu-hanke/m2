@@ -1,6 +1,6 @@
 #pragma once
 
-#include "type.h"
+#include "../type.h"
 
 enum {
 	MODEL_CALL_OK             = 0,

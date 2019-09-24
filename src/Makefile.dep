@@ -9,14 +9,17 @@ sim.o: sim.c arena.h def.h sim.h
 sim_ds.o: sim_ds.c sim.h sim_ds.h grid.h bitmap.h def.h vec.h
 grid.o: grid.c grid.h bitmap.h def.h
 vec.o: vec.c vec.h
-gmap.o: gmap.c gmap.h fhk.h bitmap.h def.h arena.h type.h grid.h model.h \
- vec.h sim_ds.h sim.h
+gmap.o: gmap.c gmap.h fhk.h bitmap.h def.h arena.h type.h grid.h vec.h \
+ model/model.h sim_ds.h sim.h
 vmath.o: vmath.c vmath.h def.h
-model_aux.o: model_aux.c model.h type.h grid.h bitmap.h def.h list.h
-model_R.o: model_R.c model.h type.h grid.h bitmap.h def.h model_aux.h \
- model_R.h
-model_SimoC.o: model_SimoC.c model.h type.h grid.h bitmap.h def.h \
- model_aux.h model_SimoC.h
+model/aux.o: model/aux.c model/model.h model/../type.h model/../grid.h \
+ model/../bitmap.h model/../def.h model/../list.h
+model/model_Lua.o: model/model_Lua.c
+model/model_R.o: model/model_R.c model/model_R.h model/aux.h model/model.h \
+ model/../type.h model/../grid.h model/../bitmap.h model/../def.h
+model/model_SimoC.o: model/model_SimoC.c model/model_SimoC.h model/aux.h \
+ model/model.h model/../type.h model/../grid.h model/../bitmap.h \
+ model/../def.h
 lua/m2_cdef.lua: lua_exports.h type.h grid.h bitmap.h def.h sim.h \
- sim_ds.h vec.h fhk.h arena.h gmap.h model.h vmath.h model_all.h \
- model_R.h model_aux.h model_SimoC.h
+ sim_ds.h vec.h fhk.h arena.h gmap.h model/model.h vmath.h model/all.h \
+ model/model_R.h model/aux.h model/model_SimoC.h model/model_Lua.h
