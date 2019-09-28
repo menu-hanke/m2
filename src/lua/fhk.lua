@@ -446,7 +446,7 @@ end
 
 function solver_func_mt.__index:res(name)
 	local info = self.res_info[name]
-	return ffi.cast(info.ctype, self.solver.res[info.idx])
+	return (ffi.cast(info.ctype, self.solver.res[info.idx]))
 end
 
 function solver_func_mt:__call(...)
