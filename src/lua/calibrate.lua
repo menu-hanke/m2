@@ -163,7 +163,7 @@ local function main(args)
 	local coefs = read_coefs(readjson(args.coefs))
 	local cfg = conf.read(args.config)
 	write_defaults(cfg.calib, coefs)
-	local env = sim_env.from_conf(cfg)
+	local sim, env = sim_env.from_conf(cfg)
 
 	set_updates(coefs, env.mapper)
 	local cs = collect_coefs(coefs)
@@ -179,15 +179,15 @@ local function main(args)
 	env:inject("env", env)
 	local costf = env:run_file(args.calibrator)
 
-	env:prepare()
-	env.sim:savepoint()
+	sim:compile()
+	sim:savepoint()
 
 	local F = function(x)
 		recalibrate(cs, cmodels, x)
 		return costf() + penalty(cs, x)
 	end
 
-	local optimize = nmopt.optimizer(F, #cs, {max_iter=100})
+	local optimize = nmopt.optimizer(F, #cs, {max_iter=2000})
 	optimize:newpop(function(x) randpop(cs, x) end)
 	optimize()
 

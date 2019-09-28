@@ -1,4 +1,3 @@
-local ffi = require "ffi"
 local malloc = require "malloc"
 local vmath = require "vmath"
 
@@ -127,6 +126,7 @@ function optimizer_mt:__call()
 		end
 
 		if math.abs(fs[i_1] - fs[i_n1]) < self.epsilon*fs[i_n1] then
+			print(string.format("%d/%d: converged: %f", niter, self.max_iter, best_f))
 			break
 		end
 

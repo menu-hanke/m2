@@ -9,17 +9,17 @@ end
 
 local function from_conf(cfg)
 	local sim = require("sim").create()
-	local ret = create(sim)
+	local env = create(sim)
 
 	local fhk = require("fhk")
 	local mapper = fhk.hook(fhk.build_graph(cfg.fhk_vars, cfg.fhk_models))
 	mapper:create_models(cfg.calib)
 
-	ret:inject_base()
-	ret:inject_fhk(mapper)
-	ret:inject_types(cfg)
+	env:inject_base()
+	env:inject_fhk(mapper)
+	env:inject_types(cfg)
 
-	return ret
+	return sim, env
 end
 
 function simenv_mt.__index:inject(name, value)
@@ -52,18 +52,6 @@ function simenv_mt.__index:run_file(fname)
 		error(err)
 	end
 	return f()
-end
-
-function simenv_mt.__index:simulate(rec)
-	self:prepare()
-	self.sim:simulate(rec)
-end
-
-function simenv_mt.__index:prepare()
-	if not self._prepared then
-		self._prepared = true
-		self.sim:event("sim:prepare")
-	end
 end
 
 function simenv_mt.__index:setup(data)

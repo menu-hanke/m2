@@ -6,7 +6,7 @@ local function main(args)
 	if not args.instr then error("No instructions, give some with -I") end
 
 	local cfg = conf.read(args.config)
-	local env = sim_env.from_conf(cfg)
+	local sim, env = sim_env.from_conf(cfg)
 
 	for _,s in ipairs(args.scripts) do
 		env:run_file(s)
@@ -14,20 +14,22 @@ local function main(args)
 
 	local instr = env:run_file(args.instr)
 
+	sim:compile()
+	instr = sim:compile_instr(instr)
+
 	if args.input then
 		local data = readjson(args.input)
-		local sim = env.sim
 		sim:savepoint()
 		for i,v in ipairs(data) do
 			io.stderr:write(string.format("[%s] %d/%d\n", args.input, i, #data))
 			sim:enter()
 			env:setup(v)
-			env:simulate(instr)
+			sim:simulate(instr)
 			sim:exit()
 			sim:restore()
 		end
 	else
-		env:simulate(instr)
+		sim:simulate(instr)
 	end
 end
 

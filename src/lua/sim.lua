@@ -1,162 +1,79 @@
+local code = require "code"
+local jit = require "jit"
 local ffi = require "ffi"
 local C = ffi.C
 
--------------------------
+--------------------------------------------------------------------------------
 
-local chain = {}
-local chain_mt = { __index = chain }
-local callback_mt = {}
+local chain_mt = { __index = {} }
 
 local function create_chain(name)
-	return setmetatable({}, chain_mt)
+	return setmetatable({name=name}, chain_mt)
 end
 
-local function create_callback(f, prio)
-	return setmetatable({f=f, prio=prio}, callback_mt)
+function chain_mt.__index:add(f, prio)
+	table.insert(self, {f=f, prio=prio})
 end
 
-function chain:add(cb)
-	table.insert(self, cb)
+function chain_mt.__index:sort()
+	table.sort(self, function(a, b) return a.prio < b.prio end)
+end
+
+-- Compile all callbacks in a single function so the jit can inline them.
+-- If we just put them in an array and call that array in a loop, the jit will spam
+-- side traces for each array element.
+-- The generated code will look something like this:
+--
+-- local f1 = chain[1]
+-- ...
+-- local fn = chain[n]
+-- local cn = function(frame, flags, x) frame.next=nil; fn(x) end
+-- ...
+-- local c2 = function(fr,fl,x) fr.next = c3; f2(x); if fl.exit then return end; c3(fr,fl,x) end
+-- local c1 = function(fr,fl,x) fr.next = c2; f1(x); if fl.exit then return end; c2(fr,fl,x) end
+-- return c1
+--
+-- Then c1 is our event chain and the jit will compile it like we want!
+function chain_mt.__index:compile()
+	if #self == 0 then return function() end end
 	self:sort()
-end
 
-function chain:sort()
-	table.sort(self)
-end
+	local ret = code.new()
 
-function callback_mt:__lt(other)
-	return self.prio < other.prio
-end
-
-function callback_mt:__call(...)
-	return self.f(...)
-end
-
--------------------------
-
-local frame = {}
-local frame_mt = { __index = frame }
-
-local function create_frame(instr, ip)
-	return setmetatable({instr=instr, ip=ip}, frame_mt)
-end
-
-local function xunpack(args, i, max)
-	if i <= max then
-		return args[i], xunpack(args, i+1, max)
+	for i=1, #self do
+		ret:emitf("local f%d = chain[%d].f", i, i)
 	end
-end
 
-function frame:exec()
-	while self.ip <= #self.instr do
-		local instr = self.instr[self.ip]
-		self.ip = self.ip + 1
-		instr()
-
-		if self.exit then
-			return
+	ret:emitf([[
+		local c%d = function(frame, flags, x)
+			frame.next = nil
+			f%d(x)
 		end
-	end
-end
+	]], #self, #self)
 
-function frame:continue()
-	self:run_stack()
-	if self.exit then return end
-	self:exec()
-end
-
-function frame:mark_exit()
-	self.exit = true
-end
-
-function frame:push(chain, args, narg)
-	local ret = {
-		chain = chain,
-		narg = narg,
-		args = args,
-		next = 1
-	}
-	table.insert(self, ret)
-	return ret
-end
-
-function frame:pop()
-	self[#self] = nil
-end
-
-function frame:top()
-	return self[#self]
-end
-
-function frame:copy()
-	local ret = create_frame(self.instr, self.ip)
-
-	for i,v in ipairs(self) do
-		ret[i] = {
-			chain = v.chain,
-			narg = v.narg,
-			args = v.args,
-			next = v.next
-		}
+	for i=#self-1, 1, -1 do
+		ret:emitf([[
+			local c%d = function(frame, flags, x)
+				frame.next = c%d
+				f%d(x)
+				if flags.exit then return end
+				c%d(frame, flags, x)
+			end
+		]], i, i+1, i, i+1)
 	end
 
-	return ret
+	ret:emit("return c1")
+	
+	return ret:compile({chain=self}, string.format("=(chain@%s)", self.name))()
 end
 
-function frame:run_top(chain, args, narg)
-	local sf = self:push(chain, args, narg)
-	self:_run_subframe(sf)
-
-	if self.exit then
-		return
-	end
-
-	self:pop()
-end
-
-function frame:run_stack()
-	while #self > 0 do
-		local sub = self:top()
-		self:_run_subframe(sub)
-
-		if self.exit then
-			return
-		end
-
-		self:pop()
-	end
-end
-
-function frame:_run_subframe(sf)
-	self:_call_subframe(sf, xunpack(sf.args, 1, sf.narg))
-end
-
-function frame:_call_subframe(sf, ...)
-	local chain = sf.chain
-	local n = #chain
-
-	while sf.next <= n do
-		local c = chain[sf.next]
-		sf.next = sf.next + 1
-		c(...)
-
-		if self.exit then
-			return
-		end
-	end
-end
-
--------------------------
+--------------------------------------------------------------------------------
 
 local record_mt = {}
 
 function record_mt:__index(f)
-	return function(...)
-		table.insert(self.__recorded, {
-			f = f,
-			args = {...},
-			narg = select("#", ...)
-		})
+	return function(x)
+		table.insert(self.__recorded, { f = f, arg = x })
 	end
 end
 
@@ -168,20 +85,91 @@ local function getrecord(r)
 	return r.__recorded
 end
 
--------------------------
+local function compile_instr(sim, instr)
+	local e = {}
+	local x = {}
+	local num = #instr
 
-local sim = {}
-local sim_mt = { __index = sim }
-local chaintable_mt = {}
+	for i=1, num do
+		e[i] = sim.chains[instr[i].f]
+		x[i] = instr[i].arg
+	end
+
+	local ret = function(frame, ip)
+		ip = ip or 1
+		local flags = frame.flags
+		for i=ip, num do
+			frame.ip = i
+			frame.x = x[i]
+			e[i](frame, flags, x[i])
+			if flags.exit then return end
+		end
+	end
+
+	-- Note: this generates a lot of side trace spam but testing shows it's still
+	-- still better to compile this.
+	-- (TODO: should test how this works with a lot of events, since it will basically
+	-- spawn a side trace per event chain)
+	--jit.off(ret)
+
+	return ret
+end
+
+--------------------------------------------------------------------------------
+
+-- frame flags is a ctype to avoid spamming table lookups in the event chain
+-- (this is a micro optimization but it does help noticeably if the event chain is a long
+-- chain of small events)
+local frame_flags = ffi.typeof("struct { bool exit; }")
+
+local frame_mt = { __index={} }
+
+local function create_frame(instr)
+	return setmetatable({
+		instr = instr,
+		ip    = 1,
+		flags = frame_flags(false)
+	}, frame_mt)
+end
+
+function frame_mt.__index:exec()
+	self.instr(self)
+end
+
+function frame_mt.__index:event(ev, x)
+	return ev(self, self.flags, x)
+end
+
+function frame_mt.__index:continue()
+	if self.next then
+		self:event(self.next, self.x)
+	end
+
+	if not self.flags.exit then
+		self.instr(self, self.ip+1)
+	end
+end
+
+function frame_mt.__index:copy()
+	return setmetatable({
+		instr = self.instr,
+		ip    = self.ip,
+		next  = self.next,
+		flags = frame_flags(false)
+	}, frame_mt)
+end
+
+--------------------------------------------------------------------------------
+
+local sim_mt = { __index = {} }
 
 local function create_sim()
-	local chains = setmetatable({}, chaintable_mt)
 	local _sim = ffi.gc(C.sim_create(), C.sim_destroy)
 
 	return setmetatable({
-		chains = chains,
+		chains = {},
 		_sim   = _sim,
-		_frame = create_frame({}, 1)
+		_frame = create_frame()
 	}, sim_mt)
 end
 
@@ -189,40 +177,21 @@ local function choice(id, param)
 	return {id=id, param=param}
 end
 
-local function generator(f)
-	return function(...) return coroutine.wrap(f(...)) end
-end
-
-local function make_instr(sim, rec)
-	local instr = {}
-
-	for i,v in ipairs(getrecord(rec)) do
-		local chain = sim.chains[v.f]
-		local narg = v.narg
-		local args = v.args
-
-		instr[i] = function()
-			return sim:eventv(chain, args, narg)
-		end
-	end
-
-	return instr
-end
-
 local function inject(env, sim)
 	env.sim = sim
 	env.record = record
 	env.choice = choice
-	env.generator = generator
 	-- shortcuts
-	env.on = delegate(sim, sim.on)
+	env.on = function(...) return sim:on(...) end
 	env.branch = delegate(sim, sim.branch)
 	env.event = delegate(sim, sim.event)
-	env.simulate = delegate(sim, sim.simulate)
-	env.make_instr = delegate(sim, make_instr)
 end
 
-function sim:on(event, f, prio)
+function sim_mt.__index:on(event, f, prio)
+	if self._compiled then
+		error(string.format("Can't install event handler (%s) after simulation has started", event))
+	end
+
 	if not prio then
 		-- allow specifying prio in event string like "event#prio"
 		local e,p = event:match("(.-)#([%-%+]?%d+)")
@@ -234,41 +203,63 @@ function sim:on(event, f, prio)
 		end
 	end
 
-	self.chains[event]:add(create_callback(f, prio))
+	if not self.chains[event] then
+		self.chains[event] = create_chain(event)
+	end
+
+	self.chains[event]:add(f, prio)
 end
 
-function sim:simulate(rec)
-	self:simulate_instr(make_instr(self, rec))
+function sim_mt.__index:compile()
+	for event,chain in pairs(self.chains) do
+		self.chains[event] = chain:compile()
+	end
+
+	self._compiled = true
+
+	self:event("sim:compile")
 end
 
-function sim:simulate_instr(instr)
+function sim_mt.__index:compile_instr(r)
+	if not self._compiled then
+		error("Can't compile instructions before simulation start. Call sim:compile() first.")
+	end
+
+	return compile_instr(self, getrecord(r))
+end
+
+function sim_mt.__index:simulate(instr)
 	local f = self._frame
-	self._frame = create_frame(instr, 1)
+	self._frame = create_frame(instr)
 	self._frame:exec()
 	self._frame = f
 end
 
-function sim:enter()
+function sim_mt.__index:event(event, x)
+	self._frame:event(self.chains[event], x)
+end
+
+function sim_mt.__index:enter()
 	C.sim_enter(self._sim)
 end
 
-function sim:savepoint()
+function sim_mt.__index:savepoint()
 	C.sim_savepoint(self._sim)
 end
 
-function sim:restore()
+function sim_mt.__index:restore()
 	C.sim_restore(self._sim)
 end
 
-function sim:exit()
+function sim_mt.__index:exit()
 	C.sim_exit(self._sim)
 end
 
-function sim:alloc(size, align, life)
+function sim_mt.__index:alloc(size, align, life)
 	return (C.sim_alloc(self._sim, size, align, life))
 end
 
-function sim:allocator(ct, life)
+function sim_mt.__index:allocator(ct, life)
 	local rt = ct .. "*"
 	local size = ffi.sizeof(ct)
 	local align = ffi.alignof(ct)
@@ -280,18 +271,19 @@ function sim:allocator(ct, life)
 	end
 end
 
-function sim:branch(instr, branches)
+function sim_mt.__index:branch(continue, branches)
 	local f = self._frame
-	if f.exit then
+
+	if f.flags.exit then
 		error("Can't branch on exiting frame")
 	end
 
-	-- TODO: this alloc is NYI, maybe use arena?
 	local ids = ffi.new("sim_branchid[?]", #branches)
+
 	local params = {}
-	for i,v in ipairs(branches) do
-		ids[i-1] = v.id
-		params[tonumber(v.id)] = v.param
+	for i,b in ipairs(branches) do
+		ids[i-1] = b.id
+		params[tonumber(b.id)] = b.param
 	end
 
 	local id = C.sim_branch(self._sim, #branches, ids)
@@ -307,25 +299,17 @@ function sim:branch(instr, branches)
 		C.sim_exit(self._sim)
 	end
 
-	f:mark_exit()
+	f.exit = true
 	self._frame = f
 end
 
-function sim:event(event, ...)
-	return self:eventv(self.chains[event], {...}, select("#", ...))
-end
+-- No point trying this either currently, it will always fail at the NYI
+-- (and event if it didn't have a NYI allocation, it has the same problems as the instruction
+-- dispatcher loop).
+-- TODO: this can probably be made jit compilable with some fixes, but currently just turn it off
+jit.off(sim_mt.__index.branch)
 
-function sim:eventv(chain, args, narg)
-	self._frame:run_top(chain, args, narg)
-end
-
-function chaintable_mt:__index(k)
-	local ret = create_chain(k)
-	self[k] = ret
-	return ret
-end
-
--------------------------
+--------------------------------------------------------------------------------
 
 return {
 	create = create_sim,

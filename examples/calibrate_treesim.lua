@@ -101,18 +101,11 @@ local costf = {
 
 		local ret = 0
 		for i=1, #dclass do
-			if state.index < 5 then
-				--print(i, ba_dc[i], mba_dc[i])
-			end
 			ret = ret + w_G * math.abs(ba_dc[i] - mba_dc[i])^ex_G
 			ret = ret + w_N * math.abs(f_dc[i] - mf_dc[i])^ex_N
 		end
 
-		if state.index < 5 then
-			--print("plot cost", state.index, ret, trees:bandv("ba"):sum())
-		end
-
-		return (state.step/5) * ret
+		return (5/state.step) * ret
 	end
 }
 
@@ -122,27 +115,29 @@ end)
 
 local data = readjson(args.input)
 
-for i,v in ipairs(data) do
-	v.index = i
-	precalc_dist(v)
+on("sim:compile", function()
+	for i,v in ipairs(data) do
+		v.index = i
+		precalc_dist(v)
 
-	local instr = record()
-	local t_left = v.step
-	while t_left > 0 do
-		local step = math.min(t_left, 5)
-		instr.grow(step)
-		t_left = t_left - step
+		local instr = record()
+		local t_left = v.step
+		while t_left > 0 do
+			local step = math.min(t_left, 5)
+			instr.grow(step)
+			t_left = t_left - step
+		end
+		instr.measure(v)
+		v.instr = sim:compile_instr(instr)
 	end
-	instr.measure(v)
-	v.instr = make_instr(instr)
-end
+end)
 
 return function()
 	for i,v in ipairs(data) do
 		sim:restore()
 		sim:enter()
 		env:setup(v)
-		sim:simulate_instr(v.instr)
+		sim:simulate(v.instr)
 		sim:exit()
 	end
 

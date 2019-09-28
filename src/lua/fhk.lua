@@ -528,7 +528,7 @@ local function inject(env, mapper)
 		typeof = function(x) return mapper.vars[x].type end
 	}
 
-	env.on("sim:prepare", function()
+	env.on("sim:compile", function()
 		mapper:bind_computed()
 	end)
 end
