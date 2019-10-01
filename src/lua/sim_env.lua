@@ -30,6 +30,7 @@ function simenv_mt.__index:inject_base()
 	require("sim").inject(self.env, self.sim)
 	require("world").inject(self.env, self.sim._sim)
 	require("typing").inject(self.env)
+	require("sched").inject(self.env)
 end
 
 function simenv_mt.__index:inject_fhk(mapper)

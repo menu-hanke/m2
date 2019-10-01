@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdalign.h>
+#include <stdbool.h>
 
 typedef struct sim sim;
 typedef uint64_t sim_branchid;
@@ -30,5 +31,5 @@ void sim_savepoint(sim *sim);
 void sim_restore(sim *sim);
 void sim_enter(sim *sim);
 void sim_exit(sim *sim);
-sim_branchid sim_branch(sim *sim, size_t n, sim_branchid *branches);
-sim_branchid sim_next_branch(sim *sim);
+void sim_branch(sim *sim, size_t n, sim_branchid *branches);
+bool sim_next_branch(sim *sim);

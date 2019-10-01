@@ -124,12 +124,13 @@ local frame_flags = ffi.typeof("struct { bool exit; }")
 
 local frame_mt = { __index={} }
 
-local function create_frame(instr)
-	return setmetatable({
-		instr = instr,
-		ip    = 1,
-		flags = frame_flags(false)
-	}, frame_mt)
+local function frame(prev)
+	return setmetatable({ prevframe=prev, flags = frame_flags() }, frame_mt)
+end
+
+function frame_mt.__index:setins(instr)
+	self.instr = instr
+	self.ip = 1
 end
 
 function frame_mt.__index:exec()
@@ -150,13 +151,18 @@ function frame_mt.__index:continue()
 	end
 end
 
-function frame_mt.__index:copy()
-	return setmetatable({
-		instr = self.instr,
-		ip    = self.ip,
-		next  = self.next,
-		flags = frame_flags(false)
-	}, frame_mt)
+function frame_mt.__index:copy(from)
+	self.instr = from.instr
+	self.ip    = from.ip
+	self.next  = from.next
+	self.x     = from.x
+	self.flags.exit = false
+end
+
+function frame_mt.__index:push()
+	self.nextframe = self.nextframe or frame(self)
+	self.nextframe:copy(self)
+	return self.nextframe
 end
 
 --------------------------------------------------------------------------------
@@ -169,7 +175,7 @@ local function create_sim()
 	return setmetatable({
 		chains = {},
 		_sim   = _sim,
-		_frame = create_frame()
+		_frame = frame()
 	}, sim_mt)
 end
 
@@ -229,10 +235,20 @@ function sim_mt.__index:compile_instr(r)
 end
 
 function sim_mt.__index:simulate(instr)
-	local f = self._frame
-	self._frame = create_frame(instr)
+	self._frame = self._frame:push()
+	self._frame:setins(instr)
 	self._frame:exec()
-	self._frame = f
+	self._frame = self._frame.prevframe
+end
+
+function sim_mt.__index:continuenew()
+	self._frame = self._frame:push()
+	self._frame:continue()
+	self._frame = self._frame.prevframe
+end
+
+function sim_mt.__index:exitframe()
+	self._frame.flags.exit = true
 end
 
 function sim_mt.__index:event(event, x)
@@ -271,43 +287,7 @@ function sim_mt.__index:allocator(ct, life)
 	end
 end
 
-function sim_mt.__index:branch(continue, branches)
-	local f = self._frame
-
-	if f.flags.exit then
-		error("Can't branch on exiting frame")
-	end
-
-	local ids = ffi.new("sim_branchid[?]", #branches)
-
-	local params = {}
-	for i,b in ipairs(branches) do
-		ids[i-1] = b.id
-		params[tonumber(b.id)] = b.param
-	end
-
-	local id = C.sim_branch(self._sim, #branches, ids)
-
-	if id ~= 0 then
-		while id ~= 0 do
-			self._frame = f:copy()
-			instr(params[tonumber(id)])
-			self._frame:continue()
-			id = C.sim_next_branch(self._sim)
-		end
-
-		C.sim_exit(self._sim)
-	end
-
-	f.exit = true
-	self._frame = f
-end
-
--- No point trying this either currently, it will always fail at the NYI
--- (and event if it didn't have a NYI allocation, it has the same problems as the instruction
--- dispatcher loop).
--- TODO: this can probably be made jit compilable with some fixes, but currently just turn it off
-jit.off(sim_mt.__index.branch)
+-- TODO rewrite branching here
 
 --------------------------------------------------------------------------------
 

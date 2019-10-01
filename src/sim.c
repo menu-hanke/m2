@@ -3,14 +3,15 @@
 #include "sim.h"
 
 #include <stddef.h>
-#include <string.h>
 #include <stdlib.h>
 #include <stdalign.h>
+#include <stdbool.h>
+#include <string.h>
 #include <assert.h>
 
 struct branchinfo {
-	size_t nb;
-	size_t next;
+	unsigned nb;
+	unsigned next;
 	sim_branchid ids[];
 };
 
@@ -18,6 +19,7 @@ struct frame {
 	unsigned init   : 1;
 	unsigned inside : 1;
 	unsigned saved  : 1;
+	unsigned dirty  : 1;
 	unsigned fid;
 	arena *arena;
 	size_t vstack_ptr;
@@ -44,7 +46,7 @@ static void f_destroy(struct frame *f);
 static void f_enter(struct frame *f, unsigned fid);
 static size_t f_salloc(struct frame *f, size_t sz, size_t align);
 static void f_branch(struct frame *f, size_t n, sim_branchid *ids);
-static sim_branchid f_next_branch(struct frame *f);
+static bool f_next_branch(struct frame *f);
 static void f_exit(struct frame *f);
 static void *f_alloc(struct frame *f, size_t size, size_t align);
 
@@ -137,37 +139,36 @@ void sim_exit(struct sim *sim){
 }
 
 // Note: after calling this function, the only sim calls to this frame allowed are:
-// * calling sim_next_branch() until it returns 0
-// * calling sim_exit() to exit the frame
-sim_branchid sim_branch(struct sim *sim, size_t n, sim_branchid *branches){
-	// TODO: logic concerning replaying simulations or specific branches goes here
-	// e.g. when replaying, only use 1 (or m for m<=n) branches
+// * sim_take_next_branch()
+// * sim_next_branch()
+// * sim_exit()
+void sim_branch(struct sim *sim, size_t n, sim_branchid *branches){
+	// TODO filter branches here when replaying and check the actual number of branches
+	// that will be taken in the next condition
 	f_branch(TOP(sim), n, branches);
 
-	// since simulating on this branch is forbidden now, we only need to make a savepoint
-	// if there are more than 1 branch (this state will be forgotten anyway by the relevant
-	// upper level branch anyway)
 	if(n > 1)
 		sim_savepoint(sim);
 
-	sim_branchid ret = f_next_branch(TOP(sim));
-	if(ret != SIM_NO_BRANCH)
-		sim_enter(sim);
-
-	// TODO: forking could go here?
-	return ret;
+	dv("[%u] @ %u -- branch point -> %zu choices\n", sim->depth, TOP(sim)->fid, n);
 }
 
-sim_branchid sim_next_branch(struct sim *sim){
-	sim_branchid ret = f_next_branch(PREV(sim));
+// Note: if this function returns true then it enters a frame!
+// It must be exited with sim_exit()
+bool sim_next_branch(struct sim *sim){
+	struct frame *f = TOP(sim);
 
-	if(ret != SIM_NO_BRANCH){
-		sim_exit(sim);
+	// TODO: if recording, remember the branch id and pass it to next frame
+	if(!f_next_branch(f))
+		return false;
+
+	if(f->dirty)
 		sim_restore(sim);
-		sim_enter(sim);
-	}
 
-	return ret;
+	f->dirty = 1;
+	sim_enter(sim);
+
+	return true;
 }
 
 static void init_frame(struct sim *sim){
@@ -202,6 +203,7 @@ static void f_enter(struct frame *f, unsigned fid){
 	f->fid = fid;
 	f->inside = 1;
 	f->saved = 0;
+	f->dirty = 0;
 	f->branches = NULL;
 
 	if(!f->init)
@@ -219,23 +221,27 @@ static size_t f_salloc(struct frame *f, size_t sz, size_t align){
 	return p;
 }
 
+static bool f_next_branch(struct frame *f){
+	assert(f->inside && f->branches);
+
+	struct branchinfo *b = f->branches;
+	if(b->next < b->nb){
+		b->next++;
+		return true;
+	}
+
+	return false;
+}
+
 static void f_branch(struct frame *f, size_t n, sim_branchid *ids){
 	assert(f->inside && !f->branches);
 
+	// save the ids even though they aren't currently used
+	// these will be used when recording is implemented
 	f->branches = f_alloc(f, sizeof(*f->branches) + n*sizeof(sim_branchid), alignof(*f->branches));
 	f->branches->nb = n;
 	f->branches->next = 0;
 	memcpy(f->branches->ids, ids, n*sizeof(sim_branchid));
-}
-
-static sim_branchid f_next_branch(struct frame *f){
-	assert(f->inside && f->branches);
-
-	struct branchinfo *b = f->branches;
-	if(b->next < b->nb)
-		return b->ids[b->next++];
-
-	return SIM_NO_BRANCH;
 }
 
 static void f_exit(struct frame *f){
