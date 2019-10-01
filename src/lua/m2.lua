@@ -86,8 +86,8 @@ local function parse_args(args)
 		if cb then
 			cb(ret, iter)
 		elseif flag:sub(2, 2) == "j" then
-			local module, args = flag:match("(%w+)=?([%w,]*)", 3)
-			require("jit."..module).start(args and unpack(split(args)))
+			local module, args = flag:match("(%w+)=?(.*)", 3)
+			require("jit."..module).start(unpack(split(args or "")))
 		else
 			error(string.format("Unknown flag: '%s'", flag))
 		end
