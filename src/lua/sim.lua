@@ -179,8 +179,8 @@ local function create_sim()
 	}, sim_mt)
 end
 
-local function choice(id, param)
-	return {id=id, param=param}
+local function choice(id, func)
+	return {id=id, func=func}
 end
 
 local function inject(env, sim)
@@ -287,7 +287,30 @@ function sim_mt.__index:allocator(ct, life)
 	end
 end
 
--- TODO rewrite branching here
+function sim_mt.__index:branch(choices)
+	local nb = #choices
+	local branches = ffi.new("sim_branchid[?]", nb)
+
+	for i=1, nb do
+		branches[i-1] = choices[i].id
+	end
+
+	return function(x)
+		C.sim_branch(self._sim, nb, branches)
+
+		-- Note: this loop may cause trace aborts / unnecessary side traces.
+		-- if/when this causes performance problems replace it with code generation.
+		for i=1, nb do
+			if C.sim_next_branch(self._sim) then
+				choices[i].func(x)
+				self:continuenew()
+				C.sim_exit(self._sim)
+			end
+		end
+
+		self:exitframe()
+	end
+end
 
 --------------------------------------------------------------------------------
 
