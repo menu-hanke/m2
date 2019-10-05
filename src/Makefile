@@ -1,5 +1,6 @@
 CC = gcc
 
+# Compiler options
 CCOPT    = -O3 -flto -fopenmp -ffast-math -fno-finite-math-only -march=native
 CCDEBUG  = -DNDEBUG
 CCDEF    =
@@ -7,16 +8,28 @@ CCWARN   = -Wall -Wextra
 XCFLAGS  = 
 XLDFLAGS = 
 
-MODEL_LANG    ?= R SimoC Lua
-LUAPATH       ?= $(abspath lua)
-LUAJIT_CFLAGS ?= $(shell pkg-config --cflags luajit)
-LUAJIT_LIB    ?= $(shell pkg-config --libs luajit)
-R_CFLAGS      ?= $(shell pkg-config --cflags libR)
-R_LIB         ?= $(shell pkg-config --libs-only-l --libs-only-L libR)
-LIBFFI_CFLAGS ?= $(shell pkg-config --cflags libffi)
-LIBFFI_LIB    ?= $(shell pkg-config --libs libffi)
+# What model languages do you want to build in? You can choose any from the following:
+# * R      Call R models (requires libR)
+# * SimoC  Call SIMO C-models (requires libffi)
+# * Lua    Call Lua models (LuaJIT). Note: these run in a different lua state than the simulator.
+MODEL_LANG        ?= R SimoC Lua
 
-export
+# Build coroutine support for fhk solver (requires libaco)?
+# This allows virtual variables to be written in Lua.
+SOLVER_INTERRUPTS ?= on
+
+# Where to find/install the frontend lua files?
+LUAPATH           ?= $(abspath lua)
+
+# Library options
+LUAJIT_CFLAGS     ?= $(shell pkg-config --cflags luajit)
+LUAJIT_LIB        ?= $(shell pkg-config --libs luajit)
+R_CFLAGS          ?= $(shell pkg-config --cflags libR)
+R_LIB             ?= $(shell pkg-config --libs-only-l --libs-only-L libR)
+LIBFFI_CFLAGS     ?= $(shell pkg-config --cflags libffi)
+LIBFFI_LIB        ?= $(shell pkg-config --libs libffi)
+LIBACO_CFLAGS     ?= -I$(shell realpath ../libaco)
+LIBACO_LIB        ?= -Wl,-rpath=$(shell realpath ../libaco) -L$(shell realpath ../libaco) -laco
 
 # You probably don't want to configure anything below this line
 
@@ -28,7 +41,7 @@ LUA_EXPORTS   = lua_exports.h
 M2_LIBS       = $(LUAJIT_LIB)
 
 M2_O = main.o bitmap.o fhk_graph.o fhk_solve.o fhk_aux.o type.o arena.o sim.o sim_ds.o grid.o vec.o\
-	   gmap.o vmath.o
+	   gmap.o gsolve.o vmath.o
 
 M2_C = $(M2_O:.o=.c)
 
@@ -51,7 +64,13 @@ endif
 
 ################################################################################
 
-XCFLAGS += -DM2_LUAPATH='"$(LUAPATH)"'
+ifeq ($(SOLVER_INTERRUPTS),on)
+	CCDEF += -DM2_SOLVER_INTERRUPTS
+	XCFLAGS += $(LIBACO_CFLAGS)
+	M2_LIBS += $(LIBACO_LIB)
+endif
+
+CCDEF += -DM2_LUAPATH='"$(LUAPATH)"'
 CFLAGS = $(LUAJIT_CFLAGS) $(CCOPT) $(CCDEBUG) $(CCDEF) $(CCWARN) $(XCFLAGS)
 
 # -rdynamic is needed to access C symbols of the executable from lua

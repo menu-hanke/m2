@@ -370,12 +370,28 @@ void gmap_mark_visible(struct fhk_graph *G, bm8 *vmask, unsigned reason, tvalue 
 void gmap_mark_nonconstant(struct fhk_graph *G, bm8 *vmask, unsigned reason, tvalue parm);
 void gmap_make_reset_masks(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
 void gmap_init(struct fhk_graph *G, bm8 *init_v);
-struct gmap_solver_vec_bind {
- struct vec_ref *v_bind;
- gridpos *z_bind;
- int z_band;
+       
+typedef uint32_t gs_res;
+enum {
+ GS_RETURN = 1 << 31,
+ GS_INTERRUPT_VIRT = 1 << 30,
+ GS_ARG_MASK = (1 << 16) - 1
 };
-int gmap_solve_vec(struct gmap_solver_vec_bind *bind, struct fhk_solver *solver, struct vec *vec);
+struct gs_virt {
+ const gmap_support *supp; gmap_resolve resolve; tvalue udata; const char *name; unsigned target_type : 16;
+ int32_t handle;
+};
+typedef struct gs_ctx gs_ctx;
+gs_ctx *gs_create_ctx();
+void gs_destroy_ctx(gs_ctx *ctx);
+void gs_enter(gs_ctx *ctx);
+void gs_interrupt(gs_res ir);
+gs_res gs_resume(tvalue iv);
+tvalue gs_res_virt(void *v);
+gs_res gs_solve_step(struct fhk_solver *solver, unsigned idx);
+gs_res gs_solve_vec(struct vec_ref *v_bind, struct fhk_solver *solver, struct vec *vec);
+gs_res gs_solve_vec_z(struct vec_ref *v_bind, gridpos *z_bind, int z_band, struct fhk_solver *solver,
+  struct vec *vec);
        
 typedef double vreal;
 typedef uint64_t vmask;
@@ -442,4 +458,5 @@ struct mod_Lua_def {
  enum mod_Lua_calib_mode mode;
 };
 model *mod_Lua_create(struct mod_Lua_def *def);
+static const int HAVE_SOLVER_INTERRUPTS = 1;
 ]]

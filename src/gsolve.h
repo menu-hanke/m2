@@ -1,0 +1,45 @@
+#pragma once
+
+#include "fhk.h"
+#include "type.h"
+#include "vec.h"
+#include "grid.h"
+#include "def.h"
+
+#include <stdint.h>
+
+typedef uint32_t gs_res;
+
+enum {
+	GS_RETURN         = 1 << 31,
+	GS_INTERRUPT_VIRT = 1 << 30,
+	/* GS_INTERRUPT_MODEL - the same technique can be used to implement models in sim state */
+	GS_ARG_MASK       = (1 << 16) - 1
+};
+
+#ifdef M2_SOLVER_INTERRUPTS
+
+#include "gmap.h"
+
+struct gs_virt {
+	GV_HEADER;
+	int32_t handle;
+};
+
+typedef struct gs_ctx gs_ctx;
+
+gs_ctx *gs_create_ctx();
+void gs_destroy_ctx(gs_ctx *ctx);
+
+void gs_enter(gs_ctx *ctx);
+void gs_interrupt(gs_res ir);
+gs_res gs_resume(tvalue iv);
+
+tvalue gs_res_virt(void *v);
+
+#endif
+
+gs_res gs_solve_step(struct fhk_solver *solver, unsigned idx);
+gs_res gs_solve_vec(struct vec_ref *v_bind, struct fhk_solver *solver, struct vec *vec);
+gs_res gs_solve_vec_z(struct vec_ref *v_bind, gridpos *z_bind, int z_band, struct fhk_solver *solver,
+		struct vec *vec);

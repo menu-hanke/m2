@@ -79,11 +79,3 @@ void gmap_mark_nonconstant(struct fhk_graph *G, bm8 *vmask, unsigned reason, tva
 void gmap_make_reset_masks(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
 
 void gmap_init(struct fhk_graph *G, bm8 *init_v);
-
-struct gmap_solver_vec_bind {
-	struct vec_ref *v_bind;
-	gridpos *z_bind;
-	int z_band;
-};
-
-int gmap_solve_vec(struct gmap_solver_vec_bind *bind, struct fhk_solver *solver, struct vec *vec);

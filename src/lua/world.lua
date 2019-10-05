@@ -107,11 +107,6 @@ local obj_callbacks = callbacks {
 local zobj_callbacks = callbacks {
 	mark_visible = function(self, mapper, vmask)
 		mapper:mark_visible(vmask, ffi.C.GMAP_BIND_Z, typing.tvalue.u64(ffi.C.POSITION_ORDER))
-	end,
-
-	bind_solver = function(self, mapper, svb)
-		local z_bind = mapper.bind.z.global
-		svb:bind_z(self.z_band, z_bind.ref)
 	end
 }
 
@@ -136,22 +131,47 @@ local zobjvec_callbacks = callbacks {
 	end
 }
 
+local function objvec_solver(self, mapper, solver)
+	local v_bind = mapper.bind.vec[self.name].ref
+	local sim = self.sim
+
+	return function(vec)
+		-- TODO: allow configuring if this should allocate vec:len() or vec.n_alloc
+		fhk.rebind(sim, solver, vec.vec.n_alloc)
+		return (ffi.C.gs_solve_vec(v_bind, solver, vec.vec))
+	end
+end
+
+local function objvec_solver_z(self, mapper, solver)
+	local v_bind = mapper.bind.vec[self.name].ref
+	local z_bind = mapper.bind.z.global.ref
+	local z_band = self.z_band
+	local sim = self.sim
+
+	return function(vec)
+		-- TODO: see objvec_solver
+		fhk.rebind(sim, solver, vec.vec.n_alloc)
+		return (ffi.C.gs_solve_vec_z(v_bind, z_bind, z_band, solver, vec.vec))
+	end
+end
+
 local obj_mt = { __index={} }
 local objvec_mt = { __index={} }
 
 local function obj(sim, name, type)
 	assert(type.fields)
 	return setmetatable({
-		sim        = sim,
-		name       = name,
-		type       = type,
-		bands      = band_names_map(type),
-		band_ctype = band_ctypes(type),
-		typehints  = {},
-		tpl        = vec_template(type),
-		callbacks  = obj_callbacks,
-		vcallbacks = objvec_callbacks,
-		id         = nextuniq()
+		sim         = sim,
+		name        = name,
+		type        = type,
+		bands       = band_names_map(type),
+		band_ctype  = band_ctypes(type),
+		typehints   = {},
+		tpl         = vec_template(type),
+		callbacks   = obj_callbacks,
+		vcallbacks  = objvec_callbacks,
+		solver_func = objvec_solver,
+		id          = nextuniq()
 	}, obj_mt)
 end
 
@@ -161,6 +181,7 @@ function obj_mt.__index:spatial(zname)
 	self.z_band = self.bands[zname]
 	self.callbacks = self.callbacks + zobj_callbacks
 	self.vcallbacks = self.vcallbacks + zobjvec_callbacks
+	self.solver_func = objvec_solver_z
 	return self
 end
 
@@ -169,6 +190,7 @@ function obj_mt.__index:grid(order)
 	assert(not self.svgrid)
 	self.svgrid = ffi.C.sim_create_svgrid(self.sim, order, self.z_band, self.tpl)
 	self.callbacks = self.callbacks + svobj_callbacks
+	-- TODO: self.solver_func = obj_solver_grid
 	return self
 end
 
@@ -216,20 +238,15 @@ function obj_mt.__index:mark_nonconstant(mapper, vmask)
 	self.callbacks.mark_nonconstant(self, mapper, vmask)
 end
 
-function obj_mt.__index:solver_func(mapper, solver)
-	local v_bind = mapper.bind.vec[self.name]
-	local svb = fhk.solver_vec_bind(v_bind.ref)
-	if self.callbacks.bind_solver then
-		self.callbacks.bind_solver(self, mapper, svb)
-	end
+function obj_mt.__index:virtualize(mapper, name, f)
+	local v_bind = mapper.bind.vec[self.name].ref
 
-	local sim = self.sim
-	return function(vec)
-		-- TODO: allow configuring if this should allocate vec:len() or vec.n_alloc
-		fhk.rebind(sim, solver, vec.vec.n_alloc)
-		return (svb:solve_vec(solver, vec.vec))
-	end
+	fhk.support.var(mapper:virtual(name, function()
+		return f(v_bind.idx, v_bind.vec)
+	end), self.id)
 end
+
+----------------------------------------
 
 function objvec_mt.__index:len()
 	return self.vec.n_used
@@ -340,8 +357,12 @@ function globals_mt.__index:solver_func(mapper, solver)
 	end
 
 	return function()
-		return (ffi.C.fhk_solver_step(solver, 0))
+		return (ffi.C.gs_solve_step(solver, 0))
 	end
+end
+
+function globals_mt.__index:virtualize(mapper, name, f)
+	fhk.support.global(mapper:virtual(name, f))
 end
 
 --------------------------------------------------------------------------------

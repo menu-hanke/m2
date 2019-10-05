@@ -129,40 +129,6 @@ void gmap_init(struct fhk_graph *G, bm8 *init_v){
 	bm_zero((bm8 *) G->m_bitmaps, G->n_mod);
 }
 
-int gmap_solve_vec(struct gmap_solver_vec_bind *bind, struct fhk_solver *solver, struct vec *vec){
-	unsigned n = vec->n_used;
-
-	if(!n)
-		return FHK_OK;
-
-	struct vec_ref *vbind = bind->v_bind;
-	gridpos *zband = bind->z_band >= 0 ? V_BAND(vec, bind->z_band)->data : NULL;
-	gridpos *zbind = bind->z_bind;
-
-	dv("begin objvec solver on vec=%p vbind=%p zbind=%p\n", vec, vbind, zbind);
-
-	if(vbind){
-		vbind->vec = vec;
-		vbind->idx = 0;
-	}
-
-	for(unsigned i=0;i<n;i++){
-		dv("solver[%p]: %u/%u\n", vec, (i+1), n);
-
-		if(vbind)
-			vbind->idx = i;
-
-		if(zbind)
-			*zbind = *zband++;
-
-		int r = fhk_solver_step(solver, i);
-		if(r)
-			return r;
-	}
-
-	return FHK_OK;
-}
-
 static bool var_is_constant(tvalue to, unsigned reason, tvalue parm){
 	return reason == GMAP_BIND_OBJECT && to.u64 != parm.u64;
 }

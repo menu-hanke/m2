@@ -4,6 +4,7 @@ local typing = require "typing"
 local arena = require "arena"
 local malloc = require "malloc"
 local C = ffi.C
+local band = bit.band
 
 local function copy_cst(check, cst)
 	if cst.type == "interval" then
@@ -224,19 +225,30 @@ local mapper_mt = { __index = {} }
 
 local function hook(G, vars, models)
 	C.gmap_hook(G)
-	return setmetatable({
-		G      = G,
-		vars   = vars,
-		models = models,
-		bind   = {
+
+	local mapper = setmetatable({
+		G        = G,
+		vars     = vars,
+		models   = models,
+		virtuals = {},
+		bind     = {
 			z   = bind_ns(bind.z),
 			vec = bind_ns(bind.vec)
 		}
 	}, mapper_mt)
+
+	if C.HAVE_SOLVER_INTERRUPTS == 1 then
+		mapper.gs_ctx = ffi.gc(C.gs_create_ctx(), C.gs_destroy_ctx)
+	end
+
+	return mapper
 end
 
 function mapper_mt.__index:bind_mapping(mapping, name)
 	local v = self.vars[name]
+	if not v then
+		error(string.format("Can't bind mapping '%s': there is no such variable", name))
+	end
 	if v.mapping then
 		error(string.format("Variable '%s' already has this mapping -> %s", name, v.mapping))
 	end
@@ -274,6 +286,30 @@ function mapper_mt.__index:data(name, ref)
 	return self:bind_mapping(ret, name)
 end
 
+if C.HAVE_SOLVER_INTERRUPTS == 1 then
+	function mapper_mt.__index:virtual(name, func)
+		local ret = malloc.new("struct gs_virt")
+		ret.resolve = C.gs_res_virt
+		ret.handle = #self.virtuals + 1
+		self.virtuals[#self.virtuals + 1] = self:wrap_virtual(name, func)
+		return self:bind_mapping(ret, name)
+	end
+else
+	function mapper_mt.__index:virtual()
+		error("No virtual support -- compile with SOLVER_INTERRUPTS=on")
+	end
+end
+
+function mapper_mt.__index:wrap_virtual(name, func)
+	local tname = self.vars[name].type.tname
+
+	return function()
+		local tv = ffi.new("tvalue")
+		tv[tname] = func()
+		return tv.u64 -- see comment in mapper:solver_res()
+	end
+end
+
 function mapper_mt.__index:bind_computed()
 	for name,v in pairs(self.vars) do
 		if not v.mapping then
@@ -309,6 +345,40 @@ function mapper_mt.__index:create_models(calib)
 	local exf = create_models(self.vars, self.models, calib)
 	for name,f in pairs(exf) do
 		self:bind_model(name, f)
+	end
+end
+
+if C.HAVE_SOLVER_INTERRUPTS == 1 then
+	-- the actual signature is gs_res (*)(tvalue) - we cast to avoid unsupported conversions
+	-- (tvalue is an aggregate).
+	local resume = ffi.cast("gs_res (*)(uint64_t)", C.gs_resume)
+
+	function mapper_mt.__index:enter_solver()
+		C.gs_enter(self.gs_ctx)
+	end
+
+	function mapper_mt.__index:solver_res(r)
+		r = tonumber(r)
+		while band(r, C.GS_RETURN) == 0 do
+			assert(band(r, C.GS_INTERRUPT_VIRT) ~= 0)
+			local virt = self.virtuals[band(r, C.GS_ARG_MASK)]
+			-- virt() must return uint64_t here!
+			r = tonumber(resume(virt()))
+		end
+
+		if band(r, C.GS_ARG_MASK) ~= C.FHK_OK then
+			self:failed()
+		end
+	end
+else
+	function mapper_mt.__index:enter_solver() end
+
+	function mapper_mt.__index:solver_res(r)
+		assert(band(r, C.GS_RETURN) ~= 0)
+
+		if band(r, C.GS_ARG_MASK) ~= C.FHK_OK then
+			self:failed()
+		end
 	end
 end
 
@@ -435,10 +505,9 @@ function solver_func_mt.__index:from(src)
 	local solver_func = src:solver_func(self.mapper, self.solver)
 	self.solve = function(...)
 		self.mapper.G:init(self.init_v)
+		self.mapper:enter_solver()
 		local r = solver_func(...)
-		if r and r ~= ffi.C.FHK_OK then
-			self.mapper:failed()
-		end
+		self.mapper:solver_res(r)
 	end
 
 	return self
@@ -476,26 +545,6 @@ local support = {
 	global = cast_any(C.gmap_supp_global)
 }
 
-local function solver_vec_bind(v_bind)
-	local ret = ffi.new("struct gmap_solver_vec_bind")
-	ret.v_bind = v_bind
-	ret.z_bind = nil
-	ret.z_band = -1
-	return ret
-end
-
-local solver_vec_bind_mt = { __index = {
-	bind_z = function(self, z_band, z_bind)
-		self.z_band = z_band
-		self.z_bind = z_bind
-		return self
-	end,
-
-	solve_vec = C.gmap_solve_vec
-}}
-
-ffi.metatype("struct gmap_solver_vec_bind", solver_vec_bind_mt)
-
 --------------------------------------------------------------------------------
 
 local function wrap_closure(type, closure)
@@ -522,10 +571,11 @@ end
 
 local function inject(env, mapper)
 	env.fhk = {
-		solve  = function(...) return mapper:solver({...}) end,
-		bind   = function(x, ...) x:bind(mapper, ...) end,
-		expose = function(x) x:expose(mapper) end,
-		typeof = function(x) return mapper.vars[x].type end
+		solve   = function(...) return mapper:solver({...}) end,
+		bind    = function(x, ...) x:bind(mapper, ...) end,
+		expose  = function(x) x:expose(mapper) end,
+		typeof  = function(x) return mapper.vars[x].type end,
+		virtual = function(name, x, f) return x:virtualize(mapper, name, f) end
 	}
 
 	env.on("sim:compile", function()
