@@ -87,7 +87,7 @@ local function copy_graph(vars, models)
 		if not vars[name] then
 			error(string.format("Missing definition for var '%s'", name))
 		end
-		sv[name] = { type=vars[name] }
+		sv[name] = { type=vars[name].type }
 		nv = nv + 1
 	end
 

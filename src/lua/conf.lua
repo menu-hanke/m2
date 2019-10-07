@@ -16,6 +16,29 @@ local function create_enums(data)
 	return ret
 end
 
+local function resolve_lazy(data, vars, t)
+	for name,_ in pairs(t.lazy) do
+		-- explicitly defined types take priority
+		if not t.def[name] then
+			local v = vars[name]
+			if not v then
+				error(string.format("No variable corresponding to struct member: %s.%s",
+					t.name, name))
+			end
+			t.def[name] = v.type
+		end
+	end
+end
+
+local function typecheck_def(vars, t)
+	for name,type in pairs(t.def) do
+		if vars[name] and vars[name].type ~= type then
+			error(string.format("Struct '%s' and fhk disagree about type of '%s' (%s vs. %s)",
+				t.name, name, type.ctype, vars[name].type.ctype))
+		end
+	end
+end
+
 local function create_type(data, enums, types, t)
 	if types[t.name] then
 		return types[t.name]
@@ -44,11 +67,13 @@ local function create_type(data, enums, types, t)
 	types[t.name] = tp
 end
 
-local function create_types(data, enums)
+local function create_types(data, enums, vars)
 	local types = {}
 
 	for name,t in pairs(data.types) do
 		if t.kind == "struct" then
+			resolve_lazy(data, vars, t)
+			typecheck_def(vars, t)
 			create_type(data, enums, types, t)
 		end
 	end
@@ -56,42 +81,26 @@ local function create_types(data, enums)
 	return types
 end
 
-local function export_fhk_vars(data, types, enums)
-	local ret = {}
+local function export_fhk_vars(data, enums)
+	for name,def in pairs(data.vars) do
+		local dtype = typing.builtin_types[def.type] or enums[def.type]
 
-	for name,vtype in pairs(data.vars) do
-		ret[name] = typing.builtin_types[vtype] or enums[vtype]
-
-		if not ret[name] then
-			error(string.format("Not an exportable type '%s' (of fhk var '%s')",
-				vtype, name))
+		if not dtype then
+			error(string.format("Not an exportable type '%s' (of fhk var '%s')", def.type, name))
 		end
+
+		def.type = dtype
 	end
 
-	for tname,_ in pairs(data.type_exports) do
-		if not types[tname] then
-			error(string.format("Can't export type '%s': no definition found", tname))
-		end
-
-		for name,vtype in pairs(types[tname].vars) do
-			if ret[name] and vtype ~= ret[name] then
-				error(string.format("Trying to export var '%s' as conflicting types ('%s' and '%s')",
-					name, vtype.ctype, ret[name].ctype))
-			end
-			if vtype.desc then
-				ret[name] = vtype
-			end
-		end
-	end
-
-	return ret
+	return data.vars
 end
 
-local function create_check(cst, vtypes, vname, mname)
-	local vt = vtypes[vname]
-	if not vt then
+local function create_check(cst, vars, vname, mname)
+	if not vars[vname] then
 		error(string.format("Undefined var '%s' (in constraints of model '%s')", vname, mname))
 	end
+
+	local vt = vars[vname].type
 
 	if cst.type == "any" or cst.type == "none" then
 		local mask = 0ULL
@@ -125,10 +134,10 @@ local function create_check(cst, vtypes, vname, mname)
 	return cst
 end
 
-local function create_models(data, vtypes)
+local function create_models(data, vars)
 	for name,model in pairs(data.models) do
 		for vname,cst in pairs(model.checks) do
-			model.checks[vname] = create_check(cst, vtypes, vname, model.name)
+			model.checks[vname] = create_check(cst, vars, vname, model.name)
 		end
 	end
 
@@ -150,8 +159,8 @@ local function read(...)
 	end
 
 	local enums = create_enums(data)
-	local types = create_types(data, enums)
-	local fhk_vars = export_fhk_vars(data, types, enums)
+	local fhk_vars = export_fhk_vars(data, enums)
+	local types = create_types(data, enums, fhk_vars)
 	local fhk_models = create_models(data, fhk_vars)
 
 	return {

@@ -7,38 +7,38 @@ define.enum.species {
 	muu         = 6
 }
 
-define.type.tree {
-	f      = "real",
-	spe    = "species",
-	dbh    = "real",
-	ba     = "real",
-	ba_L   = "real",
-	ba_Lma = "real",
-	ba_Lku = "real",
-	ba_Lko = "real"
-}
+define.vars {
+	---------- puu ----------
+	f       = "real",
+	spe     = "species",
+	dbh     = "real" * unit("cm"),
+	ba      = "real" * unit("m^2"),
+	ba_L    = "real" * unit("m^2"),
+	ba_Lma  = "real" * unit("m^2"),
+	ba_Lku  = "real" * unit("m^2"),
+	ba_Lko  = "real" * unit("m^2"),
+	--
+	i_d     = "real" * unit("cm"),
+	sur     = "real",
 
-define.type.plot {
-	trees   = "udata", -- vec("tree")
-	time    = "real",
-	step    = "real",
-	ts      = "real",
-	G       = "real",
-	Gma     = "real",
+	---------- koeala ----------
+	ts      = "real" * unit("degC"),
+	G       = "real" * unit("m^2"),
+	Gma     = "real" * unit("m^2"),
 	mtyyppi = "bit64",
-	atyyppi = "bit64"
-}
+	atyyppi = "bit64",
+	--
+	fma     = "real",
+	fku     = "real",
+	fra     = "real",
+	fhi     = "real",
+	fle     = "real",
 
-fhk.export "tree"
-fhk.export "plot"
+	---------- globaalit ----------
+	step    = "real" * unit("yr")
+}
 
 --------------------------------------------------------------------------------
-
-define.vars {
-	"i_d",  -- d increment
-	"sur",  -- survival probability
-	"fma", "fku", "fra", "fhi", "fle", -- ingrowth per species
-}
 
 -- select R or Lua version of the models by commenting/uncommenting these
 --local mdef = function(f, func) return "R::" .. f .. ".r::" .. func end
@@ -118,4 +118,13 @@ define.model.ingrowth_leppa {
 	returns = { "fle" },
 	coeffs  = { "c_0", "c_logts", "c_sqrtG", "c_omt", "c_vtct" },
 	impl    = mdef("examples/models_cal", "ingrowth_leppa")
+}
+
+--------------------------------------------------------------------------------
+
+define.type.tree { "f", "spe", "dbh", "ba", "ba_L", "ba_L", "ba_Lma", "ba_Lku", "ba_Lko" }
+define.type.plot {
+	trees   = "udata", -- vec("tree")
+	time    = "real",
+	"step", "ts", "G", "Gma", "mtyyppi", "atyyppi"
 }

@@ -48,7 +48,7 @@ local function newtype(name)
 end
 
 local function ctype(name)
-	return {ctype=name}
+	return {tname=name, ctype=name, kind="ctype"}
 end
 
 function frozen_mt:__newindex()

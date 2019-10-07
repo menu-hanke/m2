@@ -87,50 +87,56 @@ end
 
 local types = {}
 
-local function gettype(name)
-	if not types[name] then
-		types[name] = { name=name, def={} }
+local function gettype(name, kind, create)
+	if types[name] then
+		if types[name].kind == kind then
+			return types[name]
+		end
+
+		error(string.format("Redefinition of type '%s' of different kind (%s -> %s)",
+			name, types[name].kind, kind))
 	end
+
+	types[name] = create(name, kind)
 	return types[name]
 end
 
-local function setkind(type, name)
-	if type.kind == name then
-		return
-	end
-
-	if type.kind then
-		error(string.format("Redefinition of type '%s' as kind '%s' (was previously '%s')",
-			type.name, name, type.kind))
-	end
-
-	type.kind = name
-end
-
-local function setdef(type, k, v)
-	if type.def[k] and type.def[k] ~= v then
-		error(string.format("Redefinition of '%s' of type '%s' (%s -> %s)",
-			k, type.name, type.def[k], v))
-	end
-
-	type.def[k] = v
-end
+local function newenum(name) return {name=name, kind="enum", def={}} end
+local function newstruct(name) return {name=name, kind="struct", def={}, lazy={}} end
+local function getenum(name) return gettype(name, "enum", newenum) end
+local function getstruct(name) return gettype(name, "struct", newstruct) end
 
 env.define.enum = namespace(function(name, def)
-	local e = gettype(name)
-	setkind(e, "enum")
+	local e = getenum(name)
 
 	for k,v in pairs(def) do
-		setdef(e, k, tonumber(v))
+		v = tonumber(v)
+
+		if e.def[k] and e.def[k] ~= v then
+			error(string.format("Redefinition of enum '%s' value '%s' (%d -> %d)",
+				name, k, e.def[k], v))
+		end
+
+		e.def[k] = v
 	end
 end)
 
 env.define.type = namespace(function(name, def)
-	local t = gettype(name)
-	setkind(t, "struct")
+	local t = getstruct(name)
 
 	for k,v in pairs(def) do
-		setdef(t, k, tostring(v))
+		if type(k) == "number" then
+			t.lazy[v] = true
+		else
+			if t.def[k] and t.def[k] ~= v then
+				error(string.format(
+					"Redefinition of struct '%s' member '%s' with conflicting type (%s -> %s)",
+					name, k, t.def[k], v
+				))
+			end
+
+			t.def[k] = v
+		end
 	end
 end)
 
@@ -142,7 +148,6 @@ env.C = typing.ctype
 
 local models = {}
 local vars = {}
-local type_exports = {}
 
 local _models = nodup(models, "Redefinition of model '%s'")
 local _vars = nodup(vars, "Redefinition of var '%s'")
@@ -198,16 +203,69 @@ env.define.model = namespace(function(name, def)
 	}
 end)
 
-env.define.var = namespace(function(name, type)
-	_vars[name] = type or "real"
-end)
+---------- vars ----------
 
-env.define.vars = function(defs)
-	for name,t in pairs(defs) do
-		if type(name) == "number" then
-			_vars[t] = "real"
-		else
-			_vars[name] = t
+local vdef_mt = {}
+
+local function vdef(d)
+	return setmetatable(d, vdef_mt)
+end
+
+env.unit = function(unit) return vdef({unit=unit}) end
+env.doc  = function(doc)  return vdef({doc=doc}) end
+
+local function paste(dest, tab)
+	for k,v in pairs(tab) do
+		dest[k] = v
+	end
+	return dest
+end
+
+function vdef_mt.__mul(left, right)
+	if type(right) == "table" then
+		left, right = right, left
+	end
+
+	local ret = paste({}, left)
+
+	if type(right) == "string" then
+		ret.type = right
+	else
+		paste(ret, right)
+	end
+
+	return vdef(ret)
+end
+
+vdef_mt.__add = vdef_mt.__mul
+
+local function defvar(name, def)
+	local d = {name = name}
+	if type(def) == "string" then
+		d.type = def
+	else
+		paste(d, def)
+	end
+
+	_vars[name] = d
+end
+
+env.define.var = namespace(defvar)
+
+env.define.vars = function(vd, defs)
+	if not defs then return env.define.vars(nil, vd) end
+
+	if vd then
+		for _,name in ipairs(defs) do
+			defvar(name, vd)
+		end
+	else
+		for k,v in pairs(defs) do
+			if type(k) == "number" then
+				defvar(v, "real")
+			else
+				defvar(k, v)
+			end
 		end
 	end
 end
@@ -230,21 +288,11 @@ env.read.cost = function(fname)
 	end
 end
 
-env.fhk = {
-	export = function(...)
-		local ts = {...}
-		for _,t in ipairs(ts) do
-			type_exports[t] = true
-		end
-	end
-}
-
 --------------------------------------------------------------------------------
 
 return env, {
 	calib = calib,
 	types = types,
 	models = models,
-	vars = vars,
-	type_exports = type_exports
+	vars = vars
 }
