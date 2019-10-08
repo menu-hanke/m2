@@ -33,9 +33,9 @@ void gs_destroy_ctx(gs_ctx *ctx);
 
 void gs_enter(gs_ctx *ctx);
 void gs_interrupt(gs_res ir);
-gs_res gs_resume(tvalue iv);
+gs_res gs_resume(pvalue iv);
 
-tvalue gs_res_virt(void *v);
+int gs_res_virt(void *v, pvalue *p);
 
 #endif
 

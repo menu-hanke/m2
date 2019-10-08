@@ -331,7 +331,7 @@ typedef struct gmap_support {
  bool (*is_visible)(tvalue to, unsigned reason, tvalue parm);
  bool (*is_constant)(tvalue to, unsigned reason, tvalue parm);
 } gmap_support;
-typedef tvalue (*gmap_resolve)(void *);
+typedef int (*gmap_resolve)(void *, pvalue *);
 struct gmap_any {
  const gmap_support *supp; gmap_resolve resolve; tvalue udata; const char *name; unsigned target_type : 16;
 };
@@ -363,9 +363,9 @@ void gmap_unbind_model(struct fhk_graph *G, unsigned idx);
 void gmap_supp_obj_var(struct gmap_any *v, uint64_t objid);
 void gmap_supp_grid_env(struct gmap_any *v, uint64_t order);
 void gmap_supp_global(struct gmap_any *v);
-tvalue gmap_res_vec(void *v);
-tvalue gmap_res_grid(void *v);
-tvalue gmap_res_data(void *v);
+int gmap_res_vec(void *v, pvalue *p);
+int gmap_res_grid(void *v, pvalue *p);
+int gmap_res_data(void *v, pvalue *p);
 void gmap_mark_visible(struct fhk_graph *G, bm8 *vmask, unsigned reason, tvalue parm);
 void gmap_mark_nonconstant(struct fhk_graph *G, bm8 *vmask, unsigned reason, tvalue parm);
 void gmap_make_reset_masks(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
@@ -386,8 +386,8 @@ gs_ctx *gs_create_ctx();
 void gs_destroy_ctx(gs_ctx *ctx);
 void gs_enter(gs_ctx *ctx);
 void gs_interrupt(gs_res ir);
-gs_res gs_resume(tvalue iv);
-tvalue gs_res_virt(void *v);
+gs_res gs_resume(pvalue iv);
+int gs_res_virt(void *v, pvalue *p);
 gs_res gs_solve_step(struct fhk_solver *solver, unsigned idx);
 gs_res gs_solve_vec(struct vec_ref *v_bind, struct fhk_solver *solver, struct vec *vec);
 gs_res gs_solve_vec_z(struct vec_ref *v_bind, gridpos *z_bind, int z_band, struct fhk_solver *solver,

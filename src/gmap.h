@@ -22,7 +22,7 @@ typedef struct gmap_support {
 	bool (*is_constant)(tvalue to, unsigned reason, tvalue parm);
 } gmap_support;
 
-typedef tvalue (*gmap_resolve)(void *);
+typedef int (*gmap_resolve)(void *, pvalue *);
 
 #define GV_HEADER\
 	const gmap_support *supp;    \
@@ -69,9 +69,9 @@ void gmap_supp_obj_var(struct gmap_any *v, uint64_t objid);
 void gmap_supp_grid_env(struct gmap_any *v, uint64_t order);
 void gmap_supp_global(struct gmap_any *v);
 
-tvalue gmap_res_vec(void *v);
-tvalue gmap_res_grid(void *v);
-tvalue gmap_res_data(void *v);
+int gmap_res_vec(void *v, pvalue *p);
+int gmap_res_grid(void *v, pvalue *p);
+int gmap_res_data(void *v, pvalue *p);
 
 void gmap_mark_visible(struct fhk_graph *G, bm8 *vmask, unsigned reason, tvalue parm);
 void gmap_mark_nonconstant(struct fhk_graph *G, bm8 *vmask, unsigned reason, tvalue parm);

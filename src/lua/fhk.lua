@@ -301,12 +301,13 @@ else
 end
 
 function mapper_mt.__index:wrap_virtual(name, func)
-	local tname = self.vars[name].type.tname
+	local ptype = typing.promote(self.vars[name].type.desc)
+	local tname = typing.desc_builtin[tonumber(ptype)].tname
 
 	return function()
-		local tv = ffi.new("tvalue")
-		tv[tname] = func()
-		return tv.u64 -- see comment in mapper:solver_res()
+		local ret = ffi.new("pvalue")
+		ret[tname] = func()
+		return ret.u64 -- see comment in mapper:solver_res()
 	end
 end
 
@@ -349,8 +350,8 @@ function mapper_mt.__index:create_models(calib)
 end
 
 if C.HAVE_SOLVER_INTERRUPTS == 1 then
-	-- the actual signature is gs_res (*)(tvalue) - we cast to avoid unsupported conversions
-	-- (tvalue is an aggregate).
+	-- the actual signature is gs_res (*)(pvalue) - we cast to avoid unsupported conversions
+	-- (pvalue is an aggregate).
 	local resume = ffi.cast("gs_res (*)(uint64_t)", C.gs_resume)
 
 	function mapper_mt.__index:enter_solver()
@@ -479,7 +480,7 @@ local function solver_make_res(names, vs)
 		local ptype = typing.promote(vs[name].type.desc)
 		ret[name] = {
 			idx = i-1,
-			ctype = typing.desc_ctype[tonumber(ptype)] .. "*"
+			ctype = typing.desc_builtin[tonumber(ptype)].ctype .. "*"
 		}
 	end
 	return ret
@@ -547,19 +548,6 @@ local support = {
 
 --------------------------------------------------------------------------------
 
-local function wrap_closure(type, closure)
-	-- Note: this is hacky, fragile and slow.
-	-- It probably only works on 64-bit.
-	-- Don't use this for anything else than testing, for perf use C callbacks.
-
-	local tname = type.tname
-	return ffi.cast("uint64_t (*)(void *)", function(udata)
-		local r = ffi.new("tvalue")
-		r[tname] = closure(udata)
-		return r.b
-	end)
-end
-
 local rebind = function(sim, solver, n)
 	local res_size = n * ffi.sizeof("pvalue")
 
@@ -587,7 +575,6 @@ return {
 	build_graph     = build_graph,
 	create_models   = create_models,
 	hook            = hook,
-	solver_vec_bind = solver_vec_bind,
 	bind            = bind,
 	support         = support,
 	inject          = inject,

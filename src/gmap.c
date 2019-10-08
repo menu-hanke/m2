@@ -76,21 +76,29 @@ void gmap_supp_global(struct gmap_any *v){
 	v->supp = &SUPP_GLOBAL;
 }
 
-tvalue gmap_res_vec(void *v){
+#define PROMOTE(v,p) vpromote(*(tvalue *) (p), (v)->target_type);
+
+__attribute__((no_sanitize("alignment")))
+int gmap_res_vec(void *v, pvalue *p){
 	struct gv_vec *vec = v;
 	struct vec_band *band = V_BAND(vec->bind->vec, vec->target_band);
-	return *(tvalue *) (V_DATA(band, vec->bind->idx) + vec->target_offset);
+	*p = PROMOTE(vec, V_DATA(band, vec->bind->idx) + vec->target_offset);
+	return FHK_OK;
 }
 
-tvalue gmap_res_grid(void *v){
+__attribute__((no_sanitize("alignment")))
+int gmap_res_grid(void *v, pvalue *p){
 	struct gv_grid *g = v;
 	gridpos z = grid_zoom_up(*g->bind, POSITION_ORDER, g->grid->order);
-	return *(tvalue *) (((char *) grid_data(g->grid, z)) + g->target_offset);
+	*p = PROMOTE(g, (((char *) grid_data(g->grid, z)) + g->target_offset));
+	return FHK_OK;
 }
 
-tvalue gmap_res_data(void *v){
+__attribute__((no_sanitize("alignment")))
+int gmap_res_data(void *v, pvalue *p){
 	struct gv_data *d = v;
-	return *((tvalue *) d->ref);
+	*p = PROMOTE(d, d->ref);
+	return FHK_OK;
 }
 
 #define MARK_CALLBACK(cb)\
@@ -153,9 +161,7 @@ static int G_model_exec(struct fhk_graph *G, void *udata, pvalue *ret, pvalue *a
 static int G_resolve_var(struct fhk_graph *G, void *udata, pvalue *value){
 	(void)G;
 	struct gmap_any *v = udata;
-	tvalue t = v->resolve(v);
-	*value = vpromote(t, v->target_type);
-	return FHK_OK;
+	return v->resolve(v, value);
 }
 
 static const char *G_ddv(void *udata){

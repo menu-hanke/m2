@@ -63,7 +63,7 @@ struct gs_ctx {
 	aco_t *solver_co;
 	aco_share_stack_t *sstk;
 	gs_res ir;
-	tvalue iv;
+	pvalue *iv;
 	struct co_solve_args *arg;
 };
 
@@ -111,17 +111,18 @@ static gs_res co_resume(struct gs_ctx *ctx){
 	return ctx->ir;
 }
 
-gs_res gs_resume(tvalue iv){
+gs_res gs_resume(pvalue iv){
 	struct gs_ctx *ctx = aco_get_arg();
-	ctx->iv = iv;
+	*ctx->iv = iv;
 	return co_resume(ctx);
 }
 
-tvalue gs_res_virt(void *v){
+int gs_res_virt(void *v, pvalue *p){
+	struct gs_ctx *ctx = aco_get_arg();
+	ctx->iv = p;
 	struct gs_virt *virt = v;
 	gs_interrupt(GS_INTERRUPT_VIRT | virt->handle);
-	struct gs_ctx *ctx = aco_get_arg();
-	return ctx->iv;
+	return FHK_OK;
 }
 
 // reuse coroutine object to save mallocs (this is a bit hacky)

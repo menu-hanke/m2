@@ -36,11 +36,11 @@ builtin_types.real = select_builtin("vreal", builtin_types.real32, builtin_types
 builtin_types.mask = select_builtin("vmask", builtin_types.bit8, builtin_types.bit16,
 	builtin_types.bit32, builtin_types.bit64)
 
-local desc_ctype = {}
+local desc_builtin = {}
 
 for _,v in pairs(builtin_types) do
 	setmetatable(v, typedef_mt)
-	desc_ctype[tonumber(v.desc)] = v.ctype
+	desc_builtin[tonumber(v.desc)] = v
 end
 
 local function newtype(name)
@@ -171,7 +171,7 @@ end
 
 return {
 	builtin_types = builtin_types,
-	desc_ctype    = desc_ctype,
+	desc_builtin  = desc_builtin,
 	newtype       = newtype,
 	offsetof      = offsetof,
 	ctype         = ctype,
