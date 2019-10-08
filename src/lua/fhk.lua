@@ -53,14 +53,6 @@ local function copyvars(dest, vars, sv)
 	return dest
 end
 
-local function copyptypes(vars, sv)
-	local ret = ffi.new("type[?]", #vars)
-	for i,name in ipairs(vars) do
-		ret[i-1] = typing.promote(sv[name].type.desc)
-	end
-	return ret, #vars
-end
-
 local function copy_graph(vars, models)
 	local sv, sm = {}, {}
 	local nv, nm = 0, 0
@@ -145,12 +137,27 @@ local function create_models(sv, sm, calib)
 	calib = calib or {}
 	local ret = {}
 
-	for name,model in pairs(sm) do
-		local def = models.def(model.src.impl)
+	local nt = 100
+	local atypes = malloc.new("type", nt)
+	local rtypes = malloc.new("type", nt)
 
-		def.atypes, def.n_arg = copyptypes(model.src.params, sv)
-		def.rtypes, def.n_ret = copyptypes(model.src.returns, sv)
-		def.n_coef = #model.src.coeffs
+	for name,model in pairs(sm) do
+		local mpar = model.src.params
+		local mret = model.src.returns
+
+		if math.max(#mpar, #mret) > nt then
+			nt = math.max(#mpar, #mret)
+			atypes = malloc.new("type", nt)
+			rtypes = malloc.new("type", nt)
+		end
+
+		for i,n in ipairs(mpar) do atypes[i-1] = typing.promote(sv[n].type.desc) end
+		for i,n in ipairs(mret) do rtypes[i-1] = typing.promote(sv[n].type.desc) end
+
+		local def = models.def(model.src.impl)
+		def:args(atypes, #mpar)
+		def:rets(rtypes, #mret)
+		def:coefs(#model.src.coeffs)
 
 		local cal = calib[name]
 		if cal then

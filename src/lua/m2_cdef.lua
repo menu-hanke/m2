@@ -413,6 +413,8 @@ void vmexpand8(vmask *m, uint8_t *mask, size_t n);
 void vmexpand16(vmask *m, uint16_t *mask, size_t n);
 void vmexpand32(vmask *m, uint32_t *mask, size_t n);
        
+model *mod_Const_create(unsigned nret, pvalue *ret);
+       
        
 void *maux_get_file_data(const char *file);
 void maux_set_file_data(const char *file, void *udata);

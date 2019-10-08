@@ -177,6 +177,10 @@ function env.between(a, b)
 	return make_check({type="interval", a = a or -math.huge, b = b or math.huge})
 end
 
+function env.const(...)
+	return {lang="Const", ret={...}}
+end
+
 local function parse_impl(impl)
 	local lang, file, func = impl:match("([^:]+)::([^:]+)::(.+)$")
 	if not lang then
@@ -199,7 +203,7 @@ env.define.model = namespace(function(name, def)
 		returns = totable(def.returns or {}),
 		coeffs = totable(def.coeffs or {}),
 		checks = checks,
-		impl = parse_impl(def.impl)
+		impl = type(def.impl) == "string" and parse_impl(def.impl) or def.impl
 	}
 end)
 
