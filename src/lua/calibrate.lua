@@ -1,3 +1,4 @@
+local cli = require "cli"
 local ffi = require "ffi"
 local conf = require "conf"
 local sim_env = require "sim_env"
@@ -195,4 +196,13 @@ local function main(args)
 	write_solution(coefs)
 end
 
-return { main=main }
+return {
+	flags = {
+		c = opt("config"),
+		s = addopt("scripts"),
+		i = opt("input"),
+		p = opt("coefs"),
+		C = opt("calibrator")
+	},
+	main = main
+}

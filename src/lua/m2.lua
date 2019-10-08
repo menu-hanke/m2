@@ -1,105 +1,26 @@
 require "m2_cdef"
 require "arena"
+require "malloc"
 require "glob_util"
-
-local function opt(name)
-	return function(ret, n)
-		ret[name] = n()
-	end
-end
-
-local function addopt(name)
-	return function(ret, n)
-		ret[name] = ret[name] or {}
-		table.insert(ret[name], n())
-	end
-end
-
-local function flag(name)
-	return function(ret)
-		ret[name] = true
-	end
-end
-
-local cmdargs = {
-
-	simulate = {
-		c = opt("config"),
-		s = addopt("scripts"),
-		i = opt("input"),
-		I = opt("instr")
-	},
-
-	calibrate = {
-		c = opt("config"),
-		s = addopt("scripts"),
-		i = opt("input"),
-		p = opt("coefs"),
-		C = opt("calibrator")
-	},
-
-	fhkdbg = {
-		c = opt("config"),
-		i = opt("input"),
-		f = function(ret, n) ret.vars = map(split(n()), trim) end
-	}
-
-}
-
--------------------------
-
-local function parse_args(args)
-	-- skip first arg (program name)
-	local idx = 1
-	local iter = function()
-		idx = idx + 1
-		return args[idx]
-	end
-
-	local cmd
-	if #args<2 or args[2]:sub(1, 1) == "-" then
-		cmd = "simulate"
-	else
-		cmd = args[2]
-		iter()
-	end
-
-	local ad = cmdargs[cmd]
-
-	if not ad then
-		error(string.format("Unknown command '%s'", cmd))
-	end
-
-	local ret = {}
-
-	while true do
-		local flag = iter()
-		if not flag then
-			break
-		end
-
-		if flag:sub(1, 1) ~= "-" then
-			error(string.format("Invalid argument: '%s'", flag))
-		end
-
-		local cb = ad[flag:sub(2)]
-		if cb then
-			cb(ret, iter)
-		elseif flag:sub(2, 2) == "j" then
-			local module, args = flag:match("(%w+)=?(.*)", 3)
-			require("jit."..module).start(unpack(split(args or "")))
-		else
-			error(string.format("Unknown flag: '%s'", flag))
-		end
-	end
-
-	return cmd, ret
-end
-
--------------------------
+local cli = require "cli"
 
 function main(args)
-	local cmd, args = parse_args(args)
-	require(cmd).main(args)
+	local ai, cmd
+	if #args<2 or args[2]:sub(1, 1) == "-" then
+		cmd = require "simulate"
+		ai = cli.argiter(args, 2)
+	else
+		cmd = require(args[2])
+		ai = cli.argiter(args, 3)
+	end
+
+	local flags = cmd.flags
+
+	flags.j = function(_, _, flag)
+		local module, args = flag:match("-j(%w+)=?(.*)", 3)
+		require("jit."..module).start(unpack(split(args or "")))
+	end
+
+	cmd.main(cli.parse(ai, flags))
 	return 0
 end

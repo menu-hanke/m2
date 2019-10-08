@@ -1,3 +1,4 @@
+local cli = require "cli"
 local conf = require "conf"
 local sim_env = require "sim_env"
 
@@ -33,4 +34,12 @@ local function main(args)
 	end
 end
 
-return { main=main }
+return {
+	flags = {
+		c = cli.opt("config"),
+		s = cli.addopt("scripts"),
+		i = cli.opt("input"),
+		I = cli.opt("instr")
+	},
+	main = main
+}

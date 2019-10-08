@@ -1,3 +1,4 @@
+local cli = require "cli"
 local ffi = require "ffi"
 local conf = require "conf"
 local fhk = require "fhk"
@@ -251,5 +252,10 @@ local function main(args)
 end
 
 return {
+	flags = {
+		c = cli.opt("config"),
+		i = cli.opt("input"),
+		f = function(ret, ai) ret.vars = map(split(ai()), trim) end
+	},
 	main = main
 }
