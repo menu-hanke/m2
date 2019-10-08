@@ -69,6 +69,7 @@ static void resolve_value(struct state *s, struct fhk_var *x);
 static void resolve_given(struct state *s, struct fhk_var *x);
 static void param_bounds(double *Sp_min, double *Sp_max, struct fhk_model *m);
 static void mmin2(struct fhk_model **m1, struct fhk_model **m2, struct fhk_var *y);
+static struct fhk_model *mmin0p(struct fhk_var *y);
 static pvalue *return_ptr(struct fhk_model *m, struct fhk_var *v);
 
 #define SWAP(A, B) do { typeof(A) _t = (A); (A) = (B); (B) = _t; } while(0)
@@ -405,6 +406,25 @@ static void dj_mark_v(struct state *s, struct fhk_var *y){
 		dv("Search root: %s (chain cost: %f)\n", ddescv(s, y), COST(y));
 		heap_add_unordered(s->heap, y, COST(y));
 		return;
+	}
+
+	// special case: if we have 0-parameter models then their parameters can't be marked so
+	// the marking will never find them, also causing this variable to be excluded from the search.
+	// fix this by adding the best 0-parameter model as a candidate if it exists.
+	// this doesn't cause any problems:
+	//   * no computed checks allowed on cyclic graphs, so the model is valid and has a known cost
+	//   * we continue up the graph so any possible better chain is also found
+	struct fhk_model *m0 = mmin0p(y);
+	if(m0){
+		dv("Search root: %s (0-parameter model: %s cost: %f)\n", ddescv(s, y), ddescm(s, m0),
+				COST(m0));
+
+		// bounding phase never selects chain so mark it here. (this is a bit hacky, but the
+		// model must have chain selected when y leaves the heap, and this will not cause problems
+		// since 0-parameter models will always trivially have "chain" selected).
+		MBMAP(s, m0)->chain_selected = 1;
+		y->model = m0;
+		heap_add_unordered(s->heap, y, COST(m0));
 	}
 
 	for(unsigned i=0;i<y->n_mod;i++){
@@ -908,6 +928,27 @@ static void mmin2(struct fhk_model **m1, struct fhk_model **m2, struct fhk_var *
 
 	*m1 = y->models[a];
 	*m2 = y->models[b];
+}
+
+static struct fhk_model *mmin0p(struct fhk_var *y){
+	struct fhk_model **m = y->models;
+	struct fhk_model *r = NULL;
+	double xr = INFINITY;
+
+	for(unsigned i=0;i<y->n_mod;i++){
+		if(m[i]->n_param > 0)
+			continue;
+
+		// use COST instead of min_cost here. 0-parameter models can't have parameter cost
+		// intervals and any check must be given so we have determined the cost.
+		if(COST(m[i]) >= xr)
+			continue;
+
+		xr = COST(m[i]);
+		r = m[i];
+	}
+
+	return r;
 }
 
 static pvalue *return_ptr(struct fhk_model *m, struct fhk_var *v){
