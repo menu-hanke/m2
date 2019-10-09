@@ -232,29 +232,26 @@ struct fhk_var {
  double min_cost, max_cost;
  void *udata;
 };
-typedef union fhk_mbmap { uint8_t u8; struct { unsigned blacklisted : 1; unsigned has_bound : 1; unsigned chain_selected : 1; unsigned has_return : 1; unsigned mark : 1; } __attribute__((packed));  } fhk_mbmap;
-typedef union fhk_vbmap { uint8_t u8; struct { unsigned given : 1; unsigned mark : 1; unsigned chain_selected : 1; unsigned has_value : 1; unsigned has_bound : 1; unsigned stable : 1; unsigned target : 1; } __attribute__((packed));  } fhk_vbmap;
+typedef union fhk_mbmap { uint8_t u8; struct { unsigned has_bound : 1; unsigned chain_selected : 1; unsigned has_return : 1; unsigned mark : 1; } __attribute__((packed));  } fhk_mbmap;
+typedef union fhk_vbmap { uint8_t u8; struct { unsigned given : 1; unsigned mark : 1; unsigned chain_selected : 1; unsigned has_value : 1; unsigned has_bound : 1; unsigned target : 1; } __attribute__((packed));  } fhk_vbmap;
 enum {
- FHK_NOT_RESOLVED = -1,
  FHK_OK = 0,
- FHK_RESOLVE_FAILED = 1,
- FHK_MODEL_FAILED = 2,
- FHK_SOLVER_FAILED = 3
+ FHK_SOLVER_FAILED = 1,
+ FHK_VAR_FAILED = 2,
+ FHK_MODEL_FAILED = 3,
 };
 struct fhk_einfo {
  int err;
  struct fhk_model *model;
  struct fhk_var *var;
 };
-typedef struct fhk_graph fhk_graph;
-typedef int (*fhk_model_exec)(fhk_graph *G, void *udata, pvalue *ret, pvalue *args);
-typedef int (*fhk_var_resolve)(fhk_graph *G, void *udata, pvalue *value);
-typedef void (*fhk_chain_solved)(fhk_graph *G, void *udata, pvalue value);
+struct fhk_graph fhk_graph;
+typedef int (*fhk_model_exec)(struct fhk_graph *G, void *udata, pvalue *ret, pvalue *args);
+typedef int (*fhk_var_resolve)(struct fhk_graph *G, void *udata, pvalue *value);
 typedef const char *(*fhk_desc)(void *udata);
 struct fhk_graph {
  fhk_model_exec exec_model;
  fhk_var_resolve resolve_var;
- fhk_chain_solved chain_solved;
  fhk_desc debug_desc_var;
  fhk_desc debug_desc_model;
  size_t n_var;
@@ -263,8 +260,9 @@ struct fhk_graph {
  size_t n_mod;
  struct fhk_model *models;
  fhk_mbmap *m_bitmaps;
- unsigned dirty;
  struct fhk_einfo last_error;
+ unsigned dirty : 1;
+ void *solver_state;
  void *udata;
 };
 struct fhk_solver {

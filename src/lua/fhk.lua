@@ -107,7 +107,7 @@ local function build_models(G, arena, sv, sm)
 		fm.k = m.src.k or 1
 		fm.c = m.src.c or 1
 
-		if not m.k or not m.c then
+		if not m.src.k or not m.src.c then
 			io.stderr:write(string.format("warn: No cost given for model %s - defaulting to 1\n",
 				m.src.name))
 		end
@@ -426,12 +426,8 @@ function mapper_mt.__index:set_init_vmask(vmask, names)
 	given.given = 1
 	C.bm_and64(vmask, G.n_var, C.bmask8(given.u8))
 
-	local stable = ffi.new("fhk_vbmap")
-	stable.stable = 1
-	C.bm_or64(vmask, G.n_var, C.bmask8(stable.u8))
-
 	-- clear given bit for targets
-	self:mark(vmask, names, stable.u8)
+	self:mark(vmask, names, 0)
 end
 
 function mapper_mt.__index:failed()

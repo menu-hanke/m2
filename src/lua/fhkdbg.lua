@@ -49,12 +49,7 @@ local function hook(G, vars, models)
 
 	hook_udata(vars, models, exf)
 	hook_graph(g)
-
-	-- XXX remove when stable removed
-	local bitmap = ffi.new("fhk_vbmap", {stable=1})
-	ffi.C.bm_or64(ffi.cast("bm8 *", G.v_bitmaps), G.n_var, ffi.C.bmask8(bitmap.u8))
 	g:reset()
-
 	return g
 end
 
@@ -66,11 +61,11 @@ function dgraph_mt.__index:create_models(calib)
 end
 
 function dgraph_mt.__index:reset()
-	ffi.C.fhk_reset(self.G, ffi.new("fhk_vbmap", {given=1, stable=1}), ffi.new("fhk_mbmap"))
+	ffi.C.fhk_reset(self.G, ffi.new("fhk_vbmap", {given=1}), ffi.new("fhk_mbmap"))
 end
 
 function dgraph_mt.__index:given(names)
-	ffi.C.fhk_reset(self.G, ffi.new("fhk_vbmap", {stable=1}), ffi.new("fhk_mbmap"))
+	ffi.C.fhk_reset(self.G, ffi.new("fhk_vbmap"), ffi.new("fhk_mbmap"))
 	for _,name in ipairs(names) do
 		local fv = self.vars[name].fhk_var
 		self.G.v_bitmaps[fv.idx].given = 1

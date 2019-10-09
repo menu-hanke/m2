@@ -127,8 +127,7 @@ void gmap_make_reset_masks(struct fhk_graph *G, bm8 *vmask, bm8 *mmask){
 	bm_not(mmask, G->n_mod);
 
 	// Finally, these bits shouldn't be touched when stepping
-	// Note: (TODO) unstable vars should have the stable bit cleared
-	fhk_vbmap keep = { .given=1, .stable=1 };
+	fhk_vbmap keep = { .given=1 };
 	bm_or8(vmask, G->n_var, keep.u8);
 }
 
