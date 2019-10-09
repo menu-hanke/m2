@@ -2,35 +2,24 @@ local cli = require "cli"
 local ffi = require "ffi"
 local conf = require "conf"
 local fhk = require "fhk"
-local malloc = require "malloc"
 local typing = require "typing"
 
-ffi.cdef [[
-	struct Lvar_info {
-		const char *desc;
-		const char *ctype;
-		type type;
-	};
+local function hook_udata(vars, models)
+	for name,fv in pairs(vars) do
+		fv.fhk_var.udata = ffi.cast("char *", name)
+	end
 
-	struct Lmodel_info {
-		const char *desc;
-		struct model *model;
-	};
-]]
-
--------------------------
-
-local function varinfo(udata)
-	return ffi.cast("struct Lvar_info *", udata)
+	for name,fm in pairs(models) do
+		fm.fhk_model.udata = ffi.cast("char *", name)
+	end
 end
 
-local function modelinfo(udata)
-	return ffi.cast("struct Lmodel_info *", udata)
-end
+local function hook_graph(g)
+	local G = g.G
 
-local function hook_graph(G)
 	G.exec_model = function(G, udata, ret, args)
-		return modelinfo(udata).model(ret, args)
+		local name = ffi.string(udata)
+		return g.exf[name](ret, args) or ffi.C.FHK_OK
 	end
 
 	G.resolve_var = function(G, udata, value)
@@ -40,81 +29,100 @@ local function hook_graph(G)
 	-- G.chain_solved = nil
 
 	G.debug_desc_var = function(udata)
-		return varinfo(udata).desc
+		return udata
 	end
 
 	G.debug_desc_model = function(udata)
-		return modelinfo(udata).desc
+		return udata
 	end
 end
 
-local function hook_udata(vars, models, exf)
-	for name,fv in pairs(vars) do
-		local info = malloc.new("struct Lvar_info")
-		info.desc = name
-		info.type = fv.type.desc
-		info.ctype = fv.type.ctype
-		fv.info = info
-		fv.fhk_var.udata = info
-	end
+local dgraph_mt = { __index = {} }
 
-	for name,fm in pairs(models) do
-		local info = malloc.new("struct Lmodel_info")
-		info.desc = name
-		info.model = exf[name]
-		fm.info = info
-		fm.fhk_model.udata = info
+local function hook(G, vars, models)
+	local g = setmetatable({
+		G      = G,
+		vars   = vars,
+		models = models,
+		exf    = {}
+	}, dgraph_mt)
+
+	hook_udata(vars, models, exf)
+	hook_graph(g)
+
+	-- XXX remove when stable removed
+	local bitmap = ffi.new("fhk_vbmap", {stable=1})
+	ffi.C.bm_or64(ffi.cast("bm8 *", G.v_bitmaps), G.n_var, ffi.C.bmask8(bitmap.u8))
+	g:reset()
+
+	return g
+end
+
+function dgraph_mt.__index:create_models(calib)
+	local exf = fhk.create_models(self.vars, self.models, calib)
+	for name,f in pairs(exf) do
+		self.exf[name] = f
 	end
 end
 
-local function get_vars(names, vars)
-	local ret = {}
-	for _,n in ipairs(names) do
-		table.insert(ret, vars[n])
-	end
-	return ret
+function dgraph_mt.__index:reset()
+	ffi.C.fhk_reset(self.G, ffi.new("fhk_vbmap", {given=1, stable=1}), ffi.new("fhk_mbmap"))
 end
 
-local function get_cvars(vars)
-	local ret = ffi.new("struct fhk_var *[?]", #vars)
-	for i,v in ipairs(vars) do
-		ret[i-1] = v.fhk_var
-	end
-	return ret
-end
-
-local function set_flag(G, flag, vars)
-	local bitmap = ffi.new("fhk_vbmap")
-	bitmap.u8 = 0
-	bitmap[flag] = 1
-
-	if vars then
-		for _,v in ipairs(vars) do
-			local idx = v.fhk_var.idx
-			G.v_bitmaps[idx].u8 = bit.bor(G.v_bitmaps[idx].u8, bitmap.u8)
-		end
-	else
-		ffi.C.bm_or64(ffi.cast("bm8 *", G.v_bitmaps), G.n_var, ffi.C.bmask8(bitmap.u8))
+function dgraph_mt.__index:given(names)
+	ffi.C.fhk_reset(self.G, ffi.new("fhk_vbmap", {stable=1}), ffi.new("fhk_mbmap"))
+	for _,name in ipairs(names) do
+		local fv = self.vars[name].fhk_var
+		self.G.v_bitmaps[fv.idx].given = 1
 	end
 end
 
--------------------------
+function dgraph_mt.__index:vpointers(names)
+	local ret = ffi.new("struct fhk_var *[?]", #names)
+	for i,name in ipairs(names) do
+		ret[i-1] = self.vars[name].fhk_var
+	end
+	return #names, ret
+end
 
-local function reportv(visited, ret, G, fv, reason)
-	local idx = tonumber(fv.idx)
+function dgraph_mt.__index:setvalues(values)
+	for name,value in pairs(values) do
+		local fv = self.vars[name].fhk_var
+		self.G.v_bitmaps[fv.idx].has_value = 1
+		fv.value = ffi.C.vimportd(value, self.vars[name].type.desc)
+	end
+end
 
-	if visited[idx] then
+function dgraph_mt.__index:value(name)
+	local v = self.vars[name]
+	if self.G.v_bitmaps[v.fhk_var.idx].has_value == 0 then
+		return
+	end
+	return tonumber(ffi.C.vexportd(v.fhk_var.value, self.vars[name].type.desc))
+end
+
+function dgraph_mt.__index:solve(n, ptrs)
+	return ffi.C.fhk_solve(self.G, n, ptrs)
+end
+
+-- solve will call back to Lua code via G hooks so this must not be compiled
+require("jit").off(dgraph_mt.__index.solve)
+
+--------------------------------------------------------------------------------
+
+local function reportv(visited, ret, g, name, reason)
+	if visited[name] then
 		return
 	end
 
-	visited[idx] = true
+	visited[name] = true
 
-	local fvinfo = varinfo(fv.udata)
-	local bitmap = G.v_bitmaps[fv.idx]
+	local fv = g.vars[name].fhk_var
+	local bitmap = g.G.v_bitmaps[fv.idx]
 
 	local r = {
-		value  = tonumber(ffi.C.vexportd(fv.value, fvinfo.type)),
-		desc   = ffi.string(fvinfo.desc),
+		value  = g:value(name),
+		desc   = name,
 		reason = reason,
 		given  = bitmap.given == 1,
 		solved = bitmap.chain_selected == 1
@@ -128,26 +136,25 @@ local function reportv(visited, ret, G, fv, reason)
 
 	if r.solved and (not r.given) then
 		local fm = fv.model
-		local fminfo = modelinfo(fm.udata)
-		r.model = ffi.string(fminfo.desc)
+		r.model = ffi.string(fm.udata)
 		r.cost = fv.min_cost
 
 		for i=0, tonumber(fm.n_param)-1 do
-			reportv(visited, ret, G, fm.params[i], "parameter")
+			reportv(visited, ret, g, ffi.string(fm.params[i].udata), "parameter")
 		end
 
 		for i=0, tonumber(fm.n_check)-1 do
-			reportv(visited, ret, G, fm.checks[i].var, "constraint")
+			reportv(visited, ret, g, ffi.string(fm.checks[i].var.udata), "constraint")
 		end
 	end
 end
 
-local function report(G, vars)
+local function report(g, vars)
 	local visited = {}
 	local ret = {}
 
 	for _,v in ipairs(vars) do
-		reportv(visited, ret, G, v.fhk_var, "root")
+		reportv(visited, ret, g, v, "root")
 	end
 
 	return ret
@@ -190,8 +197,6 @@ local function print_report(rep)
 	end
 end
 
--------------------------
-
 local function readcsv(fname)
 	local f = io.open(fname)
 	local header = map(split(f:read()), trim)
@@ -211,42 +216,31 @@ local function readcsv(fname)
 	return header, data
 end
 
--------------------------
+--------------------------------------------------------------------------------
 
 local function main(args)
 	local cfg = conf.read(args.config)
-	local G, vars, models = fhk.build_graph(cfg.fhk_vars, cfg.fhk_models)
-	local exf = fhk.create_models(vars, models, cfg.calib)
-	hook_udata(vars, models, exf)
-	hook_graph(G)
+	local g = hook(fhk.build_graph(cfg.fhk_vars, cfg.fhk_models))
+	g:create_models()
 
+	local ns, solve = g:vpointers(args.vars)
 	local given, values = readcsv(args.input)
-	given = get_vars(given, vars)
-	local solve = get_vars(args.vars, vars)
-	local csolve = get_cvars(solve)
+	g:given(given)
 
-	local reset_v = ffi.new("fhk_vbmap")
-	local reset_m = ffi.new("fhk_mbmap")
-	ffi.C.fhk_reset(G, reset_v, reset_m)
-
-	reset_v.given = 1
-	reset_v.stable = 1
-
-	set_flag(G, "stable")
-	set_flag(G, "given", given)
+	local vs = {}
 
 	for _,d in ipairs(values) do
-		ffi.C.fhk_reset(G, reset_v, reset_m)
+		g:reset()
 
-		set_flag(G, "has_value", given)
 		for i,v in ipairs(given) do
-			v.fhk_var.value = ffi.C.vimportd(d[i], v.type.desc)
+			vs[v] = d[i]
 		end
-		
-		ffi.C.fhk_solve(G, #solve, csolve)
+
+		g:setvalues(vs)
+		g:solve(ns, solve)
 
 		print("--------------------")
-		local rep = report(G, solve)
+		local rep = report(g, args.vars)
 		print_report(rep)
 	end
 end
@@ -257,5 +251,6 @@ return {
 		i = cli.opt("input"),
 		f = function(ret, ai) ret.vars = map(split(ai()), trim) end
 	},
-	main = main
+	main = main,
+	hook = hook
 }
