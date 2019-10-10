@@ -1,6 +1,5 @@
 require "m2_cdef"
-require "arena"
-require "malloc"
+require "alloc"
 require "glob_util"
 local cli = require "cli"
 
@@ -17,7 +16,7 @@ function main(args)
 	local flags = cmd.flags
 
 	flags.j = function(_, _, flag)
-		local module, args = flag:match("-j(%w+)=?(.*)", 3)
+		local module, args = flag:match("-j(%w+)=?(.*)")
 		require("jit."..module).start(unpack(split(args or "")))
 	end
 

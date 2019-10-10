@@ -1,5 +1,5 @@
 local typing = require "typing"
-local malloc = require "malloc"
+local alloc = require "alloc"
 local ffi = require "ffi"
 local C = ffi.C
 
@@ -238,7 +238,7 @@ local function freevec(v)
 end
 
 local function allocvec(n)
-	local data = malloc.new_nogc("vreal", n)
+	local data = alloc.malloc_nogc(vreal_type, n, vptr_type)
 	return ffi.gc(vec(data, n), freevec)
 end
 

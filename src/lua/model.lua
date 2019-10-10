@@ -1,5 +1,5 @@
 local ffi = require "ffi"
-local malloc = require "malloc"
+local alloc = require "alloc"
 
 ffi.metatype("struct model", {
 	__call  = function(self, ret, arg) return self.func.call(self, ret, arg) end,
@@ -65,7 +65,7 @@ local impls = setmetatable({}, {__index = lazy {
 			__index = {
 				init = function(self, impl)
 					self.n_ret = #impl.ret
-					self.ret = malloc.new_nogc("pvalue", #impl.ret)
+					self.ret = alloc.malloc_nogc("pvalue", #impl.ret)
 					for i,v in ipairs(impl.ret) do
 						self.ret[i-1].f64 = v
 					end

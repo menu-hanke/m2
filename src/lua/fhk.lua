@@ -1,8 +1,7 @@
 local ffi = require "ffi"
 local models = require "model"
 local typing = require "typing"
-local arena = require "arena"
-local malloc = require "malloc"
+local alloc = require "alloc"
 local C = ffi.C
 local band = bit.band
 
@@ -125,7 +124,7 @@ end
 
 local function build_graph(vars, models)
 	local sv, sm, nv, nm = copy_graph(vars, models)
-	local arena = arena.create()
+	local arena = alloc.arena_nogc()
 	local G = ffi.gc(C.fhk_alloc_graph(arena, nv, nm), function() C.arena_destroy(arena) end)
 	assign_ptrs(G, sv, sm)
 	build_models(G, arena, sv, sm)
@@ -138,8 +137,8 @@ local function create_models(sv, sm, calib)
 	local ret = {}
 
 	local nt = 100
-	local atypes = malloc.new("type", nt)
-	local rtypes = malloc.new("type", nt)
+	local atypes = alloc.malloc("type", nt)
+	local rtypes = alloc.malloc("type", nt)
 
 	for name,model in pairs(sm) do
 		local mpar = model.src.params
@@ -147,8 +146,8 @@ local function create_models(sv, sm, calib)
 
 		if math.max(#mpar, #mret) > nt then
 			nt = math.max(#mpar, #mret)
-			atypes = malloc.new("type", nt)
-			rtypes = malloc.new("type", nt)
+			atypes = alloc.malloc("type", nt)
+			rtypes = alloc.malloc("type", nt)
 		end
 
 		for i,n in ipairs(mpar) do atypes[i-1] = typing.promote(sv[n].type.desc) end
@@ -207,7 +206,7 @@ ffi.metatype("struct fhk_graph", graph_mt)
 local binder_mt = { __call = function(self, ...) return self.bind(...) end }
 
 local function binder(ctype)
-	local b = malloc.new(ctype)
+	local b = alloc.malloc(ctype)
 	return setmetatable({
 		bind = function(v)
 			b[0] = v
@@ -269,7 +268,7 @@ function mapper_mt.__index:bind_mapping(mapping, name)
 end
 
 function mapper_mt.__index:vec(name, offset, band, bind)
-	local ret = malloc.new("struct gv_vec")
+	local ret = alloc.malloc("struct gv_vec")
 	ret.resolve = C.gmap_res_vec
 	ret.target_offset = offset
 	ret.target_band = band
@@ -278,7 +277,7 @@ function mapper_mt.__index:vec(name, offset, band, bind)
 end
 
 function mapper_mt.__index:grid(name, offset, grid, bind)
-	local ret = malloc.new("struct gv_grid")
+	local ret = alloc.malloc("struct gv_grid")
 	ret.resolve = C.gmap_res_grid
 	ret.target_offset = offset
 	ret.grid = grid
@@ -287,7 +286,7 @@ function mapper_mt.__index:grid(name, offset, grid, bind)
 end
 
 function mapper_mt.__index:data(name, ref)
-	local ret = malloc.new("struct gv_data")
+	local ret = alloc.malloc("struct gv_data")
 	ret.resolve = C.gmap_res_data
 	ret.ref = ref
 	return self:bind_mapping(ret, name)
@@ -295,7 +294,7 @@ end
 
 if C.HAVE_SOLVER_INTERRUPTS == 1 then
 	function mapper_mt.__index:virtual(name, func)
-		local ret = malloc.new("struct gs_virt")
+		local ret = alloc.malloc("struct gs_virt")
 		ret.resolve = C.gs_res_virt
 		ret.handle = #self.virtuals + 1
 		self.virtuals[#self.virtuals + 1] = self:wrap_virtual(name, func)
@@ -321,7 +320,7 @@ end
 function mapper_mt.__index:bind_computed()
 	for name,v in pairs(self.vars) do
 		if not v.mapping then
-			local map = malloc.new("struct gmap_any")
+			local map = alloc.malloc("struct gmap_any")
 			map.resolve = nil
 			map.supp = nil
 			self:bind_mapping(map, name)
@@ -340,7 +339,7 @@ end
 function mapper_mt.__index:bind_model(name, mod)
 	local model = self.models[name]
 	assert(not model.mapping)
-	local ret = malloc.new("struct gmap_model")
+	local ret = alloc.malloc("struct gmap_model")
 	ret.name = name
 	ret.mod = mod
 	C.gmap_bind_model(self.G, model.fhk_model.idx, ret)
