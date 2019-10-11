@@ -252,7 +252,9 @@ function sim_mt.__index:exitframe()
 end
 
 function sim_mt.__index:event(event, x)
-	self._frame:event(self.chains[event], x)
+	if self.chains[event] then
+		self._frame:event(self.chains[event], x)
+	end
 end
 
 function sim_mt.__index:enter()
