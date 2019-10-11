@@ -93,6 +93,7 @@ static int mod_Lua_call(struct model_Lua *m, pvalue *ret, pvalue *argv){
 			int t = lua_type(L, idx);
 			maux_errf("Invalid return type of return value %d, got %s, expected number",
 					-idx, lua_typename(L, t));
+			r = MODEL_CALL_INVALID_RETURN;
 			goto out;
 		}
 	}
