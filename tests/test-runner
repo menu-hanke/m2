@@ -1,0 +1,8 @@
+#!/bin/sh
+cd $(dirname $0)
+if [[ $1 == *.ext.t ]]
+then
+	luajit tap.lua ../src/m2 $1
+else
+	../src/m2 tap -t $1
+fi
