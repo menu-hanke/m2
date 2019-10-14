@@ -41,8 +41,8 @@ define.vars {
 --------------------------------------------------------------------------------
 
 -- select R or Lua version of the models by commenting/uncommenting these
---local mdef = function(f, func) return "R::" .. f .. ".r::" .. func end
-local mdef = function(f, func) return "Lua::" .. f:gsub("/", ".") .. "::" .. func end
+--local mdef = function(f, func) return model.R(string.format("%s.r::%s", f, func)) end
+local mdef = function(f, func) return model.Lua(string.format("%s::%s", f:gsub("/", "."), func)) end
 
 define.model.gro_manty {
 	params  = { "step", "mtyyppi", "dbh", "G", "ba", "ba_L", "ts", "atyyppi" },

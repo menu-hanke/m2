@@ -9,41 +9,63 @@ ffi.metatype("struct model", {
 	}
 })
 
-local function init_defbase(def)
-	def.n_arg = 0
-	def.n_ret = 0
-	def.flags = 0
+local function mconfigure(self, conf)
+	if conf.n_arg and conf.n_arg > 0 then
+		self.n_arg = conf.n_arg
+		self.atypes = conf.atypes
+	end
+
+	if conf.n_ret and conf.n_ret > 0 then
+		self.n_ret = conf.n_ret
+		self.rtypes = conf.rtypes
+	end
+
+	if conf.n_coef and conf.n_coef > 0 then
+		self.n_coef = conf.n_coef
+	end
+
+	if conf.calibrated then
+		self.flags = bit.bor(self.flags, ffi.C.MODEL_CALIBRATED)
+	end
+
+	return self
 end
 
-local def_func = { __index = {
-	args = function(self, atypes, n_arg)
-		self.atypes = atypes
-		self.n_arg = n_arg
-	end,
-
-	rets = function(self, rtypes, n_ret)
-		self.rtypes = rtypes
-		self.n_ret = n_ret
-	end,
-
-	coefs = function(self, n_coef)
-		self.n_coef = n_coef
-	end,
-
-	calibrated = function(self)
-		self.flags = bit.bor(self.flags, ffi.C.MODEL_CALIBRATED)
-		return self
+local function mparsedef(...)
+	local keys = {...}
+	-- key1::key2::...::keyN
+	local pattern = string.rep("([^:]+)::", #keys-1) .. "(.+)$"
+	return function(self, os)
+		local vs = {os:match(pattern)}
+		for i, k in ipairs(keys) do
+			vs[k] = vs[i]
+		end
+		return self:init(vs)
 	end
-}}
+end
+
+local function checked(f)
+	return function(...)
+		local ret = f(...)
+		if not ret then
+			error(ffi.C.model_error())
+		end
+		return ret
+	end
+end
 
 local function mod(info)
 	return function()
-		ffi.metatype(info.def, {
-			__call  = ffi.C[info.create],
+		local mt = {
+			__call  = type(info.create) == "string" and checked(ffi.C[info.create]) or info.create,
 			__index = info.func
-		})
+		}
 
-		return info.def
+		if info.ct then
+			return ffi.metatype(info.ct, mt)
+		else
+			return function() return setmetatable({}, mt) end
+		end
 	end
 end
 
@@ -52,93 +74,126 @@ end
 -- may be missing and we can't just init them all eagerly.
 local impls = setmetatable({}, {__index = lazy {
 
-	Const = function()
-		return ffi.metatype("struct { unsigned n_ret; pvalue *ret; }", {
-			__call = function(self)
-				return ffi.C.mod_Const_create(self.n_ret, self.ret)
+	Const = mod {
+		create = function(self) return ffi.C.mod_Const_create(self.n_ret, self.ret) end,
+		func   = {
+			init = function(self, opt)
+				self.n_ret = #opt.ret
+				self.ret = ffi.new("pvalue[?]", #opt.ret)
+				for i,v in ipairs(opt.ret) do
+					-- these are Lua values and we don't know their (fhk) types until configure,
+					-- so just store as float now
+					self.ret[i-1].f64 = v
+				end
 			end,
 
-			__gc = function(self)
-				ffi.C.free(self.ret)
-			end,
-
-			__index = {
-				init = function(self, impl)
-					self.n_ret = #impl.ret
-					self.ret = alloc.malloc_nogc("pvalue", #impl.ret)
-					for i,v in ipairs(impl.ret) do
-						self.ret[i-1].f64 = v
-					end
-				end,
-
-				rets = function(self, rtypes)
-					for i=0, tonumber(self.n_ret)-1 do
-						-- the u64 doesn't matter here, but lhs is pvalue and rhs is pvalue
-						-- so luajit won't let us just assign it even though they are compatible
-						self.ret[i].u64 = ffi.C.vimportd(self.ret[i].f64, rtypes[i]).u64
-					end
-				end,
-
-				args = function() end,
-				coefs = function() end,
-			}
-		})
-	end,
+			configure = function(self, conf)
+				assert(conf.n_ret == self.n_ret)
+				for i=0, self.n_ret-1 do
+					-- now convert to actual type.
+					-- the u64 doesn't matter here, but lhs is pvalue and rhs is pvalue
+					-- so luajit won't let us just assign it even though they are compatible
+					self.ret[i].u64 = ffi.C.vimportd(self.ret[i].f64, conf.rtypes[i]).u64
+				end
+				return self
+			end
+		}
+	},
 
 	R = mod {
+		ct     = "struct mod_R_def",
 		create = "mod_R_create",
-		def    = "struct mod_R_def",
-		func   = setmetatable({
-			init = function(self, impl)
-				init_defbase(self)
-				self.fname = impl.file
-				self.func = impl.func
+		func   = {
+			init = function(self, opt)
+				self.fname = opt.file
+				self.func = opt.func
 				self.mode = ffi.C.MOD_R_EXPAND
-			end
-		}, def_func)
+			end,
+
+			parse     = mparsedef("file", "func"),
+			configure = mconfigure
+		}
 	},
 
 	SimoC = mod {
+		ct     = "struct mod_SimoC_def",
 		create = "mod_SimoC_create",
-		def    = "struct mod_SimoC_def",
-		func   = setmetatable({
-			init = function(self, impl)
-				init_defbase(self)
-				self.libname = impl.file
-				self.func = impl.func
+		func   = {
+			init = function(self, opt)
+				self.libname = opt.libname
+				self.func = opt.func
 			end,
-			coefs = function() end
-		}, def_func)
+
+			parse     = mparsedef("libname", "func"),
+			configure = mconfigure
+		}
 	},
 
 	Lua = mod {
+		ct     = "struct mod_Lua_def",
 		create = "mod_Lua_create",
-		def    = "struct mod_Lua_def",
-		func   = setmetatable({
-			init = function(self, impl)
-				init_defbase(self)
-				self.module = impl.file
-				self.func = impl.func
+		func   = {
+			init = function(self, opt)
+				self.module = opt.module
+				self.func = opt.func
 				self.mode = ffi.C.MOD_LUA_EXPAND
-			end
-		}, def_func)
+			end,
+
+			parse     = mparsedef("module", "func"),
+			configure = mconfigure
+		}
 	}
 
 }})
 
-local function def(impl)
-	local i = impls[impl.lang]
+--------------------------------------------------------------------------------
 
-	if not i then
-		error(string.format("Unsupported model lang: %s", impl.lang))
+local config_mt = { __index={} }
+
+local function config()
+	return setmetatable({arena=alloc.arena()}, config_mt)
+end
+
+function config_mt.__index:reset()
+	self.arena:reset()
+	self.n_arg = 0
+	self.atypes = nil
+	self.n_ret = 0
+	self.rtypes = nil
+	self.n_coef = 0
+	self.calibrated = false
+end
+
+function config_mt.__index:newatypes(n)
+	self.n_arg = n
+	self.atypes = self.arena:new("type", n)
+	return self.atypes
+end
+
+function config_mt.__index:newrtypes(n)
+	self.n_ret = n
+	self.rtypes = self.arena:new("type", n)
+	return self.rtypes
+end
+
+local function def(lang, opt)
+	local impl = impls[lang]
+
+	if not impl then
+		error(string.format("Unsupported model lang: %s", lang))
 	end
 
-	local ret = ffi.new(i)
-	ret:init(impl)
+	local ret = impl()
+	if type(opt) == "string" then
+		ret:parse(opt)
+	else
+		ret:init(opt)
+	end
 	return ret
 end
 
 return {
-	def   = def,
-	error = function() return ffi.string(ffi.C.model_error()) end
+	def    = def,
+	config = config,
+	error  = function() return ffi.string(ffi.C.model_error()) end
 }

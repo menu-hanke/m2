@@ -135,48 +135,27 @@ end
 local function create_models(sv, sm, calib)
 	calib = calib or {}
 	local ret = {}
-
-	local nt = 100
-	local atypes = alloc.malloc("type", nt)
-	local rtypes = alloc.malloc("type", nt)
+	local conf = models.config()
 
 	for name,model in pairs(sm) do
-		local mpar = model.src.params
-		local mret = model.src.returns
+		conf:reset()
+		local atypes = conf:newatypes(#model.src.params)
+		local rtypes = conf:newrtypes(#model.src.returns)
+		for i,n in ipairs(model.src.params) do atypes[i-1] = typing.promote(sv[n].type.desc) end
+		for i,n in ipairs(model.src.returns) do rtypes[i-1] = typing.promote(sv[n].type.desc) end
+		conf.n_coef = #model.src.coeffs
+		conf.calibrated = calib[name]
 
-		if math.max(#mpar, #mret) > nt then
-			nt = math.max(#mpar, #mret)
-			atypes = alloc.malloc("type", nt)
-			rtypes = alloc.malloc("type", nt)
-		end
+		local def = models.def(model.src.impl.lang, model.src.impl.opt):configure(conf)
 
-		for i,n in ipairs(mpar) do atypes[i-1] = typing.promote(sv[n].type.desc) end
-		for i,n in ipairs(mret) do rtypes[i-1] = typing.promote(sv[n].type.desc) end
-
-		local def = models.def(model.src.impl)
-		def:args(atypes, #mpar)
-		def:rets(rtypes, #mret)
-		def:coefs(#model.src.coeffs)
+		local mod = def()
+		ret[name] = mod
 
 		local cal = calib[name]
 		if cal then
-			def:calibrated()
-		end
-
-		local mod = def()
-
-		if mod == ffi.NULL then
-			error(string.format("Error while creating model '%s': %s",
-				name, models.error()))
-		end
-
-		ret[name] = mod
-
-		if cal then
 			for i,c in ipairs(model.src.coeffs) do
 				if not cal[c] then
-					error(string.format("Missing coefficient '%s' for model '%s'",
-						c, name))
+					error(string.format("Missing coefficient '%s' for model '%s'", c, name))
 				end
 
 				mod.coefs[i-1] = cal[c]
