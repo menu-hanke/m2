@@ -1,14 +1,21 @@
 m2
 ===
 
-**NOTE:** This is in very experimental state and will crash with wrong inputs etc.
+Forest simulation framework. No docs yet, see the `examples` directory for help.
 
 Building
 --------
 
-Run `make` or `make debug` to build and you will get an executable in `src/m2`. See `src/Makefile` for more options. You will need LuaJIT for building. You can also optionally build model interfaces for R (libR) or SIMO (libffi).
+Requirements:
+* LuaJIT
+* (optional) R - to call R models
+* (optional) libffi - to call SIMO models
+* (optional) libaco - allow Lua side fhk virtuals
 
-Running
+Run `make` or `make debug` to build.
+You can run tests using your favorite TAP harness (for example `prove`).
+
+Usage
 -------
 For all command line switches see `src/lua/m2.lua`.
 
@@ -25,7 +32,7 @@ m2 -c examples/config_cal.lua -i examples/plots.json -I examples/instr_grow.lua 
 ```
 
 ### Calibration
-Use the `calibrate` command to calibrate a simulator using the Nelder-Mead algorithm:
+Use the `calibrate` command to calibrate a simulator using the Nelder-Mead method:
 ```
 m2 calibrate -c <config> -i <calibration data> -C <calibrator> -p <parameters> [-s <script>]+
 ```
