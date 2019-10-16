@@ -19,6 +19,9 @@
 
 #endif // ifdef DEBUG
 
+#define LIKELY(x)   __builtin_expect((x), 1)
+#define UNLIKELY(x) __builtin_expect((x), 0)
+
 #define M2_EXIT_OK                0
 #define M2_EXIT_MODEL_LOAD_FAILED 100
 #define M2_EXIT_MODEL_CALL_FAILED 101

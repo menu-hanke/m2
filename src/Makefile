@@ -1,12 +1,18 @@
 CC = gcc
 
 # Compiler options
-CCOPT    = -O3 -flto -fopenmp -ffast-math -fno-finite-math-only -march=native
+CCOPT    = -O3 -flto -fopenmp -ffast-math -march=native
 CCDEBUG  = -DNDEBUG
 CCDEF    =
 CCWARN   = -Wall -Wextra
-XCFLAGS  = 
-XLDFLAGS = 
+CCEXTRA  =
+XCFLAGS  ?= 
+XLDFLAGS ?= 
+
+# -fstack-protector causes about ~10% slowdown for typical fhk graphs.
+# Turn it on if you're scared of hackers.
+# You must either turn off -ffast-math or have -fno-finite-math-only here.
+FHK_CCOPT = $(CCOPT) -fno-lto -fno-finite-math-only -fno-stack-protector
 
 # What model languages do you want to build in? You can choose any from the following:
 # * R      Call R models (requires libR)
@@ -66,15 +72,18 @@ endif
 
 ifeq ($(SOLVER_INTERRUPTS),on)
 	CCDEF += -DM2_SOLVER_INTERRUPTS
-	XCFLAGS += $(LIBACO_CFLAGS)
+	CCEXTRA += $(LIBACO_CFLAGS)
 	M2_LIBS += $(LIBACO_LIB)
 endif
 
 CCDEF += -DM2_LUAPATH='"$(LUAPATH)"'
-CFLAGS = $(LUAJIT_CFLAGS) $(CCOPT) $(CCDEBUG) $(CCDEF) $(CCWARN) $(XCFLAGS)
+CFLAGS = $(LUAJIT_CFLAGS) $(CCOPT) $(CCDEBUG) $(CCDEF) $(CCWARN) $(CCEXTRA) $(XCFLAGS)
+FHK_CFLAGS = $(FHK_CCOPT) $(CCDEBUG) $(CCDEF) $(CCWARN) $(XCFLAGS)
 
 # -rdynamic is needed to access C symbols of the executable from lua
-LDFLAGS = -rdynamic $(M2_LIBS) $(CCOPT) $(CCDEBUG) $(XLDFLAGS)
+# Note: GCC docs said I don't need to pass -f parameters again to linker,
+# but I can't get it to do lto without passing them.
+LDFLAGS = -rdynamic $(M2_LIBS) $(CCDEBUG) $(CFLAGS) $(XLDFLAGS)
 
 ################################################################################
 
@@ -94,11 +103,12 @@ ubsan: CCDEBUG = -DDEBUG
 ubsan: default
 
 dep:
-	$(CC) $(CCOPT) $(CCDEBUG) $(CCDEF) $(XCFLAGS) -MM $(M2_C) > Makefile.dep
-	$(CC) $(CCOPT) $(CCDEBUG) $(CCDEF) $(XCFLAGS) -MM model/*.c\
+	$(CC) $(CCOPT) $(CCDEBUG) $(CCDEF) $(CCEXTRA) $(XCFLAGS) -MM $(M2_C) > Makefile.dep
+	$(CC) $(CCOPT) $(CCDEBUG) $(CCDEF) $(CCEXTRA) $(XCFLAGS) -MM model/*.c\
 		| sed 's/^\([^ ]\)/model\/\1/'\
 		>> Makefile.dep
-	$(CC) $(CCOPT) $(CCDEBUG) $(CCDEF) $(XCFLAGS) -MM -MT $(M2_CDEF) $(LUA_EXPORTS) >> Makefile.dep
+	$(CC) $(CCOPT) $(CCDEBUG) $(CCDEF) $(CCEXTRA) $(XCFLAGS) -MM -MT $(M2_CDEF) $(LUA_EXPORTS)\
+		>> Makefile.dep
 
 # XXX: this is a turbo hacky way to do it
 # for whatever reason this is really fragile, it breaks if
@@ -123,11 +133,14 @@ clean:
 
 include Makefile.dep
 
+$(M2_EXECUTABLE): $(M2_O) $(MODEL_O)
+	$(CC) $(LDFLAGS) $^ -o $@
+
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(M2_EXECUTABLE): $(M2_O) $(MODEL_O)
-	$(CC) $(LDFLAGS) $^ -o $@
+fhk_solve.o: fhk_solve.c
+	$(CC) $(FHK_CFLAGS) -c $< -o $@
 
 model/model_R.o: model/model_R.c
 	$(CC) $(CFLAGS) $(R_CFLAGS) -c $< -o $@

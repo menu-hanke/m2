@@ -2,13 +2,21 @@
 #include "fhk.h"
 
 #include <stddef.h>
-#include <math.h>
+#include <stdbool.h>
 #include <setjmp.h>
+#include <math.h>
 #include <assert.h>
 
 #define HEAP_SIZE 256
 
+// Note: this should be large enough that that x+EPSILON > x for any cost x we might come across,
+// but small enough that it will help stopping the solver early.
+// too small values may cause the solver to fail, too large values are ok.
+#define EPSILON 0.5
+
 struct heap_ent {
+	// Note: we could use the cost bound in struct fhk_var for this, however we prefer to
+	// store it here for cache locality in heap operations
 	double cost;
 	struct fhk_var *var;
 };
@@ -24,8 +32,10 @@ struct solver_state {
 	jmp_buf exc_env;
 };
 
-static void mm_bound_cost_v(struct fhk_graph *G, struct fhk_var *y, double beta);
-static void mm_bound_cost_m(struct fhk_graph *G, struct fhk_model *m, double beta);
+static fhk_v2 mm_bound_cost_entry_v(struct fhk_graph *G, struct fhk_var *y, double beta);
+static fhk_v2 mm_bound_cost_comp_v(struct fhk_graph *G, struct fhk_var *y, double beta);
+static fhk_v2 mm_bound_cost_v(struct fhk_graph *G, struct fhk_var *y, double beta);
+static fhk_v2 mm_bound_cost_m(struct fhk_graph *G, struct fhk_model *m, double beta);
 static void mm_solve_chain_v(struct fhk_graph *G, struct fhk_var *y, double beta);
 static void mm_solve_chain_m(struct fhk_graph *G, struct fhk_model *m, double beta);
 static void mm_solve_value(struct fhk_graph *G, struct fhk_var *y);
@@ -54,25 +64,23 @@ static void heap_decr_cost(struct heap *h, unsigned x);
 static struct heap_ent heap_extract_min(struct heap *h);
 
 static void exec_chain(struct fhk_graph *G, struct fhk_var *y);
-static void exec_model(struct fhk_graph *G, struct fhk_model *m);
-
-static double costf(struct fhk_model *m, double S);
-static double costf_inverse_S(struct fhk_model *m, double cost);
-static int check_cst(struct fhk_cst *cst, pvalue v);
-static void constraint_bounds(struct fhk_graph *G, double *Sc_min, double *Sc_max,
-		struct fhk_model *m);
-static void resolve_value(struct fhk_graph *G, struct fhk_var *x);
 static void resolve_given(struct fhk_graph *G, struct fhk_var *x);
-static void param_bounds(double *Sp_min, double *Sp_max, struct fhk_model *m);
+static void resolve_value(struct fhk_graph *G, struct fhk_var *x);
+static int check_cst(struct fhk_cst *cst, pvalue v);
 static void mmin2(struct fhk_model **m1, struct fhk_model **m2, struct fhk_var *y);
 static struct fhk_model *mmin0p(struct fhk_var *y);
 static pvalue *return_ptr(struct fhk_model *m, struct fhk_var *v);
+static void init_given_cost(struct fhk_graph *G, struct fhk_var *y);
 
 #define STATE()           ((struct solver_state *) (G)->solver_state)
-#define COST(e)           ({ assert((e)->min_cost == (e)->max_cost); (e)->min_cost; })
-#define ISPINF(x)         (isinf(x) && (x)>0)
-#define UNSOLVABLE(e)     ISPINF((e)->min_cost)
 #define CHAINSELECTED(vm) ((vm)->chain_selected || (vm)->given)
+#define MIN(b)            ((b)[0])
+#define MAX(b)            ((b)[1])
+#define CHECKBOUND(b)     assert(MIN(b) <= MAX(b))
+#define HASVALUE(b)       (MIN(b) == MAX(b))
+#define HASCOST(e)        HASVALUE((e)->cost_bound)
+#define COST(e)           ({ assert(HASCOST(e)); MIN((e)->cost_bound); })
+#define UNSOLVABLE(e)     ((MIN(e->cost_bound) == INFINITY))
 #define VBMAP(y)          (&(G)->v_bitmaps[(y)->idx])
 #define MBMAP(m)          (&(G)->m_bitmaps[(m)->idx])
 #define MARKED(b)         (b)->mark
@@ -80,13 +88,38 @@ static pvalue *return_ptr(struct fhk_model *m, struct fhk_var *v);
 #define UNMARK(b)         MARKED(b) = 0
 #define DESCV(v)          ((G)->debug_desc_var ? (G)->debug_desc_var((v)->udata) : ddescv(v))
 #define DESCM(m)          ((G)->debug_desc_model ? (G)->debug_desc_model((m)->udata) : ddescm(m))
-#define FAIL(res, m, v)   do { dv("solver: failed: " #res "\n"); fail(G,(res),(m),(v)); } while(0)
 #define SWAP(A, B)        do { typeof(A) _t = (A); (A) = (B); (B) = _t; } while(0)
+
+// these are needed if you decide to calculate the bitmap offsets
+// static_assert(sizeof(struct fhk_model) == 128);
+// static_assert(sizeof(struct fhk_var) == 64);
+// #define VBMAP(y) (&(G)->v_bitmaps[(y) - (G)->vars])
+// #define MBMAP(m) (&(G)->m_bitmaps[(m) - (G)->models])
+
+// we can't use -ffast-math for the whole solver since the solver algorithm depends on infinities
+// working correctly. however disabling -ffinite-math-only for the whole solver blocks some
+// optimizations so it's enabled selectively on some utilities where it's safe.
+#define FAST_MATH __attribute__((optimize("fast-math")))
+#define INLINE __attribute__((always_inline)) inline
+#define NOUNROLL __attribute__((optimize("no-unroll-loops", "no-peel-loops")))
+
+#define FAIL(res, m, v)   do { dv("solver: failed: " #res "\n"); fail(G,(res),(m),(v)); } while(0)
 static void fail(struct fhk_graph *G, int res, struct fhk_model *m, struct fhk_var *v);
+
 #ifdef DEBUG
 static const char *ddescv(struct fhk_var *y);
 static const char *ddescm(struct fhk_model *m);
 #endif
+
+static double costf(struct fhk_model *m, double S);
+static fhk_v2 costfv(struct fhk_model *m, fhk_v2 S);
+static double costf_invS(struct fhk_model *m, double cost);
+static fhk_v2 costf_invSv(struct fhk_model *m, fhk_v2 cost);
+static double max(double a, double b);
+static double min(double a, double b);
+static fhk_v2 minv(fhk_v2 a, fhk_v2 b);
+static fhk_v2 cst_bound(struct fhk_graph *G, struct fhk_model *m);
+static fhk_v2 par_bound(struct fhk_model *m);
 
 int fhk_solve(struct fhk_graph *G, size_t nv, struct fhk_var **ys){
 	assert(!G->dirty);
@@ -102,12 +135,12 @@ int fhk_solve(struct fhk_graph *G, size_t nv, struct fhk_var **ys){
 
 	for(size_t i=0;i<nv;i++){
 		struct fhk_var *y = ys[i];
-		mm_bound_cost_v(G, y, INFINITY);
-		if(UNSOLVABLE(y))
+		fhk_v2 ybound = mm_bound_cost_entry_v(G, y, INFINITY);
+		if(UNLIKELY(MIN(ybound) == INFINITY))
 			FAIL(FHK_SOLVER_FAILED, NULL, y);
 	}
 
-	if(s.cycle){
+	if(UNLIKELY(s.cycle)){
 		dv("Cycle detected, using dijkstra solver\n");
 		dj_solve_bounded(G, nv, ys);
 	}else{
@@ -118,121 +151,143 @@ int fhk_solve(struct fhk_graph *G, size_t nv, struct fhk_var **ys){
 	return FHK_OK;
 }
 
-static void mm_bound_cost_v(struct fhk_graph *G, struct fhk_var *y, double beta){
+static fhk_v2 mm_bound_cost_comp_v(struct fhk_graph *G, struct fhk_var *y, double beta){
 	fhk_vbmap *bm = VBMAP(y);
 
-	if(bm->has_bound)
-		return;
+	// we absolutely want to avoid going into mm_bound_cost_v here and paying the function
+	// call cost for variables we can easily skip here
+	if(LIKELY(bm->given || bm->has_bound)){
+		if(UNLIKELY(!bm->has_bound))
+			init_given_cost(G, y);
 
-	if(bm->given){
-		y->min_cost = 0;
-		y->max_cost = 0;
-		bm->has_bound = 1;
-		return;
+		return y->cost_bound;
 	}
+
+	return mm_bound_cost_v(G, y, beta);
+}
+
+static fhk_v2 mm_bound_cost_entry_v(struct fhk_graph *G, struct fhk_var *y, double beta){
+	// this does the same thing as mm_bound_cost_comp_v, but this is faster for variables that
+	// most likely are not given or already bounded (ie. entry variables)
+	fhk_vbmap *bm = VBMAP(y);
+
+	if(UNLIKELY(bm->given || bm->has_bound)){
+		// who would want to solve a given variable?
+		if(UNLIKELY(!bm->has_bound))
+			init_given_cost(G, y);
+
+		return y->cost_bound;
+	}
+
+	return mm_bound_cost_v(G, y, beta);
+}
+
+static fhk_v2 mm_bound_cost_v(struct fhk_graph *G, struct fhk_var *y, double beta){
+	fhk_vbmap *bm = VBMAP(y);
+
+	// you should only come here from mm_bound_cost_(entry|comp)_v, or unless you're really sure the
+	// cost should be computed
+	assert(!bm->given && !bm->has_bound);
 
 	// var cost bounding should never hit a cycle,
 	// mm_bound_cost_m checks this flag before calling.
 	assert(!MARKED(bm));
-
 	MARK(bm);
 
-	for(size_t i=0;i<y->n_mod;i++){
-		struct fhk_model *m = y->models[i];
-		mm_bound_cost_m(G, m, beta);
+	fhk_v2 bound = {INFINITY, INFINITY};
 
-		if(m->max_cost < beta)
-			beta = m->max_cost;
+	size_t n_mod = y->n_mod;
+	struct fhk_model **ms = y->models;
+	for(size_t i=0;i<n_mod;i++){
+		fhk_v2 mbound = mm_bound_cost_m(G, ms[i], beta);
+
+		// if we find a better MAX bound, no worth trying anything MIN above that
+		beta = max(beta, MAX(mbound));
+
+		// pick minimum for both bounds here:
+		// * min will be the bound below which we definitely CAN NOT calculate y
+		// * max will be the bound below which we definitely CAN calculate y
+		bound = minv(bound, mbound);
 	}
 
 	UNMARK(bm);
+	CHECKBOUND(bound);
 
-	double min = INFINITY, max = INFINITY;
-
-	for(size_t i=0;i<y->n_mod;i++){
-		struct fhk_model *m = y->models[i];
-
-		if(m->min_cost < min)
-			min = m->min_cost;
-
-		if(m->max_cost < max)
-			max = m->max_cost;
-	}
-
-	assert(max >= min);
-
-	y->min_cost = min;
-	y->max_cost = max;
+	y->cost_bound = bound;
 	bm->has_bound = 1;
 
-	dv("Bounded var %s in [%f, %f]\n", DESCV(y), min, max);
+	dv("Bounded var %s in [%f, %f]\n", DESCV(y), MIN(bound), MAX(bound));
+	return bound;
 }
 
-static void mm_bound_cost_m(struct fhk_graph *G, struct fhk_model *m, double beta){
-	if(MBMAP(m)->has_bound)
-		return;
+static fhk_v2 mm_bound_cost_m(struct fhk_graph *G, struct fhk_model *m, double beta){
+	// Note: on some (rare) weird graphs, this function could be entered recursively via multi
+	// return models where a return value causes a cycle.
+	// that's not a problem: the solver can't get stuck since it can't enter multiple times
+	// via the same variable. it will just cause extra work and may also set the low bound
+	// too low, which will cause more extra work when the chain is solved.
+	// TODO: should make test case for this.
 
-	double beta_S = costf_inverse_S(m, beta);
+	if(UNLIKELY(MBMAP(m)->has_bound))
+		return m->cost_bound;
 
-	double S_min, S_max;
-	constraint_bounds(G, &S_min, &S_max, m);
+	// Note (micro-optimization): this only needs to be recalculated when beta changes,
+	// not every time we go here
+	double beta_S = costf_invS(m, beta);
+	fhk_v2 bound_S = cst_bound(G, m);
 
-	if(S_min >= beta_S){
-		dv("%s: beta bound from constraints (%f >= %f)\n", DESCM(m), S_min, beta_S);
+	if(MIN(bound_S) >= beta_S){
+		dv("%s: beta bound from constraints (%f >= %f)\n", DESCM(m), MIN(bound_S), beta_S);
 		goto betabound;
 	}
 
-	for(size_t i=0;i<m->n_param;i++){
-		struct fhk_var *x = m->params[i];
+	size_t n_param = m->n_param;
+	struct fhk_var **xs = m->params;
+	for(size_t i=0;i<n_param;i++){
+		struct fhk_var *x = xs[i];
 
-		if(MARKED(VBMAP(x))){
+		if(UNLIKELY(MARKED(VBMAP(x)))){
 			// Solver will hit a cycle, but don't give up.
 			// If another chain will be chosen for x, we may still be able to use
 			// this model in the future.
 			// We can still get a valid low cost bound for the model.
 			STATE()->cycle = 1;
-			S_max = INFINITY;
+			MAX(bound_S) = INFINITY;
 			dv("%s: cycle caused by param: %s\n", DESCM(m), DESCV(x));
 			continue;
 		}
 
-		mm_bound_cost_v(G, x, beta_S - S_min);
+		fhk_v2 xbound = mm_bound_cost_comp_v(G, x, beta_S - MIN(bound_S));
+		bound_S += xbound;
 
-		S_min += x->min_cost;
-		S_max += x->max_cost;
-
-		if(S_min >= beta_S)
+		if(MIN(bound_S) >= beta_S)
 			goto betabound;
 	}
 
-	m->min_cost = costf(m, S_min);
-	m->max_cost = costf(m, S_max);
+	m->cost_bound = costfv(m, bound_S);
 	MBMAP(m)->has_bound = 1;
 
-	dv("%s: bounded cost in [%f, %f]\n", DESCM(m), m->min_cost, m->max_cost);
+	dv("%s: bounded cost in [%f, %f]\n", DESCM(m), MIN(m->cost_bound), MAX(m->cost_bound));
 
-	assert(m->max_cost >= m->min_cost);
-	assert(beta > m->min_cost);
+	CHECKBOUND(m->cost_bound);
+	assert(beta > MIN(m->cost_bound));
 
-	return;
+	return m->cost_bound;
 
 betabound:
-	m->min_cost = costf(m, S_min);
-	m->max_cost = INFINITY;
+	MIN(m->cost_bound) = costf(m, MIN(bound_S));
+	MAX(m->cost_bound) = INFINITY;
 	MBMAP(m)->has_bound = 1;
 
-	dv("%s: cost low bound=%f exceeded beta=%f\n", DESCM(m), m->min_cost, beta);
+	dv("%s: cost low bound=%f exceeded beta=%f\n", DESCM(m), MIN(m->cost_bound), beta);
+	return m->cost_bound;
 }
 
 static void mm_solve_chain_v(struct fhk_graph *G, struct fhk_var *y, double beta){
 	fhk_vbmap *bm = VBMAP(y);
-
 	assert(bm->has_bound);
 
-	if(CHAINSELECTED(bm))
-		return;
-
-	if(y->min_cost >= beta)
+	if(MIN(y->cost_bound) >= beta || CHAINSELECTED(bm))
 		return;
 
 	assert(!MARKED(bm));
@@ -244,20 +299,19 @@ static void mm_solve_chain_v(struct fhk_graph *G, struct fhk_var *y, double beta
 		struct fhk_model *m = y->models[0];
 		mm_solve_chain_m(G, m, beta);
 
-		assert((m->min_cost == m->max_cost) || m->min_cost >= beta);
+		assert(HASCOST(m) || MIN(m->cost_bound) >= beta);
 
-		y->min_cost = m->min_cost;
-		y->max_cost = m->max_cost;
+		y->cost_bound = m->cost_bound;
 
-		if(m->min_cost >= beta){
-			dv("%s: only model cost=%f exceeded low bound=%f\n", DESCV(y), m->min_cost, beta);
+		if(MIN(m->cost_bound) >= beta){
+			dv("%s: only model cost=%f exceeded low bound=%f\n", DESCV(y),MIN(m->cost_bound),beta);
 			goto out;
 		}
 
 		bm->chain_selected = 1;
 		y->model = m;
 
-		dv("%s: selected only model: %s (cost=%f)\n", DESCV(y), DESCM(m), m->min_cost);
+		dv("%s: selected only model: %s (cost=%f)\n", DESCV(y), DESCM(m), COST(m));
 		goto out;
 	}
 
@@ -265,26 +319,37 @@ static void mm_solve_chain_v(struct fhk_graph *G, struct fhk_var *y, double beta
 		struct fhk_model *m1, *m2;
 		mmin2(&m1, &m2, y);
 
-		if(m1->min_cost >= beta){
+		if(MIN(m1->cost_bound) >= beta){
 			dv("%s: unable to solve below beta=%f\n", DESCV(y), beta);
 			goto out;
 		}
 
-		mm_solve_chain_m(G, m1, beta);
+		fhk_v2 m2_bound = m2->cost_bound;
 
-		y->min_cost = m1->min_cost;
-		if(m1->max_cost < y->max_cost)
-			y->max_cost = m1->max_cost;
+		// if the min cost of m1 turns out to be more than m2, we can stop and try m2 next.
+		// however, add epsilon here, otherwise the case
+		//   MIN(m1->cost_bound) == MIN(m2->cost_bound)
+		// would cause the solver to loop infinitely since it exits both immediately
+		double beta_chain = min(MIN(m2_bound) + EPSILON, beta);
+		mm_solve_chain_m(G, m1, beta_chain);
 
-		if(m1->max_cost <= m2->min_cost){
-			assert(m1->min_cost == m1->max_cost);
+		if(MAX(m1->cost_bound) < beta_chain){
+			// no beta exit: we must have solved it
+			assert(HASCOST(m1) && MBMAP(m1)->chain_selected);
 
 			bm->chain_selected = 1;
 			y->model = m1;
+			y->cost_bound = m1->cost_bound;
 
-			dv("%s: selected model %s with cost %f\n", DESCV(y), DESCM(m1), y->min_cost);
+			dv("%s: selected model %s with cost %f\n", DESCV(y), DESCM(m1), COST(y));
 			goto out;
 		}
+
+		// beta exit: either we passed the second candidate min cost or we passed beta.
+		// we can still have M1(m1->cost_bound) < MIN(m2_bound) here for small beta
+		MIN(y->cost_bound) = min(MIN(m1->cost_bound), MIN(m2_bound));
+		// we can't take m2 here: some other model may have a smaller max bound
+		MAX(y->cost_bound) = min(MAX(m1->cost_bound), MAX(y->cost_bound));
 	}
 
 out:
@@ -296,25 +361,24 @@ static void mm_solve_chain_m(struct fhk_graph *G, struct fhk_model *m, double be
 	assert(bm->has_bound);
 
 	if(bm->chain_selected){
-		assert(m->min_cost == m->max_cost);
+		assert(HASCOST(m));
 		return;
 	}
 
-	if(m->min_cost >= beta)
+	if(MIN(m->cost_bound) >= beta)
 		return;
 
-	double beta_S = costf_inverse_S(m, beta);
+	// Note: see comment in mm_bound_cost_m: this doesn't always neeed to be recalculated
+	double beta_S = costf_invS(m, beta);
+	fhk_v2 bound_Sc = cst_bound(G, m);
+	fhk_v2 bound_Sp = par_bound(m);
 
-	double Sc_min, Sc_max;
-	double Sp_min, Sp_max;
+	size_t n_check = m->n_check;
+	struct fhk_check *cs = m->checks;
+	for(size_t i=0;i<n_check;i++){
+		struct fhk_var *x = cs[i].var;
 
-	constraint_bounds(G, &Sc_min, &Sc_max, m);
-	param_bounds(&Sp_min, &Sp_max, m);
-
-	for(unsigned i=0;i<m->n_check;i++){
-		struct fhk_var *x = m->checks[i].var;
-
-		if(VBMAP(x)->has_value)
+		if(LIKELY(VBMAP(x)->has_value))
 			continue;
 
 		// for constraints, the value matters, not the cost
@@ -323,57 +387,64 @@ static void mm_solve_chain_m(struct fhk_graph *G, struct fhk_model *m, double be
 
 		// recompute full bounds here since other constraints may
 		// have been solved as a side-effect of solving x.
-		// (could also add cost deltas then recompute after solving all)
-		constraint_bounds(G, &Sc_min, &Sc_max, m);
+		bound_Sc = cst_bound(G, m);
 
-		// constraint_bounds() can trigger calculation of params
-		// XXX: this is a hack, most constraint_bounds & param_bounds calls in this function
-		// should be replaced by deltas.
-		param_bounds(&Sp_min, &Sp_max, m);
+		// constraint_bounds() can trigger calculation of params so we need to recompute bounds
+		bound_Sp = par_bound(m);
 
-		if(Sc_min + Sp_min >= beta_S)
+		if(MIN(bound_Sc + bound_Sp) >= beta_S)
 			goto betabound;
 	}
 
-	assert(Sc_min == Sc_max);
+	assert(HASVALUE(bound_Sc));
 
-	for(unsigned i=0;i<m->n_param;i++){
-		struct fhk_var *x = m->params[i];
+	size_t n_param = m->n_param;
+	struct fhk_var **xs = m->params;
+	for(size_t i=0;i<n_param;i++){
+		struct fhk_var *x = xs[i];
 
 		if(CHAINSELECTED(VBMAP(x)))
 			continue;
 
-		// here Sp_min - x->min_cost is
-		//     sum  (y->min_cost)
-		//     y!=x 
-		// 
+		bool xhasv = HASVALUE(x->cost_bound);
+
+		// here MIN(bound_Sp - x->cost_bound) == sum(MIN(y->cost_bound) : y != x, y in params)
 		// this call will either exit with chain_selected=1 or cost exceeds beta
-		mm_solve_chain_v(G, x, beta_S - (Sc_min + Sp_min - x->min_cost));
+		mm_solve_chain_v(G, x, beta_S - MIN(bound_Sc + bound_Sp - x->cost_bound));
 
-		param_bounds(&Sp_min, &Sp_max, m);
+		// no point recomputing bounds if cost didn't change
+		if(xhasv)
+			continue;
 
-		if(Sc_min + Sp_min >= beta_S)
+		// unfortunately here we can't just do bound_Sp += newcost - oldcost, for 2 reasons:
+		// * solving the parameter can also trigger other parameters to be solved
+		// * if maxcost is inf we get an inf-inf situation
+		// so we have to fully recalculate bounds
+		bound_Sp = par_bound(m);
+
+		if(MIN(bound_Sc + bound_Sp) >= beta_S)
 			goto betabound;
 
 		// didn't jump to betabound so mm_solve_chain_v must have solved the chain
 		assert(CHAINSELECTED(VBMAP(x)));
 	}
 
-	assert(Sp_min == Sp_max);
+	// we don't need to recalculate the bounds here any more, we only skipped parameters
+	// with solved bounds and those can't trigger another parameter (since otherwise they would
+	// have a check constraint on it and therefore unsolved bounds).
+	assert(HASVALUE(bound_Sp));
 
-	m->min_cost = costf(m, Sc_min + Sp_min);
-	m->max_cost = m->min_cost;
-	bm->chain_selected = 1;
-	dv("%s: solved chain, cost: %f (S=%f+%f)\n", DESCM(m), m->min_cost, Sc_min, Sp_min);
+	m->cost_bound = costfv(m, bound_Sc + bound_Sp);
+	MBMAP(m)->chain_selected = 1;
+	dv("%s: solved chain, cost: %f (S=%f+%f)\n", DESCM(m), COST(m), MIN(bound_Sc), MIN(bound_Sp));
 	return;
 
 betabound:
-	m->min_cost = costf(m, Sc_min + Sp_min);
-	m->max_cost = costf(m, Sc_max + Sp_max);
+	m->cost_bound = costfv(m, bound_Sc + bound_Sp);
 	dv("%s: min cost=%f (S=%f+%f) exceeded beta=%f\n",
 			DESCM(m),
-			m->min_cost,
-			Sc_min, Sp_min,
+			MIN(m->cost_bound),
+			MIN(bound_Sc), MIN(bound_Sp),
 			beta
 	);
 }
@@ -426,10 +497,11 @@ static void dj_mark_v(struct fhk_graph *G, struct fhk_var *y){
 		heap_add_unordered(STATE()->heap, y, COST(m0));
 	}
 
+	double max_cost = MAX(y->cost_bound);
 	for(unsigned i=0;i<y->n_mod;i++){
 		struct fhk_model *m = y->models[i];
 
-		if(m->min_cost <= y->max_cost && !UNSOLVABLE(m))
+		if(MIN(m->cost_bound) <= max_cost && !UNSOLVABLE(m))
 			dj_mark_m(G, m);
 	}
 }
@@ -478,36 +550,35 @@ static void dj_visit_m(struct fhk_graph *G, struct fhk_model *m){
 	}
 
 	double beta = dj_beta_m(G, m);
-	double beta_S = costf_inverse_S(m, beta);
+	double beta_S = costf_invS(m, beta);
+	fhk_v2 bound_Sc = cst_bound(G, m);
+	fhk_v2 bound_Sp = par_bound(m);
 
-	double Sp_min, Sp_max;
-	double Sc_min, Sc_max;
+	assert(HASVALUE(bound_Sp));
 
-	constraint_bounds(G, &Sc_min, &Sc_max, m);
-	param_bounds(&Sp_min, &Sp_max, m);
-
-	if(Sc_min + Sp_min >= beta_S)
+	if(MIN(bound_Sc + bound_Sp) >= beta_S)
 		goto betabound;
 
 	for(unsigned i=0;i<m->n_check;i++){
 		struct fhk_var *x = m->checks[i].var;
 
+		// only given or parameters are accepted as checks in cyclic subgraphs,
+		// so this is ok (we just checked parameters at entry).
 		resolve_value(G, x);
 
-		// unlike in mm_solve_chain_m, here all variable chains have been fully solved
-		// and the only thing that can affect cost if constraints so we don't need to
-		// recompute param bounds
-		constraint_bounds(G, &Sc_min, &Sc_max, m);
+		// this also means parameter bounds can't change, however constraint bounds neeed
+		// to be recomputed
+		bound_Sc = cst_bound(G, m);
 
-		if(Sc_min + Sp_min >= beta_S)
+		if(MIN(bound_Sc + bound_Sp) >= beta_S)
 			goto betabound;
 	}
 
-	assert(Sc_min == Sc_max && Sp_min == Sp_max);
-	m->min_cost = costf(m, Sc_min + Sp_min);
-	m->max_cost = m->min_cost;
+	assert(HASVALUE(bound_Sc));
+
+	m->cost_bound = costfv(m, bound_Sc + bound_Sp);
 	bm->chain_selected = 1;
-	dv("%s: solved chain, cost: %f (S=%f+%f)\n", DESCM(m), COST(m), Sc_min, Sp_min);
+	dv("%s: solved chain, cost: %f (S=%f+%f)\n", DESCM(m), COST(m), MIN(bound_Sc), MIN(bound_Sp));
 
 	for(unsigned i=0;i<m->n_return;i++){
 		struct fhk_var *y = m->returns[i];
@@ -522,12 +593,11 @@ static void dj_visit_m(struct fhk_graph *G, struct fhk_model *m){
 betabound:
 	// unmark for debugging so the assert fails if we ever try to touch this model again
 	DD(UNMARK(bm));
-	double min_cost = costf(m, Sc_min + Sp_min);
 	dv("%s: min cost=%f (S=%f+%f) exceeded all existing costs (beta=%f)\n",
 			DESCM(m),
-			min_cost,
-			Sc_min,
-			Sp_min,
+			costf(m, MIN(bound_Sc + bound_Sp)),
+			MIN(bound_Sc),
+			MIN(bound_Sp),
 			beta
 	);
 }
@@ -600,15 +670,15 @@ static void dj_solve_heap(struct fhk_graph *G, size_t need){
 
 		// technically non-marked variables can go here from multi-return models
 		// where we are asked to solve only a subset of the variables
-		if(!MARKED(bm))
+		if(UNLIKELY(!MARKED(bm)))
 			continue;
 
 		if(!CHAINSELECTED(bm)){
 			double cost = next.cost;
-			assert(cost >= x->min_cost && cost <= x->max_cost);
+			assert(cost >= MIN(x->cost_bound) && cost <= MAX(x->cost_bound));
 			assert(MBMAP(x->model)->chain_selected && cost == COST(x->model));
-			x->min_cost = cost;
-			x->max_cost = cost;
+			MIN(x->cost_bound) = cost;
+			MAX(x->cost_bound) = cost;
 			bm->chain_selected = 1;
 			dv("%s: selected model %s (cost: %f)\n",
 					DESCV(x),
@@ -637,7 +707,7 @@ static void dj_solve_bounded(struct fhk_graph *G, size_t nv, struct fhk_var **ys
 			nsolved++;
 	}
 
-	if(nsolved < nv){
+	if(LIKELY(nsolved < nv)){
 		struct heap h;
 		h.end = 0;
 		STATE()->heap = &h;
@@ -731,58 +801,66 @@ static struct heap_ent heap_extract_min(struct heap *h){
 	return ret;
 }
 
-static void exec_chain(struct fhk_graph *G, struct fhk_var *y){
+NOUNROLL static void exec_chain(struct fhk_graph *G, struct fhk_var *y){
 	fhk_vbmap *bm = VBMAP(y);
 
-	if(bm->has_value)
-		return;
+	assert(bm->chain_selected && !bm->has_value);
 
-	assert(bm->chain_selected);
+	// this can be set here eagerly since a selected chain can't have cycles
+	bm->has_value = 1;
+
 	struct fhk_model *m = y->model;
+	fhk_mbmap *mm = MBMAP(m);
 
-	if(!MBMAP(m)->has_return){
-		for(size_t i=0;i<m->n_param;i++){
-			// this won't cause problems because the selected chain will never have a loop
-			// Note: we don't need to check UNSOLVABLE here anymore, if we are here then
-			// we must have a finite cost
-			resolve_value(G, m->params[i]);
+	if(LIKELY(!mm->has_return)){
+
+		// set this eagerly too, this is ok because no cycles
+		mm->has_return = 1;
+
+		size_t n_param = m->n_param;
+		struct fhk_var **xs = m->params;
+		pvalue args[n_param];
+
+		if(LIKELY(n_param > 0)){
+
+#pragma GCC unroll 0
+			for(size_t i=0;i<n_param;i++){
+				// this won't cause problems because the selected chain will never have a loop
+				// Note: we don't need to check UNSOLVABLE here anymore, if we are here then
+				// we must have a finite cost
+				assert(!UNSOLVABLE(xs[i]));
+				//args[i] = resolve_value(G, xs[i]);
+				resolve_value(G, xs[i]);
+			}
+
+#pragma GCC unroll 0
+			for(size_t i=0;i<n_param;i++)
+				args[i] = xs[i]->value;
 		}
 
-		exec_model(G, m);
+		int res = G->exec_model(G, m->udata, m->rvals, args);
+		if(UNLIKELY(res != FHK_OK))
+			FAIL(FHK_MODEL_FAILED, m, NULL);
 	}
 
 	y->value = *return_ptr(m, y);
-	bm->has_value = 1;
 	dv("solved %s -> %f / %#lx\n", DESCV(y), y->value.f64, y->value.u64);
 }
 
-static void exec_model(struct fhk_graph *G, struct fhk_model *m){
-	assert(!MBMAP(m)->has_return);
+static void resolve_given(struct fhk_graph *G, struct fhk_var *x){
+	fhk_vbmap *bm = VBMAP(x);
 
-	pvalue args[m->n_param];
-	for(size_t i=0;i<m->n_param;i++)
-		args[i] = m->params[i]->value;
+	assert(bm->given && !bm->has_value);
 
-	if(G->exec_model(G, m->udata, m->rvals, args))
-		FAIL(FHK_MODEL_FAILED, m, NULL);
+	// same logic here as in exec_chain: if the call fails we are doomed anyway so just
+	// optimistically set it here and forget
+	bm->has_value = 1;
 
-	MBMAP(m)->has_return = 1;
-}
+	int r = G->resolve_var(G, x->udata, &x->value);
+	if(UNLIKELY(r != FHK_OK))
+		FAIL(FHK_VAR_FAILED, NULL, x);
 
-// Note that costf must be increasing in S, non-negative (for non-negative S),
-// and it must have the property
-//    costf(inf) = inf
-// This also implies
-//    costf_inverse_S(inf) = inf
-//
-// It doesn't necessarily need to be this linear function.
-static double costf(struct fhk_model *m, double S){
-	return m->k + m->c*S;
-}
-
-static double costf_inverse_S(struct fhk_model *m, double cost){
-	// XXX if needed, 1/c can be precomputed to turn this into a multiplication
-	return (cost - m->k) / m->c;
+	dv("virtual %s -> %f / %#lx\n", DESCV(x), x->value.f64, x->value.u64);
 }
 
 static void resolve_value(struct fhk_graph *G, struct fhk_var *x){
@@ -800,22 +878,6 @@ static void resolve_value(struct fhk_graph *G, struct fhk_var *x){
 	assert(bm->has_value);
 }
 
-static void resolve_given(struct fhk_graph *G, struct fhk_var *x){
-	fhk_vbmap *bm = VBMAP(x);
-
-	assert(bm->given);
-
-	if(bm->has_value)
-		return;
-
-	int r = G->resolve_var(G, x->udata, &x->value);
-	if(r != FHK_OK)
-		FAIL(FHK_VAR_FAILED, NULL, x);
-
-	bm->has_value = 1;
-	dv("virtual %s -> %f / %#lx\n", DESCV(x), x->value.f64, x->value.u64);
-}
-
 static int check_cst(struct fhk_cst *cst, pvalue v){
 	switch(cst->type){
 
@@ -830,58 +892,18 @@ static int check_cst(struct fhk_cst *cst, pvalue v){
 	UNREACHABLE();
 }
 
-static void constraint_bounds(struct fhk_graph *G, double *Sc_min, double *Sc_max,
-		struct fhk_model *m){
-
-	double min = 0, max = 0;
-
-	for(size_t i=0;i<m->n_check;i++){
-		struct fhk_check *c = &m->checks[i];
-		struct fhk_var *x = c->var;
-
-		if(VBMAP(x)->given)
-			resolve_given(G, x);
-
-		if(VBMAP(x)->has_value){
-			double cost = c->costs[check_cst(&c->cst, x->value)];
-			min += cost;
-			max += cost;
-		}else{
-			min += c->costs[FHK_COST_IN];
-			max += c->costs[FHK_COST_OUT];
-		}
-	}
-
-	*Sc_min = min;
-	*Sc_max = max;
-}
-
-static void param_bounds(double *Sp_min, double *Sp_max, struct fhk_model *m){
-	double min = 0, max = 0;
-
-	for(size_t i=0;i<m->n_param;i++){
-		struct fhk_var *x = m->params[i];
-
-		min += x->min_cost;
-		max += x->max_cost;
-	}
-
-	*Sp_min = min;
-	*Sp_max = max;
-}
-
 static void mmin2(struct fhk_model **m1, struct fhk_model **m2, struct fhk_var *y){
 	assert(y->n_mod >= 2);
 
 	struct fhk_model **m = y->models;
-	double xa = m[0]->min_cost;
-	double xb = m[1]->min_cost;
+	double xa = MIN(m[0]->cost_bound);
+	double xb = MIN(m[1]->cost_bound);
 	unsigned a = xa > xb;
 	unsigned b = 1 - a;
 
 	size_t n = y->n_mod;
 	for(unsigned i=2;i<n;i++){
-		double xc = m[i]->min_cost;
+		double xc = MIN(m[i]->cost_bound);
 
 		if(xc < xb){
 			xb = xc;
@@ -904,7 +926,7 @@ static struct fhk_model *mmin0p(struct fhk_var *y){
 	double xr = INFINITY;
 
 	for(unsigned i=0;i<y->n_mod;i++){
-		if(m[i]->n_param > 0)
+		if(LIKELY(m[i]->n_param > 0))
 			continue;
 
 		// use COST instead of min_cost here. 0-parameter models can't have parameter cost
@@ -922,7 +944,12 @@ static struct fhk_model *mmin0p(struct fhk_var *y){
 static pvalue *return_ptr(struct fhk_model *m, struct fhk_var *v){
 	// this is an ok way to do it since almost all models will have 1 return
 	// and 99.999999999% will have at most 4-5
-	for(unsigned i=0;i<m->n_return;i++){
+	assert(m->n_return >= 1);
+
+	if(LIKELY(m->returns[0] == v))
+		return &m->rvals[0];
+
+	for(unsigned i=1;i<m->n_return;i++){
 		if(m->returns[i] == v)
 			return &m->rvals[i];
 	}
@@ -930,6 +957,13 @@ static pvalue *return_ptr(struct fhk_model *m, struct fhk_var *v){
 	UNREACHABLE();
 }
 
+static void init_given_cost(struct fhk_graph *G, struct fhk_var *y){
+	MIN(y->cost_bound) = 0;
+	MAX(y->cost_bound) = 0;
+	VBMAP(y)->has_bound = 1;
+}
+
+__attribute__((cold, noinline, noreturn))
 static void fail(struct fhk_graph *G, int res, struct fhk_model *m, struct fhk_var *v){
 	struct fhk_einfo *ei = &G->last_error;
 	ei->err = res;
@@ -955,3 +989,97 @@ static const char *ddescm(struct fhk_model *m){
 }
 
 #endif
+
+INLINE FAST_MATH static double costf(struct fhk_model *m, double S){
+	return m->k[0] + m->c[0]*S;
+}
+
+INLINE FAST_MATH static fhk_v2 costfv(struct fhk_model *m, fhk_v2 S){
+	return m->k + m->c*S;
+}
+
+INLINE FAST_MATH static double costf_invS(struct fhk_model *m, double cost){
+	return m->ki[0] + m->ci[0]*cost;
+}
+
+INLINE FAST_MATH static fhk_v2 costf_invSv(struct fhk_model *m, fhk_v2 cost){
+	return m->ki + m->ci*cost;
+}
+
+INLINE FAST_MATH static double max(double a, double b){
+	return a > b ? a : b;
+}
+
+INLINE FAST_MATH static double min(double a, double b){
+	return -max(-a, -b);
+}
+
+#ifdef __SSE2__
+
+#include <x86intrin.h>
+
+INLINE FAST_MATH static fhk_v2 minv(fhk_v2 a, fhk_v2 b){
+	return _mm_min_pd(a, b);
+}
+
+#else 
+
+// gcc doesn't compile this into vminpd...
+// (clang does)
+INLINE FAST_MATH static fhk_v2 minv(fhk_v2 a, fhk_v2 b){
+	fhk_v2 c;
+	c[0] = min(a[0], b[0]);
+	c[1] = min(a[1], b[1]);
+	return c;
+}
+
+#endif
+
+// not sure if it makes sense to always inline this
+INLINE FAST_MATH NOUNROLL static fhk_v2 cst_bound(struct fhk_graph *G, struct fhk_model *m){
+	fhk_v2 ret = {0, 0};
+
+	size_t n_check = m->n_check;
+	struct fhk_check *cs = m->checks;
+
+#pragma GCC unroll 0
+	for(size_t i=0;i<n_check;i++){
+		struct fhk_check *c = &cs[i];
+		struct fhk_var *x = c->var;
+
+		fhk_vbmap *bm = VBMAP(x);
+		if(UNLIKELY(bm->given && !bm->has_value))
+			resolve_given(G, x);
+
+		// Note: c->costs can (and often will) contain infs here,
+		// but that shouldn't cause any problems with just some additions
+		if(bm->has_value)
+			ret += c->cost[!check_cst(&c->cst, x->value)];
+		else
+			ret += c->cost; // ret += {out, in}
+	}
+
+	CHECKBOUND(ret);
+	return ret;
+}
+
+INLINE FAST_MATH NOUNROLL static fhk_v2 par_bound(struct fhk_model *m){
+	size_t n = m->n_param;
+	struct fhk_var **xs = m->params;
+
+	fhk_v2 a = {0, 0};
+	fhk_v2 b = {0, 0};
+
+	if(n % 2){
+		b = xs[n-1]->cost_bound;
+		n--;
+	}
+
+	for(; n; n-=2){
+		a += m->params[n-1]->cost_bound;
+		b += m->params[n-2]->cost_bound;
+	}
+
+	CHECKBOUND(a + b);
+	return a + b;
+}

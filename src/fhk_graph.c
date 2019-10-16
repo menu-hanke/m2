@@ -1,6 +1,8 @@
 #include "bitmap.h"
 #include "fhk.h"
 
+#include <assert.h>
+
 static void mark_supp_v(bm8 *vmask, bm8 *mmask, struct fhk_var *y);
 static void mark_supp_m(bm8 *vmask, bm8 *mmask, struct fhk_model *m);
 static int mark_isupp_v(struct fhk_graph *G, bm8 *vmask, bm8 *mmask, struct fhk_var *y);
@@ -36,6 +38,25 @@ void fhk_inv_supp(struct fhk_graph *G, bm8 *vmask, bm8 *mmask){
 
 	for(size_t i=0;i<G->n_mod;i++)
 		mark_isupp_m(G, vmask, mmask, &G->models[i]);
+}
+
+void fhk_model_set_cost(struct fhk_model *m, double k, double c){
+	m->k = (fhk_v2){k, k};
+	m->c = (fhk_v2){c, c};
+	// (cost - k) / c = ci*cost + ki : ci=1/c, ki=-k/c
+	m->ki = -m->k/m->c;
+	m->ci = 1/m->c;
+}
+
+void fhk_check_set_cost(struct fhk_check *c, double in, double out){
+	assert(in <= out);
+	c->cost[0] = in;
+	c->cost[1] = out;
+}
+
+double fhk_solved_cost(struct fhk_model *m){
+	assert(m->cost_bound[0] == m->cost_bound[1]);
+	return m->cost_bound[0];
 }
 
 static void mark_supp_v(bm8 *vmask, bm8 *mmask, struct fhk_var *y){

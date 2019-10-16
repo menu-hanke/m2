@@ -36,8 +36,7 @@ local function create_checks(checks, sv)
 		local cst = cs[i+1]
 		local var = vars[i+1]
 		c.var = var.fhk_var
-		c.costs[C.FHK_COST_IN] = cst.cost_in
-		c.costs[C.FHK_COST_OUT] = cst.cost_out
+		C.fhk_check_set_cost(c, cst.cost_in, cst.cost_out)
 		copy_cst(c.cst, cst)
 	end
 
@@ -103,13 +102,12 @@ local function build_models(G, arena, sv, sm)
 	for _,m in pairs(sm) do
 		local fm = m.fhk_model
 
-		fm.k = m.src.k or 1
-		fm.c = m.src.c or 1
-
 		if not m.src.k or not m.src.c then
 			io.stderr:write(string.format("warn: No cost given for model %s - defaulting to 1\n",
 				m.src.name))
 		end
+
+		C.fhk_model_set_cost(fm, m.src.k or 1, m.src.c or 1)
 
 		local checks, ncheck = create_checks(m.src.checks, sv)
 		C.fhk_copy_checks(arena, fm, ncheck, checks)

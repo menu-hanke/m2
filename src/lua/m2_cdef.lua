@@ -194,30 +194,24 @@ struct fhk_cst {
   uint64_t setmask;
  };
 };
-struct fhk_space {
- struct fhk_cst cst;
-};
-enum {
- FHK_COST_OUT = 0,
- FHK_COST_IN = 1
-};
+typedef double fhk_v2 __attribute__((vector_size(16)));
 struct fhk_check {
  struct fhk_var *var;
  struct fhk_cst cst;
- double costs[2];
+ fhk_v2 cost;
 };
 struct fhk_model {
  unsigned idx : 16;
  unsigned n_check : 8;
  unsigned n_param : 8;
  unsigned n_return : 8;
- unsigned may_fail : 1;
  struct fhk_check *checks;
  struct fhk_var **params;
  struct fhk_var **returns;
+ fhk_v2 k, c;
+ fhk_v2 ki, ci;
+ fhk_v2 cost_bound;
  pvalue *rvals;
- double k, c;
- double min_cost, max_cost;
  void *udata;
 };
 struct fhk_var {
@@ -228,8 +222,8 @@ struct fhk_var {
  struct fhk_model **models;
  struct fhk_model **fwd_models;
  struct fhk_model *model;
+ fhk_v2 cost_bound;
  pvalue value;
- double min_cost, max_cost;
  void *udata;
 };
 typedef union fhk_mbmap { uint8_t u8; struct { unsigned has_bound : 1; unsigned chain_selected : 1; unsigned has_return : 1; unsigned mark : 1; } __attribute__((packed));  } fhk_mbmap;
@@ -277,6 +271,9 @@ void fhk_reset(struct fhk_graph *G, fhk_vbmap vmask, fhk_mbmap mmask);
 void fhk_reset_mask(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
 void fhk_supp(bm8 *vmask, bm8 *mmask, struct fhk_var *y);
 void fhk_inv_supp(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
+void fhk_model_set_cost(struct fhk_model *m, double k, double c);
+void fhk_check_set_cost(struct fhk_check *c, double out, double in);
+double fhk_solved_cost(struct fhk_model *m);
 int fhk_solve(struct fhk_graph *G, size_t nv, struct fhk_var **ys);
 struct fhk_graph *fhk_alloc_graph(arena *arena, size_t n_var, size_t n_mod);
 void fhk_copy_checks(arena *arena, struct fhk_model *m, size_t n_check, struct fhk_check *checks);
