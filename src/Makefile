@@ -107,7 +107,7 @@ dep:
 		| sed -r 's|\s/\S+\.h||'\
 		> Makefile.dep
 	$(CC) $(CCOPT) $(CCDEBUG) $(CCDEF) $(CCEXTRA) $(XCFLAGS) -MM model/*.c\
-		| sed 's|^\([^ ]\)/model|\1|'\
+		| sed 's|^\([^ ]\)|model/\1|'\
 		>> Makefile.dep
 	$(CC) $(CCOPT) $(CCDEBUG) $(CCDEF) $(CCEXTRA) $(XCFLAGS) -MM -MT $(M2_CDEF) $(LUA_EXPORTS)\
 		>> Makefile.dep
