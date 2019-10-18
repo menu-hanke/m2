@@ -34,34 +34,6 @@ struct fhk_check {
 	fhk_v2 cost; // {out, in}
 };
 
-struct fhk_model {
-	unsigned idx : 16;
-	unsigned n_check : 8;
-	unsigned n_param : 8;
-	unsigned n_return : 8;
-	struct fhk_check *checks;
-	struct fhk_var **params;
-	struct fhk_var **returns;
-	fhk_v2 k, c;                // <- align
-	fhk_v2 ki, ci;              // <- to
-	fhk_v2 cost_bound;          // <- 16 bytes
-	pvalue *rvals;
-	void *udata;
-};
-
-struct fhk_var {
-	unsigned idx : 16;
-	unsigned n_fwd : 16;
-	unsigned n_mod : 8;
-	unsigned hptr : 8;
-	struct fhk_model **models;
-	struct fhk_model **fwd_models;
-	struct fhk_model *model;
-	fhk_v2 cost_bound;          // <- align to 16 bytes
-	pvalue value;
-	void *udata;
-};
-
 /* (i)  : internal flag, the solver will set this, reset to 0
  * (e)  : external flag, you may set this
  * (ie) : internal/external, the solver will change this but you may set a default */
@@ -93,6 +65,37 @@ typedef union fhk_vbmap BMU8({
 	unsigned has_bound : 1;       // 5
 	unsigned target : 1;          // 6
 }) fhk_vbmap;
+
+struct fhk_model {
+	unsigned idx : 16;
+	unsigned n_check : 8;
+	unsigned n_param : 8;
+	unsigned n_return : 8;
+	fhk_mbmap *bitmap;
+	struct fhk_check *checks;
+	struct fhk_var **params;
+	struct fhk_var **returns;
+	fhk_v2 k, c;                // <- align
+	fhk_v2 ki, ci;              // <- to
+	fhk_v2 cost_bound;          // <- 16 bytes
+	pvalue *rvals;
+	void *udata;
+};
+
+struct fhk_var {
+	unsigned idx : 16;
+	unsigned n_fwd : 16;
+	unsigned n_mod : 8;
+	unsigned hptr : 8;
+	fhk_vbmap *bitmap;
+	struct fhk_model **models;
+	struct fhk_model **fwd_models;
+	struct fhk_model *model;
+	fhk_v2 cost_bound;          // <- align to 16 bytes
+	pvalue value;
+	void *udata;
+};
+
 
 enum {
 	FHK_OK            = 0,

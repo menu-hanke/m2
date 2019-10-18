@@ -200,11 +200,14 @@ struct fhk_check {
  struct fhk_cst cst;
  fhk_v2 cost;
 };
+typedef union fhk_mbmap { uint8_t u8; struct { unsigned has_bound : 1; unsigned chain_selected : 1; unsigned has_return : 1; unsigned mark : 1; } __attribute__((packed));  } fhk_mbmap;
+typedef union fhk_vbmap { uint8_t u8; struct { unsigned given : 1; unsigned mark : 1; unsigned chain_selected : 1; unsigned has_value : 1; unsigned has_bound : 1; unsigned target : 1; } __attribute__((packed));  } fhk_vbmap;
 struct fhk_model {
  unsigned idx : 16;
  unsigned n_check : 8;
  unsigned n_param : 8;
  unsigned n_return : 8;
+ fhk_mbmap *bitmap;
  struct fhk_check *checks;
  struct fhk_var **params;
  struct fhk_var **returns;
@@ -219,6 +222,7 @@ struct fhk_var {
  unsigned n_fwd : 16;
  unsigned n_mod : 8;
  unsigned hptr : 8;
+ fhk_vbmap *bitmap;
  struct fhk_model **models;
  struct fhk_model **fwd_models;
  struct fhk_model *model;
@@ -226,8 +230,6 @@ struct fhk_var {
  pvalue value;
  void *udata;
 };
-typedef union fhk_mbmap { uint8_t u8; struct { unsigned has_bound : 1; unsigned chain_selected : 1; unsigned has_return : 1; unsigned mark : 1; } __attribute__((packed));  } fhk_mbmap;
-typedef union fhk_vbmap { uint8_t u8; struct { unsigned given : 1; unsigned mark : 1; unsigned chain_selected : 1; unsigned has_value : 1; unsigned has_bound : 1; unsigned target : 1; } __attribute__((packed));  } fhk_vbmap;
 enum {
  FHK_OK = 0,
  FHK_SOLVER_FAILED = 1,
@@ -372,17 +374,6 @@ enum {
  GS_INTERRUPT_VIRT = 1 << 30,
  GS_ARG_MASK = (1 << 16) - 1
 };
-struct gs_virt {
- const gmap_support *supp; gmap_resolve resolve; tvalue udata; const char *name; unsigned target_type : 16;
- int32_t handle;
-};
-typedef struct gs_ctx gs_ctx;
-gs_ctx *gs_create_ctx();
-void gs_destroy_ctx(gs_ctx *ctx);
-void gs_enter(gs_ctx *ctx);
-void gs_interrupt(gs_res ir);
-gs_res gs_resume(pvalue iv);
-int gs_res_virt(void *v, pvalue *p);
 gs_res gs_solve_step(struct fhk_solver *solver, unsigned idx);
 gs_res gs_solve_vec(struct vec_ref *v_bind, struct fhk_solver *solver, struct vec *vec);
 gs_res gs_solve_vec_z(struct vec_ref *v_bind, gridpos *z_bind, int z_band, struct fhk_solver *solver,
