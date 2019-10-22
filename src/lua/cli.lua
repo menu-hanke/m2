@@ -19,6 +19,13 @@ local function addopt(name)
 	end
 end
 
+local function setopt(name)
+	return function(ret, ai)
+		ret[name] = ret[name] or {}
+		ret[name][ai()] = true
+	end
+end
+
 local function flag(name)
 	return function(ret)
 		ret[name] = true
@@ -50,5 +57,6 @@ return {
 	parse   = parse,
 	opt     = opt,
 	addopt  = addopt,
+	setopt  = setopt,
 	flag    = flag
 }
