@@ -198,11 +198,11 @@ end
 
 return {
 	flags = {
-		c = opt("config"),
-		s = addopt("scripts"),
-		i = opt("input"),
-		p = opt("coefs"),
-		C = opt("calibrator")
+		c = cli.opt("config"),
+		s = cli.addopt("scripts"),
+		i = cli.opt("input"),
+		p = cli.opt("coefs"),
+		C = cli.opt("calibrator")
 	},
 	main = main
 }

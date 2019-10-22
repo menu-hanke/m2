@@ -1,4 +1,3 @@
-local malloc = require "malloc"
 local vmath = require "vmath"
 
 -- Nelder-Mead optimizer
