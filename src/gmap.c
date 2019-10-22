@@ -1,6 +1,5 @@
 #include "gmap.h"
 #include "type.h"
-#include "sim_ds.h"
 #include "fhk.h"
 #include "bitmap.h"
 #include "grid.h"
@@ -11,11 +10,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+static bool var_is_visible(tvalue to, unsigned reason, tvalue parm);
 static bool var_is_constant(tvalue to, unsigned reason, tvalue parm);
 static bool env_is_visible(tvalue to, unsigned reason, tvalue parm);
 static bool global_is_visible(tvalue to, unsigned reason, tvalue parm);
 
-static const gmap_support SUPP_VAR = { global_is_visible, var_is_constant };
+static const gmap_support SUPP_VAR = { var_is_visible, var_is_constant };
 static const gmap_support SUPP_ENV = { env_is_visible, env_is_visible };
 static const gmap_support SUPP_GLOBAL = { global_is_visible, global_is_visible };
 
@@ -76,28 +76,35 @@ void gmap_supp_global(struct gmap_any *v){
 	v->supp = &SUPP_GLOBAL;
 }
 
-#define PROMOTE(v,p) vpromote(*(tvalue *) (p), (v)->target_type);
-
 __attribute__((no_sanitize("alignment")))
 int gmap_res_vec(void *v, pvalue *p){
-	struct gv_vec *vec = v;
-	struct vec_band *band = V_BAND(vec->bind->vec, vec->target_band);
-	*p = PROMOTE(vec, V_DATA(band, vec->bind->idx) + vec->target_offset);
+	struct gv_vcomponent *gv = v;
+	GV_GETFLAGS(flags, gv);
+	struct vec *vec = *gv->v_bind;
+	unsigned off = *gv->offset_bind;
+	unsigned idx = **gv->idx_bind;
+
+	void *band = vec->bands[off + flags.band];
+	tvalue tv = *(tvalue *) (((char *) band) + (flags.stride * idx + flags.offset));
+	*p = vpromote(tv, flags.type);
 	return FHK_OK;
 }
 
 __attribute__((no_sanitize("alignment")))
 int gmap_res_grid(void *v, pvalue *p){
 	struct gv_grid *g = v;
-	gridpos z = grid_zoom_up(*g->bind, POSITION_ORDER, g->grid->order);
-	*p = PROMOTE(g, (((char *) grid_data(g->grid, z)) + g->target_offset));
+	GV_GETFLAGS(flags, g);
+
+	gridpos z = grid_zoom_up(*g->bind, GRID_POSITION_ORDER, g->grid->order);
+	tvalue tv = *(tvalue *) (((char *) grid_data(g->grid, z)) + flags.offset);
+	*p = vpromote(tv, flags.type);
 	return FHK_OK;
 }
 
 __attribute__((no_sanitize("alignment")))
 int gmap_res_data(void *v, pvalue *p){
 	struct gv_data *d = v;
-	*p = PROMOTE(d, d->ref);
+	*p = vpromote(*(tvalue *) d->ref, d->flags.type);
 	return FHK_OK;
 }
 
@@ -136,8 +143,12 @@ void gmap_init(struct fhk_graph *G, bm8 *init_v){
 	bm_zero((bm8 *) G->m_bitmaps, G->n_mod);
 }
 
+static bool var_is_visible(tvalue to, unsigned reason, tvalue parm){
+	return reason == GMAP_BIND_OBJECT && (to.u64 & parm.u64);
+}
+
 static bool var_is_constant(tvalue to, unsigned reason, tvalue parm){
-	return reason == GMAP_BIND_OBJECT && to.u64 != parm.u64;
+	return reason == GMAP_BIND_OBJECT && !(to.u64 & parm.u64);
 }
 
 static bool env_is_visible(tvalue to, unsigned reason, tvalue parm){
@@ -159,6 +170,7 @@ static int G_model_exec(struct fhk_graph *G, void *udata, pvalue *ret, pvalue *a
 
 static int G_resolve_var(struct fhk_graph *G, void *udata, pvalue *value){
 	(void)G;
+	// TODO: speedup: get flags and do switch(res_type), use special type for virt
 	struct gmap_any *v = udata;
 	return v->resolve(v, value);
 }
@@ -177,18 +189,21 @@ static void debug_var_bind(struct fhk_graph *G, unsigned idx, struct gmap_any *g
 	char buf[1024];
 
 	if(g->resolve == gmap_res_vec){
-		struct gv_vec *v = (struct gv_vec *) g;
-		snprintf(buf, sizeof(buf), "vec<bind=%p> band[%u]+%u",
-				v->bind,
-				v->target_band,
-				v->target_offset
+		struct gv_vcomponent *v = (struct gv_vcomponent *) g;
+		snprintf(buf, sizeof(buf), "vec<bind=%p> band[*%p+%u][**%p]*%u+%u",
+				v->v_bind,
+				v->offset_bind,
+				v->flags.band,
+				v->idx_bind,
+				v->flags.stride,
+				v->flags.offset
 		);
 	}else if(g->resolve == gmap_res_grid){
 		struct gv_grid *v = (struct gv_grid *) g;
 		snprintf(buf, sizeof(buf), "grid<%p, z=%p> +%u",
 				v->grid,
 				v->bind,
-				v->target_offset
+				v->flags.offset
 		);
 	}else if(g->resolve == gmap_res_data){
 		struct gv_data *v = (struct gv_data *) g;
@@ -200,8 +215,8 @@ static void debug_var_bind(struct fhk_graph *G, unsigned idx, struct gmap_any *g
 	dv("%smap %s type=%u.%u : %s -> fhk var[%u]\n",
 			G->vars[idx].udata ? "(!) re" : "",
 			g->name,
-			TYPE_BASE(g->target_type),
-			TYPE_SIZE(g->target_type),
+			TYPE_BASE(g->flags.type),
+			TYPE_SIZE(g->flags.type),
 			buf,
 			idx
 	);

@@ -46,8 +46,8 @@ M2_CDEF       = lua/m2_cdef.lua
 LUA_EXPORTS   = lua_exports.h
 M2_LIBS       = $(LUAJIT_LIB)
 
-M2_O = main.o bitmap.o fhk_graph.o fhk_solve.o fhk_aux.o type.o arena.o sim.o sim_ds.o grid.o vec.o\
-	   gmap.o gsolve.o vmath.o
+M2_O = main.o bitmap.o fhk_graph.o fhk_solve.o fhk_aux.o type.o arena.o sim.o grid.o vec.o\
+	   gmap.o gsolve.o vmath.o vgrid.o
 
 M2_C = $(M2_O:.o=.c)
 

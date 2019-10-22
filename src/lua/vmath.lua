@@ -242,8 +242,8 @@ local function allocvec(n)
 	return ffi.gc(vec(data, n), freevec)
 end
 
-local function bitmap(type, data, n)
-	local t = bitmaps[tonumber(type.desc)]
+local function bitmap(desc, data, n)
+	local t = bitmaps[desc]
 	local ret = ffi.new(t)
 	ret.data = data
 	ret.bm8 = data
@@ -252,10 +252,10 @@ local function bitmap(type, data, n)
 	return ret
 end
 
-local function typed(type, data, n)
-	if typing.promote(type.desc) == ffi.C.T_B64 then
-		return bitmap(type, data, n)
-	elseif type.desc == typing.builtin_types.real.desc then
+local function typed(desc, data, n)
+	if typing.promote(desc) == ffi.C.T_B64 then
+		return bitmap(desc, data, n)
+	elseif desc == typing.builtin_types.real.desc then
 		return vec(data, n)
 	end
 end

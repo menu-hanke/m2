@@ -1,4 +1,5 @@
 #include "type.h"
+#include "def.h"
 
 #include <stdint.h>
 #include <assert.h>
@@ -6,7 +7,7 @@
 /* XXX: vpromote and vdemote currently assume little-endian, should also make big-endian versions */
 
 pvalue vpromote(tvalue v, type t){
-	if(TYPE_SIZE(t) < sizeof(v)){
+	if(UNLIKELY(!TYPE_IS_PTYPE(t))){
 		if(TYPE_IS_REAL(t)){
 			v.f64 = v.f32;
 		}else{
@@ -21,7 +22,7 @@ pvalue vpromote(tvalue v, type t){
 tvalue vdemote(pvalue v, type t){
 	tvalue ret = (tvalue) v.u64;
 
-	if(t == T_F32)
+	if(UNLIKELY(t == T_F32))
 		ret.f32 = ret.f64;
 
 	return ret;

@@ -22,7 +22,7 @@ enum {
 #include "gmap.h"
 
 struct gs_virt {
-	GV_HEADER;
+	GV_HEADER();
 	int32_t handle;
 };
 
@@ -40,6 +40,6 @@ int gs_res_virt(void *v, pvalue *p);
 #endif
 
 gs_res gs_solve_step(struct fhk_solver *solver, unsigned idx);
-gs_res gs_solve_vec(struct vec_ref *v_bind, struct fhk_solver *solver, struct vec *vec);
-gs_res gs_solve_vec_z(struct vec_ref *v_bind, gridpos *z_bind, int z_band, struct fhk_solver *solver,
-		struct vec *vec);
+gs_res gs_solve_vec(struct vec *vec, struct fhk_solver *solver, unsigned *i_bind);
+gs_res gs_solve_vec_z(struct vec *vec, struct fhk_solver *solver, gridpos *z_bind,
+		unsigned z_band, unsigned *i_bind);

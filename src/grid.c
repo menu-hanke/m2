@@ -1,4 +1,6 @@
 #include "grid.h"
+#include "sim.h"
+#include "def.h"
 
 #include <stdlib.h>
 #include <assert.h>
@@ -51,6 +53,20 @@ gridpos grid_translate_mask(size_t from, size_t to){
 	mask <<= 1;
 	mask = ~(mask - 1);
 	return mask;
+}
+
+struct grid *simL_grid_create(sim *sim, size_t order, size_t size, int lifetime){
+	struct grid *ret = sim_alloc(sim, sizeof(*ret), alignof(*ret), lifetime);
+	grid_init(ret, order, size, NULL);
+
+	dv("grid<%p>: size=%zu (order=%zu stride=%zu) life=%#x\n",
+			ret, grid_data_size(order, size), order, size, lifetime);
+
+	return ret;
+}
+
+void *simL_grid_create_data(sim *sim, struct grid *g, int lifetime){
+	return sim_alloc(sim, grid_data_size(g->order, g->stride), M2_VECTOR_SIZE, lifetime);
 }
 
 static gridpos scatter(gridcoord x){

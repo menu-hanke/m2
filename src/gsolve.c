@@ -13,15 +13,13 @@
 	co_resume(gctx);                           \
 })
 
-static int solve_vec(struct vec_ref *v_bind, struct fhk_solver *solver, struct vec *vec){
-	dv("begin objvec solver on vec=%p vbind=%p\n", vec, v_bind);
-
-	v_bind->vec = vec;
+static int solve_vec(struct vec *vec, struct fhk_solver *solver, unsigned *i_bind){
 	unsigned n = vec->n_used;
 
 	for(unsigned i=0;i<n;i++){
 		dv("solver[%p]: %u/%u\n", vec, (i+1), n);
-		v_bind->idx = i;
+
+		*i_bind = i;
 
 		int r = fhk_solver_step(solver, i);
 		if(r)
@@ -31,19 +29,16 @@ static int solve_vec(struct vec_ref *v_bind, struct fhk_solver *solver, struct v
 	return FHK_OK;
 }
 
-static int solve_vec_z(struct vec_ref *v_bind, gridpos *z_bind, int z_band,
-		struct fhk_solver *solver, struct vec *vec){
+static int solve_vec_z(struct vec *vec, struct fhk_solver *solver, gridpos *z_bind,
+		unsigned z_band, unsigned *i_bind){
 
-	dv("begin objvec(z) solver on vec=%p vbind=%p zbind=%p[band=%d]\n", vec, v_bind, z_bind,z_band);
-
-	v_bind->vec = vec;
 	unsigned n = vec->n_used;
-	gridpos *zb = V_BAND(vec, z_band)->data;
+	gridpos *zb = vec->bands[z_band];
 
 	for(unsigned i=0;i<n;i++){
 		dv("solver[%p]: %u/%u\n", vec, (i+1), n);
 
-		v_bind->idx = i;
+		*i_bind = i;
 		*z_bind = *zb++;
 
 		int r = fhk_solver_step(solver, i);
@@ -70,8 +65,8 @@ struct gs_ctx {
 struct co_solve_args {
 	struct fhk_solver *solver;
 	unsigned idx;
-	struct vec_ref *v_bind;
 	struct vec *vec;
+	unsigned *i_bind;
 	gridpos *z_bind;
 	int z_band;
 };
@@ -143,14 +138,14 @@ static void co_solve_step(){
 static void co_solve_vec(){
 	struct gs_ctx *ctx = aco_get_arg();
 	struct co_solve_args *arg = ctx->arg;
-	gs_interrupt(GS_RETURN | solve_vec(arg->v_bind, arg->solver, arg->vec));
+	gs_interrupt(GS_RETURN | solve_vec(arg->vec, arg->solver, arg->i_bind));
 }
 
 static void co_solve_vec_z(){
 	struct gs_ctx *ctx = aco_get_arg();
 	struct co_solve_args *arg = ctx->arg;
 	gs_interrupt(GS_RETURN
-			| solve_vec_z(arg->v_bind, arg->z_bind, arg->z_band, arg->solver, arg->vec));
+			| solve_vec_z(arg->vec, arg->solver, arg->z_bind, arg->z_band, arg->i_bind));
 }
 
 #endif // M2_SOLVER_INTERRUPTS
@@ -166,27 +161,27 @@ gs_res gs_solve_step(struct fhk_solver *solver, unsigned idx){
 #endif
 }
 
-gs_res gs_solve_vec(struct vec_ref *v_bind, struct fhk_solver *solver, struct vec *vec){
+gs_res gs_solve_vec(struct vec *vec, struct fhk_solver *solver, unsigned *i_bind){
 	if(vec->n_used == 0)
 		return GS_RETURN | FHK_OK;
 
 #ifdef M2_SOLVER_INTERRUPTS
-	return COENTER(&co_solve_vec, {.v_bind=v_bind, .solver=solver, .vec=vec});
+	return COENTER(&co_solve_vec, {.i_bind=i_bind, .solver=solver, .vec=vec});
 #else
-	return GS_RETURN | solve_vec(v_bind, solver, vec);
+	return GS_RETURN | solve_vec(vec, solver i_bind);
 #endif
 }
 
-gs_res gs_solve_vec_z(struct vec_ref *v_bind, gridpos *z_bind, int z_band, struct fhk_solver *solver,
-		struct vec *vec){
+gs_res gs_solve_vec_z(struct vec *vec, struct fhk_solver *solver, gridpos *z_bind,
+		unsigned z_band, unsigned *i_bind){
 
 	if(vec->n_used == 0)
 		return GS_RETURN | FHK_OK;
 
 #ifdef M2_SOLVER_INTERRUPTS
-	return COENTER(&co_solve_vec_z, {.v_bind=v_bind, .z_bind=z_bind, .z_band=z_band,
+	return COENTER(&co_solve_vec_z, {.i_bind=i_bind, .z_bind=z_bind, .z_band=z_band,
 			.solver=solver, .vec=vec});
 #else
-	return GS_RETURN | solve_vec_z(v_bind, z_bind, z_band, solver, vec);
+	return GS_RETURN | solve_vec_z(vec, solver, z_bind, z_band, i_bind);
 #endif
 }

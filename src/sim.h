@@ -10,7 +10,10 @@ typedef uint64_t sim_branchid;
 
 enum {
 	SIM_MUTABLE = 0x1,
-	SIM_FRAME   = 0x2
+	SIM_FRAME   = 0x2,
+
+	SIM_STATIC  = 0,
+	SIM_VSTACK  = SIM_MUTABLE|SIM_FRAME
 };
 
 #define SIM_NO_BRANCH 0

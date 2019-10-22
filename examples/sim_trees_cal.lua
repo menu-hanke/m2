@@ -12,9 +12,7 @@ globals.dynamic {
 
 fhk.expose(globals)
 
-Tree = obj("Tree", types.tree)
-fhk.expose(Tree)
-
+Tree = fhk.expose(obj(component(types.tree)))
 trees = Tree:vec()
 
 local function update_ba()
@@ -24,7 +22,6 @@ local function update_ba()
 	d:area(ba.data)
 	ba:mul(f)
 	ba:mul(1/10000.0) -- XXX: skaalaus että yksiköt menee oikein
-	trees:swap("ba", ba.data)
 end
 
 local function update_baL()
@@ -40,11 +37,6 @@ local function update_baL()
 	ba:mask(spe, enum.species.manty):psumi(ba_Lma, ind)
 	ba:mask(spe, enum.species.kuusi):psumi(ba_Lku, ind)
 	ba:mask(spe, bit.bnot(enum.species.manty + enum.species.kuusi)):psumi(ba_Lko, ind)
-
-	trees:swap("ba_L", ba_L)
-	trees:swap("ba_Lma", ba_Lma)
-	trees:swap("ba_Lku", ba_Lku)
-	trees:swap("ba_Lko", ba_Lko)
 end
 
 local function update_G()
@@ -67,8 +59,6 @@ local function grow_trees()
 	local newd = trees:newband("dbh")
 	f:mul(sur, newf)
 	d:add(i_d, newd)
-	trees:swap("f", newf)
-	trees:swap("dbh", newd)
 end
 
 local newspe = {

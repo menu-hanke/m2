@@ -24,33 +24,66 @@ typedef struct gmap_support {
 
 typedef int (*gmap_resolve)(void *, pvalue *);
 
-#define GV_HEADER\
-	const gmap_support *supp;    \
-	gmap_resolve resolve;        \
-	tvalue udata;                \
-	const char *name;            \
-	unsigned target_type : 16
+#define GV_HEADER(...)          \
+	const gmap_support *supp;   \
+	gmap_resolve resolve;       \
+	tvalue udata;               \
+	const char *name;           \
+	union {                     \
+		struct {                \
+			unsigned type : 8;  \
+			__VA_ARGS__         \
+		};                      \
+		uint64_t u64;           \
+	} flags
+
+// the reason this is done weirdly is because otherwise gcc will emit movzx for each separate
+// 16 bit field and we want to get them all in 1 mov.
+// this is micro-optimized since the gmap_res_* functions can take 10-20% of solver time
+// with fast models and low amount of shared parameters.
+#define GV_GETFLAGS(name,v) typeof((v)->flags) name = {.u64=(v)->flags.u64}
 
 struct gmap_any {
-	GV_HEADER;
+	GV_HEADER();
 };
 
-struct gv_vec {
-	GV_HEADER;
-	unsigned target_offset : 16;
-	unsigned target_band   : 16;
-	struct vec_ref *bind;
+// maps vector component values to fhk variables:
+//
+//  band + *offset_bind ->--v                     **idx_bind
+//  bind->bands: . . . [ ] [*] [ ] . . .               |
+//                          |                          v
+//                          band->data ----> [][][][][][  + ][][][][][][][]
+//                                                        ^- offset
+struct gv_vcomponent {
+	GV_HEADER(
+			unsigned offset : 16;
+			unsigned stride : 16;
+			unsigned band   : 16;
+	);
+	unsigned *offset_bind;
+	unsigned **idx_bind;
+	struct vec **v_bind;
 };
 
+// maps grid elements to fhk variables:
+//    |   |   |
+// ---|---|---|---
+//    |   | *<|------ grid_zoom_up(*bind, POSITION_ORDER, grid->order)
+// ---|---|---|---    + target_offset
+//    |   |   |   
+// ---|---|---|---
 struct gv_grid {
-	GV_HEADER;
-	unsigned target_offset : 16;
+	GV_HEADER(
+			unsigned offset : 16;
+	);
 	struct grid *grid;
 	gridpos *bind;
 };
 
+// map data at pointer to fhk variables:
+// *((tvalue *) ref)
 struct gv_data {
-	GV_HEADER;
+	GV_HEADER();
 	void *ref;
 };
 

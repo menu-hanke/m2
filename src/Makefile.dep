@@ -1,32 +1,34 @@
 main.o: main.c def.h
 bitmap.o: bitmap.c bitmap.h def.h
-fhk_graph.o: fhk_graph.c bitmap.h def.h fhk.h arena.h type.h grid.h
-fhk_solve.o: fhk_solve.c def.h fhk.h bitmap.h arena.h type.h grid.h
-fhk_aux.o: fhk_aux.c fhk.h bitmap.h def.h arena.h type.h grid.h
-type.o: type.c type.h grid.h bitmap.h def.h
+fhk_graph.o: fhk_graph.c bitmap.h def.h fhk.h arena.h type.h grid.h sim.h
+fhk_solve.o: fhk_solve.c def.h fhk.h bitmap.h arena.h type.h grid.h sim.h
+fhk_aux.o: fhk_aux.c fhk.h bitmap.h def.h arena.h type.h grid.h sim.h
+type.o: type.c type.h grid.h bitmap.h def.h sim.h
 arena.o: arena.c def.h arena.h
 sim.o: sim.c arena.h def.h sim.h
-sim_ds.o: sim_ds.c sim.h sim_ds.h grid.h bitmap.h def.h vec.h
-grid.o: grid.c grid.h bitmap.h def.h
-vec.o: vec.c vec.h
-gmap.o: gmap.c gmap.h fhk.h bitmap.h def.h arena.h type.h grid.h vec.h \
- model/model.h sim_ds.h sim.h
+grid.o: grid.c grid.h bitmap.h def.h sim.h
+vec.o: vec.c vec.h sim.h def.h
+gmap.o: gmap.c gmap.h fhk.h bitmap.h def.h arena.h type.h grid.h sim.h \
+ vec.h model/model.h
 gsolve.o: gsolve.c gsolve.h fhk.h bitmap.h def.h arena.h type.h grid.h \
- vec.h gmap.h model/model.h
+ sim.h vec.h gmap.h model/model.h
 vmath.o: vmath.c vmath.h def.h
+vgrid.o: vgrid.c vgrid.h vec.h sim.h grid.h bitmap.h def.h
 model/aux.o: model/aux.c model/model.h model/../type.h model/../grid.h \
- model/../bitmap.h model/../def.h model/../list.h
+ model/../bitmap.h model/../def.h model/../sim.h model/../list.h
 model/model_Const.o: model/model_Const.c model/model_Const.h model/model.h \
- model/../type.h model/../grid.h model/../bitmap.h model/../def.h
+ model/../type.h model/../grid.h model/../bitmap.h model/../def.h \
+ model/../sim.h
 model/model_Lua.o: model/model_Lua.c model/model_Lua.h model/aux.h \
  model/model.h model/../type.h model/../grid.h model/../bitmap.h \
- model/../def.h
+ model/../def.h model/../sim.h
 model/model_R.o: model/model_R.c model/model_R.h model/aux.h model/model.h \
- model/../type.h model/../grid.h model/../bitmap.h model/../def.h
+ model/../type.h model/../grid.h model/../bitmap.h model/../def.h \
+ model/../sim.h
 model/model_SimoC.o: model/model_SimoC.c model/model_SimoC.h model/aux.h \
  model/model.h model/../type.h model/../grid.h model/../bitmap.h \
- model/../def.h
-lua/m2_cdef.lua: lua_exports.h type.h grid.h bitmap.h def.h sim.h \
- sim_ds.h vec.h fhk.h arena.h gmap.h model/model.h gsolve.h vmath.h \
- model/all.h model/model_Const.h model/model_R.h model/aux.h \
- model/model_SimoC.h model/model_Lua.h
+ model/../def.h model/../sim.h
+lua/m2_cdef.lua: lua_exports.h sim.h vec.h grid.h bitmap.h def.h vgrid.h \
+ fhk.h arena.h type.h gmap.h model/model.h gsolve.h vmath.h model/all.h \
+ model/model_Const.h model/model_R.h model/aux.h model/model_SimoC.h \
+ model/model_Lua.h

@@ -24,6 +24,7 @@
 #define TYPE_SIZE(t)     ((unsigned) (1 << ((t) & 3)))
 #define TYPE_BASE(t)     ((t) >> 2)
 #define TYPE_PROMOTE(t)  ((t) | 3)
+#define TYPE_IS_PTYPE(t) (((t)&3) == 3)
 #define TYPE_IS_REAL(t)  (!((t)&~3))
 
 typedef enum type {

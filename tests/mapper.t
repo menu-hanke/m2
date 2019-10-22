@@ -46,6 +46,16 @@ local with_graph = envmaker {
 	}
 }
 
+local type_xyz = maketype("vtest", {
+	x = "real",  --> a
+	y = "real",  --> b
+	z = "real"   --> unsolvable
+})
+
+local function type1(v)
+	return maketype(v, {[v] = "real"})
+end
+
 local function is_computed(x)
 	return x.resolve == ffi.NULL and x.supp == ffi.NULL
 end
@@ -76,15 +86,10 @@ test_map_global = with_graph(function()
 	end
 end)
 
-test_map_vec = with_graph(function()
-	local Vtest = obj("Vtest", maketype("vtest", {
-		x = "real",
-		y = "real",
-		z = "real"
-	}))
-	fhk.expose(Vtest)
+local function runtest_vec_xy(fhk, V)
+	fhk.expose(V)
 
-	local v = Vtest:vec()
+	local v = V:vec()
 	v:alloc(3)
 	local xs = v:band("x")
 	local ys = v:band("y")
@@ -93,7 +98,7 @@ test_map_vec = with_graph(function()
 	xs[1] = 2; ys[1] = 200
 	xs[2] = 3; ys[2] = 300
 
-	local solve_ab = fhk.solve("a", "b"):from(Vtest)
+	local solve_ab = fhk.solve("a", "b"):from(V)
 
 	return function()
 		solve_ab(v)
@@ -101,6 +106,73 @@ test_map_vec = with_graph(function()
 		local rb = solve_ab:res("b")
 		assert(ra[0] == 1 and ra[1] == 2 and ra[2] == 3)
 		assert(rb[0] == 100 and rb[1] == 200 and rb[2] == 300)
+	end
+end
+
+test_map_vec = with_graph(function()
+	return runtest_vec_xy(fhk, obj(component(type_xyz)))
+end)
+
+test_map_vec_components = with_graph(function()
+	return runtest_vec_xy(fhk, obj(
+		component(type1("x")),
+		component(type1("y"))
+	))
+end)
+
+test_map_vec_vec_visibility = with_graph(function()
+	local V1 = fhk.expose(obj(component(type1("x"))))
+	local V2 = fhk.expose(obj(component(type1("y"))))
+
+	local v1, v2 = V1:vec(), V2:vec()
+	v1:alloc(1)
+	v2:alloc(1)
+
+	local solve_b = fhk.solve("b"):from(V1)
+
+	return function()
+		assert(fails(solve_b))
+	end
+end)
+
+test_map_vec_vec_with = with_graph(function()
+	local V1 = fhk.expose(obj(component(type1("x"))))
+	local V2 = fhk.expose(obj(component(type1("y"))))
+
+	local v1, v2 = V1:vec(), V2:vec()
+	v1:alloc(1)
+	v2:alloc(1)
+
+	v1:band("x")[0] = 123
+	v2:band("y")[0] = 456
+
+	local solve_ab = fhk.solve("a", "b"):with(V2):from(V1)
+
+	return function()
+		fhk.bind(V2, v2, 0)
+		solve_ab(v1)
+		assert(solve_ab:res("a")[0] == 123)
+		assert(solve_ab:res("b")[0] == 456)
+	end
+end)
+
+test_map_vec_globals_visibility = with_graph(function()
+	local V = fhk.expose(obj(component(type1("x"))))
+	globals.static { "y" }
+	fhk.expose(globals)
+
+	local v = V:vec()
+	v:alloc(1)
+	v:band("x")[0] = 123
+
+	G.y = 456
+
+	local solve_ab = fhk.solve("a", "b"):from(V)
+
+	return function()
+		solve_ab(v)
+		assert(solve_ab:res("a")[0] == 123)
+		assert(solve_ab:res("b")[0] == 456)
 	end
 end)
 
@@ -133,10 +205,9 @@ if ffi.C.HAVE_SOLVER_INTERRUPTS == 1 then
 		end
 	end)
 
-	test_map_virtual_vec = with_graph(function()
-		local V = obj("V", maketype("v", {
-			x = "real",
-		}))
+	test_map_virtual_comp = with_graph(function()
+		local comp = component(type1("x"))
+		local V = fhk.expose(obj(comp))
 
 		local v = V:vec()
 		v:alloc(3)
@@ -145,9 +216,9 @@ if ffi.C.HAVE_SOLVER_INTERRUPTS == 1 then
 		xs[1] = 2
 		xs[2] = 3
 
-		fhk.expose(V)
-		fhk.virtual("y", V, function(idx)
-			return v:band("x")[idx] + 10
+		fhk.virtual("y", comp, function(vec, idx)
+			assert(vec == v)
+			return vec:band("x")[idx] + 10
 		end)
 
 		local solve_c = fhk.solve("c"):from(V)

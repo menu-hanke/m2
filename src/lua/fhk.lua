@@ -180,28 +180,19 @@ ffi.metatype("struct fhk_graph", graph_mt)
 
 --------------------------------------------------------------------------------
 
-local binder_mt = { __call = function(self, ...) return self.bind(...) end }
+local bind_mt = { __call = function(v) self.ref[0] = v end }
 
-local function binder(ctype)
-	local b = alloc.malloc(ctype)
-	return setmetatable({
-		bind = function(v)
-			b[0] = v
-		end,
-		ref  = b+0
-	}, binder_mt)
+local function bindref(ref)
+	return setmetatable({ref=ref}, bind_mt)
 end
 
-local bind = {
-	z   = function() return binder("gridpos") end,
-	vec = function() return binder("struct vec_ref") end
-}
-
-local function bind_ns(b)
-	return setmetatable({}, {__index=function(self, k)
-		self[k] = b()
-		return self[k]
-	end})
+local function bind_ns(newref)
+	return setmetatable({}, {
+		__index = function(self, k)
+			self[k] = newref()
+			return self[k]
+		end
+	})
 end
 
 local mapper_mt = { __index = {} }
@@ -209,14 +200,16 @@ local mapper_mt = { __index = {} }
 local function hook(G, vars, models)
 	C.gmap_hook(G)
 
+	local arena = alloc.arena()
+
 	local mapper = setmetatable({
-		G        = G,
-		vars     = vars,
-		models   = models,
-		virtuals = {},
-		bind     = {
-			z   = bind_ns(bind.z),
-			vec = bind_ns(bind.vec)
+		G          = G,
+		arena      = arena,
+		vars       = vars,
+		models     = models,
+		virtuals   = {},
+		bind       = {
+			z      = bind_ns(function() return arena:new("gridpos") end)
 		}
 	}, mapper_mt)
 
@@ -225,6 +218,24 @@ local function hook(G, vars, models)
 	end
 
 	return mapper
+end
+
+function mapper_mt.__index:new_objid()
+	if not self._next_objid then
+		self._next_objid = 1ULL
+	end
+
+	if self._next_objid == 0 then
+		error("Ran out of objid bits, maybe create less objects")
+	end
+
+	-- Note: this is not performance sensitive, so if the 64 obj limit becomes a problem,
+	-- then objs can be implemented in gmap as objid array.
+	-- A bitmask is just a much simpler way to do it
+
+	local ret = self._next_objid
+	self._next_objid = bit.lshift(self._next_objid, 1)
+	return ret
 end
 
 function mapper_mt.__index:bind_mapping(mapping, name)
@@ -238,32 +249,35 @@ function mapper_mt.__index:bind_mapping(mapping, name)
 	-- name is a table key of mapper so it will not be gc'd thanks to interning
 	-- (meaning we don't need to copy it over, this pointer will work)
 	mapping.name = name
-	mapping.target_type = v.type.desc
+	mapping.flags.type = v.type.desc
 	C.gmap_bind(self.G, v.fhk_var.idx, ffi.cast("struct gmap_any *", mapping))
 	v.mapping = mapping
 	return mapping
 end
 
-function mapper_mt.__index:vec(name, offset, band, bind)
-	local ret = alloc.malloc("struct gv_vec")
+function mapper_mt.__index:vcomponent(name, offset, stride, band, offset_bind, idx_bind, v_bind)
+	local ret = self.arena:new("struct gv_vcomponent")
 	ret.resolve = C.gmap_res_vec
-	ret.target_offset = offset
-	ret.target_band = band
-	ret.bind = bind
+	ret.flags.offset = offset
+	ret.flags.stride = stride
+	ret.flags.band = band
+	ret.offset_bind = offset_bind
+	ret.idx_bind = idx_bind
+	ret.v_bind = v_bind
 	return self:bind_mapping(ret, name)
 end
 
 function mapper_mt.__index:grid(name, offset, grid, bind)
-	local ret = alloc.malloc("struct gv_grid")
+	local ret = self.arena:new("struct gv_grid")
 	ret.resolve = C.gmap_res_grid
-	ret.target_offset = offset
+	ret.flags.offset = offset
 	ret.grid = grid
 	ret.bind = bind
 	return self:bind_mapping(ret, name)
 end
 
 function mapper_mt.__index:data(name, ref)
-	local ret = alloc.malloc("struct gv_data")
+	local ret = self.arena:new("struct gv_data")
 	ret.resolve = C.gmap_res_data
 	ret.ref = ref
 	return self:bind_mapping(ret, name)
@@ -271,7 +285,7 @@ end
 
 if C.HAVE_SOLVER_INTERRUPTS == 1 then
 	function mapper_mt.__index:virtual(name, func)
-		local ret = alloc.malloc("struct gs_virt")
+		local ret = self.arena:new("struct gs_virt")
 		ret.resolve = C.gs_res_virt
 		ret.handle = #self.virtuals + 1
 		self.virtuals[#self.virtuals + 1] = self:wrap_virtual(name, func)
@@ -297,7 +311,7 @@ end
 function mapper_mt.__index:bind_computed()
 	for name,v in pairs(self.vars) do
 		if not v.mapping then
-			local map = alloc.malloc("struct gmap_any")
+			local map = self.arena:new("struct gmap_any")
 			map.resolve = nil
 			map.supp = nil
 			self:bind_mapping(map, name)
@@ -305,18 +319,10 @@ function mapper_mt.__index:bind_computed()
 	end
 end
 
-function mapper_mt.__index:mapping(name, ctype)
-	local ret = self.vars[name].udata
-	if ctype then
-		ret = ffi.cast(ctype .. "*", ret)
-	end
-	return ret
-end
-
 function mapper_mt.__index:bind_model(name, mod)
 	local model = self.models[name]
 	assert(not model.mapping)
-	local ret = alloc.malloc("struct gmap_model")
+	local ret = self.arena:new("struct gmap_model")
 	ret.name = name
 	ret.mod = mod
 	C.gmap_bind_model(self.G, model.fhk_model.idx, ret)
@@ -475,6 +481,18 @@ function mapper_mt.__index:solver(names)
 	}, solver_func_mt)
 end
 
+function solver_func_mt.__index:with(...)
+	if self.solve then
+		error("Can't modify solver after creation")
+	end
+
+	for _,src in ipairs({...}) do
+		src:mark_visible(self.mapper, self.init_v)
+	end
+
+	return self
+end
+
 function solver_func_mt.__index:from(src)
 	src:mark_visible(self.mapper, self.init_v)
 	src:mark_nonconstant(self.mapper, self.solver.reset_v)
@@ -540,7 +558,7 @@ local function inject(env, mapper)
 	env.fhk = {
 		solve   = function(...) return mapper:solver({...}) end,
 		bind    = function(x, ...) x:bind(mapper, ...) end,
-		expose  = function(x) x:expose(mapper) end,
+		expose  = function(x) x:expose(mapper) return x end,
 		typeof  = function(x) return mapper.vars[x].type end,
 		virtual = function(name, x, f) return x:virtualize(mapper, name, f) end
 	}
@@ -554,7 +572,6 @@ return {
 	build_graph     = build_graph,
 	create_models   = create_models,
 	hook            = hook,
-	bind            = bind,
 	support         = support,
 	inject          = inject,
 	rebind          = rebind
