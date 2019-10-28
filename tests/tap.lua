@@ -1,5 +1,8 @@
 local env_mt = {
 	__newindex = function(self, k, v)
+		if self._only and not self._only[k] then
+			return
+		end
 		if type(k) == "string" and k:sub(1, 5) == "test_" then
 			table.insert(self._tests, {name=k, func=v})
 		end
@@ -38,6 +41,7 @@ end
 
 local function main(args)
 	local env = env()
+	rawset(env, "_only", args.run)
 
 	for i,f in ipairs(args.tests) do
 		collect(env, f)
@@ -59,7 +63,8 @@ else
 	local cli = require "cli"
 	return {
 		flags = {
-			t = cli.addopt("tests")
+			t = cli.addopt("tests"),
+			r = cli.setopt("run")
 		},
 		main = main
 	}
