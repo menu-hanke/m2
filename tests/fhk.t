@@ -112,6 +112,34 @@ test_computed_check = valuetest(
 	a = 1
 })
 
+test_recursive_model_bound = valuetest(
+{
+	m("x,y->a,b", {1, 2})                  + {"x", "y"} - {"a", "b"},
+	m("b->y", 3)                           + "b"        - "y",
+	m("y0", 4)            * {k=100, c=100}              - "y",
+	v("x", 0),
+},
+{
+	a = 1
+})
+
+test_partial_beta_bound = valuetest(
+{
+	m("x->a", 1)  * {k=1, c=1} + "x" - "a",
+	m("y->a", 2)  * {k=2, c=2} + "y" - "a",
+	m("xp,xq->x", 3) % "xp"^ival{0, 1, m=0, M=100} % "xq"^ival{0, 1, m=0, M=200}
+	                           + "xp" - "x",
+	m("yp,yq->y", 4) % "yp"^ival{0, 1, m=0, M=100} % "yq"^ival{0, 1, m=0, M=200}
+	                           + "yp" - "y",
+	m("xp0", -1)               - "xp",
+	m("xq0", 0.5)              - "xq",
+	m("yp0", 0.5)              - "yp",
+	m("yq0", -1)               - "yq"
+},
+{
+	a = 1
+})
+
 test_fail_no_chain = failtest(
 {
 	m("malli") + "x" - "a"

@@ -381,6 +381,7 @@ static fhk_v2 mm_solve_chain_m(struct fhk_graph *G, struct fhk_model *m, double 
 
 		// for constraints, the value matters, not the cost
 		// so we actually solve the value here
+		mm_bound_cost_comp_v(G, x, INFINITY);
 		mm_solve_value(G, x);
 
 		// recompute full bounds here since other constraints may
