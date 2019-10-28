@@ -195,6 +195,7 @@ typedef union fhk_mbmap { uint8_t u8; struct { unsigned has_bound : 1; unsigned 
 typedef union fhk_vbmap { uint8_t u8; struct { unsigned given : 1; unsigned mark : 1; unsigned chain_selected : 1; unsigned has_value : 1; unsigned has_bound : 1; unsigned target : 1; } __attribute__((packed));  } fhk_vbmap;
 struct fhk_model {
  unsigned idx : 16;
+ unsigned uidx : 16;
  unsigned n_check : 8;
  unsigned n_param : 8;
  unsigned n_return : 8;
@@ -210,6 +211,7 @@ struct fhk_model {
 };
 struct fhk_var {
  unsigned idx : 16;
+ unsigned uidx : 16;
  unsigned n_fwd : 16;
  unsigned n_mod : 8;
  unsigned hptr : 8;
@@ -226,13 +228,14 @@ enum {
  FHK_SOLVER_FAILED = 1,
  FHK_VAR_FAILED = 2,
  FHK_MODEL_FAILED = 3,
+ FHK_RECURSION = 4
 };
 struct fhk_einfo {
  int err;
  struct fhk_model *model;
  struct fhk_var *var;
 };
-struct fhk_graph fhk_graph;
+struct fhk_graph;
 typedef int (*fhk_model_exec)(struct fhk_graph *G, void *udata, pvalue *ret, pvalue *args);
 typedef int (*fhk_var_resolve)(struct fhk_graph *G, void *udata, pvalue *value);
 typedef const char *(*fhk_desc)(void *udata);
@@ -248,7 +251,6 @@ struct fhk_graph {
  struct fhk_model *models;
  fhk_mbmap *m_bitmaps;
  struct fhk_einfo last_error;
- unsigned dirty : 1;
  void *solver_state;
  void *udata;
 };
@@ -260,21 +262,26 @@ struct fhk_solver {
  struct fhk_var **xs;
  pvalue **res;
 };
+void fhk_init(struct fhk_graph *G, bm8 *init_v);
+void fhk_graph_init(struct fhk_graph *G);
+void fhk_subgraph_init(struct fhk_graph *G);
 void fhk_reset(struct fhk_graph *G, fhk_vbmap vmask, fhk_mbmap mmask);
 void fhk_reset_mask(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
-void fhk_supp(bm8 *vmask, bm8 *mmask, struct fhk_var *y);
+void fhk_compute_reset_mask(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
 void fhk_inv_supp(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
+size_t fhk_subgraph_size(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
+void fhk_copy_subgraph(void *dest, struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
+void fhk_transfer_mask(bm8 *mH, bm8 *mG, bm8 *mask, size_t n);
 void fhk_model_set_cost(struct fhk_model *m, double k, double c);
 void fhk_check_set_cost(struct fhk_check *c, double out, double in);
 double fhk_solved_cost(struct fhk_model *m);
 int fhk_solve(struct fhk_graph *G, size_t nv, struct fhk_var **ys);
+int fhk_reduce(struct fhk_graph *G, size_t nv, struct fhk_var **ys, bm8 *vmask, bm8 *mmask);
 struct fhk_graph *fhk_alloc_graph(arena *arena, size_t n_var, size_t n_mod);
 void fhk_copy_checks(arena *arena, struct fhk_model *m, size_t n_check, struct fhk_check *checks);
 void fhk_copy_params(arena *arena, struct fhk_model *m, size_t n_param, struct fhk_var **params);
 void fhk_copy_returns(arena *arena, struct fhk_model *m, size_t n_ret, struct fhk_var **returns);
 void fhk_compute_links(arena *arena, struct fhk_graph *G);
-struct fhk_var *fhk_get_var(struct fhk_graph *G, unsigned idx);
-struct fhk_model *fhk_get_model(struct fhk_graph *G, unsigned idx);
 void fhk_solver_init(struct fhk_solver *s, struct fhk_graph *G, unsigned nv);
 void fhk_solver_destroy(struct fhk_solver *s);
 void fhk_solver_bind(struct fhk_solver *s, unsigned vidx, pvalue *res);
@@ -355,13 +362,11 @@ int gmap_res_grid(void *v, pvalue *p);
 int gmap_res_data(void *v, pvalue *p);
 void gmap_mark_visible(struct fhk_graph *G, bm8 *vmask, unsigned reason, tvalue parm);
 void gmap_mark_nonconstant(struct fhk_graph *G, bm8 *vmask, unsigned reason, tvalue parm);
-void gmap_make_reset_masks(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
-void gmap_init(struct fhk_graph *G, bm8 *init_v);
        
 typedef uint32_t gs_res;
 enum {
- GS_RETURN = 1 << 31,
- GS_INTERRUPT_VIRT = 1 << 30,
+ GS_RETURN = 0,
+ GS_INTERRUPT_VIRT = 1 << 31,
  GS_ARG_MASK = (1 << 16) - 1
 };
 struct gs_virt {
@@ -373,7 +378,7 @@ gs_ctx *gs_create_ctx();
 void gs_destroy_ctx(gs_ctx *ctx);
 void gs_enter(gs_ctx *ctx);
 void gs_interrupt(gs_res ir);
-gs_res gs_resume(pvalue iv);
+gs_res gs_resume(gs_ctx *ctx, pvalue iv);
 int gs_res_virt(void *v, pvalue *p);
 gs_res gs_solve_step(struct fhk_solver *solver, unsigned idx);
 gs_res gs_solve_vec(struct vec *vec, struct fhk_solver *solver, unsigned *i_bind);

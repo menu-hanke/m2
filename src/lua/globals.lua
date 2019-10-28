@@ -43,12 +43,12 @@ function globals_mt.__index:expose(mapper)
 	end
 end
 
-function globals_mt.__index:mark_visible(mapper, vmask)
-	mapper:mark_visible(vmask, C.GMAP_BIND_GLOBAL, typing.tvalue.u64(0))
+function globals_mt.__index:mark_visible(mapper, G, vmask)
+	G:mark_visible(vmask, C.GMAP_BIND_GLOBAL, typing.tvalue.u64(0))
 end
 
-function globals_mt.__index:mark_nonconstant(mapper, vmask)
-	mapper:mark_nonconstant(vmask, C.GMAP_BIND_GLOBAL, typing.tvalue.u64(0))
+function globals_mt.__index:mark_nonconstant(mapper, G, vmask)
+	G:mark_nonconstant(vmask, C.GMAP_BIND_GLOBAL, typing.tvalue.u64(0))
 end
 
 function globals_mt.__index:solver_func(mapper, solver)

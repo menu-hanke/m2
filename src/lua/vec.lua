@@ -457,12 +457,12 @@ function obj_mt.__index:solver_func(mapper, solver)
 	end
 end
 
-function obj_mt.__index:mark_visible(mapper, vmask)
-	mapper:mark_visible(vmask, C.GMAP_BIND_OBJECT, typing.tvalue.u64(self.id))
+function obj_mt.__index:mark_visible(mapper, G, vmask)
+	G:mark_visible(vmask, C.GMAP_BIND_OBJECT, typing.tvalue.u64(self.id))
 end
 
-function obj_mt.__index:mark_nonconstant(mapper, vmask)
-	mapper:mark_nonconstant(vmask, C.GMAP_BIND_OBJECT, typing.tvalue.u64(self.id))
+function obj_mt.__index:mark_nonconstant(mapper, G, vmask)
+	G:mark_nonconstant(vmask, C.GMAP_BIND_OBJECT, typing.tvalue.u64(self.id))
 end
 
 --------------------------------------------------------------------------------

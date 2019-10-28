@@ -27,7 +27,7 @@ struct heap {
 };
 
 struct solver_state {
-	unsigned cycle : 1;
+	bool cycle;
 	struct heap *heap;
 	jmp_buf exc_env;
 };
@@ -39,6 +39,10 @@ static fhk_v2 mm_bound_cost_m(struct fhk_graph *G, struct fhk_model *m, double b
 static void mm_solve_chain_v(struct fhk_graph *G, struct fhk_var *y, double beta);
 static fhk_v2 mm_solve_chain_m(struct fhk_graph *G, struct fhk_model *m, double beta);
 static void mm_solve_value(struct fhk_graph *G, struct fhk_var *y);
+
+static fhk_v2 rd_bound_cost_v(struct fhk_graph *G, struct fhk_var *y);
+static void rd_mark_v(struct fhk_graph *G, struct fhk_var *y, bm8 *vmask, bm8 *mmask);
+static void rd_mark_m(struct fhk_graph *G, struct fhk_model *m, bm8 *vmask, bm8 *mmask);
 
 static void dj_mark_v(struct fhk_graph *G, struct fhk_var *y);
 static void dj_mark_m(struct fhk_graph *G, struct fhk_model *m);
@@ -110,19 +114,20 @@ static fhk_v2 costf_invSv(struct fhk_model *m, fhk_v2 cost);
 static double max(double a, double b);
 static double min(double a, double b);
 static fhk_v2 minv(fhk_v2 a, fhk_v2 b);
-static fhk_v2 cst_bound(struct fhk_graph *G, struct fhk_model *m, bool resolve);
+static fhk_v2 cst_bound(struct fhk_graph *G, struct fhk_model *m, bool resolve, bool use_value);
 static fhk_v2 par_bound(struct fhk_model *m);
-#define CST_BOUND(G, m) cst_bound((G), (m), false)
-#define CST_BOUND_RESOLVE(G, m) cst_bound((G), (m), true)
+#define CST_BOUND(G, m)          cst_bound((G), (m), false, true)
+#define CST_BOUND_RESOLVE(G, m)  cst_bound((G), (m), true, true)
+#define CST_BOUND_ANYVALUE(G, m) cst_bound((G), (m), false, false)
 
 int fhk_solve(struct fhk_graph *G, size_t nv, struct fhk_var **ys){
-	assert(!G->dirty);
-	DD(G->dirty = 1);
-
 	struct solver_state s;
-	s.cycle = 0;
+	s.cycle = false;
 
-	if(setjmp(s.exc_env))
+	if(UNLIKELY(!!G->solver_state))
+		FAIL(FHK_RECURSION, NULL, NULL);
+
+	if(UNLIKELY(setjmp(s.exc_env)))
 		return G->last_error.err;
 
 	G->solver_state = &s;
@@ -140,6 +145,36 @@ int fhk_solve(struct fhk_graph *G, size_t nv, struct fhk_var **ys){
 	}else{
 		for(size_t i=0;i<nv;i++)
 			mm_solve_value(G, ys[i]);
+	}
+
+	G->solver_state = NULL;
+
+	return FHK_OK;
+}
+
+int fhk_reduce(struct fhk_graph *G, size_t nv, struct fhk_var **ys, bm8 *vmask, bm8 *mmask){
+	// bitmaps of G should be same that you're going to pass fhk_solve
+	// vmask and mmask should be zeros (unless you're looking to OR them)
+	
+	// I can't think of any reason why anyone would call this function from inside fhk
+	// but check it anyway
+	if(UNLIKELY(!!G->solver_state))
+		FAIL(FHK_RECURSION, NULL, NULL);
+
+	for(size_t i=0;i<nv;i++){
+		struct fhk_var *y = ys[i];
+		rd_bound_cost_v(G, y);
+
+		if(UNLIKELY(UNSOLVABLE(y))){
+			// we don't have a state here so we can't call fail(),
+			// just set the errors manually instead
+			G->last_error.err = FHK_SOLVER_FAILED;
+			G->last_error.model = NULL;
+			G->last_error.var = y;
+			return FHK_SOLVER_FAILED;
+		}
+
+		rd_mark_v(G, y, vmask, mmask);
 	}
 
 	return FHK_OK;
@@ -215,22 +250,22 @@ static fhk_v2 mm_bound_cost_v(struct fhk_graph *G, struct fhk_var *y, double bet
 	return bound;
 }
 
-static fhk_v2 mm_bound_cost_m(struct fhk_graph *G, struct fhk_model *m, double beta){
+static inline fhk_v2 mm_bound_cost_m(struct fhk_graph *G, struct fhk_model *m, double beta){
 	// Note: on some (rare) weird graphs, this function could be entered recursively via multi
 	// return models where a return value causes a cycle.
 	// that's not a problem: the solver can't get stuck since it can't enter multiple times
 	// via the same variable. it will just cause extra work and may also set the low bound
 	// too low, which will cause more extra work when the chain is solved.
-	// TODO: should make test case for this.
 
 	// Note (micro-optimization): this only needs to be recalculated when beta changes,
 	// not every time we go here
 
-	if(UNLIKELY(m->bitmap->has_bound))
-		return m->cost_bound;
-
+	fhk_mbmap *bm = m->bitmap;
 	double beta_S = costf_invS(m, beta);
 	fhk_v2 bound_S = CST_BOUND_RESOLVE(G, m);
+
+	if(UNLIKELY(bm->has_bound))
+		return m->cost_bound;
 
 	if(MIN(bound_S) >= beta_S){
 		dv("%s: beta bound from constraints (%f >= %f)\n", DESCM(m), MIN(bound_S), beta_S);
@@ -247,7 +282,7 @@ static fhk_v2 mm_bound_cost_m(struct fhk_graph *G, struct fhk_model *m, double b
 			// If another chain will be chosen for x, we may still be able to use
 			// this model in the future.
 			// We can still get a valid low cost bound for the model.
-			STATE()->cycle = 1;
+			STATE()->cycle = true;
 			MAX(bound_S) = INFINITY;
 			dv("%s: cycle caused by param: %s\n", DESCM(m), DESCV(x));
 			continue;
@@ -465,9 +500,146 @@ static void mm_solve_value(struct fhk_graph *G, struct fhk_var *y){
 		resolve_value(G, y);
 }
 
+static fhk_v2 rd_bound_cost_v(struct fhk_graph *G, struct fhk_var *y){
+	// this function finds the same bound as mm_bound_cost_v, but:
+	// * no beta bounds
+	// * assume all variables, including given, can have any value
+	// * also bound constraint vars
+	// * solver can't fail
+	// * no need to setup a state
+	
+	fhk_vbmap *bm = y->bitmap;
+
+	// cycle
+	if(MARKED(bm))
+		return (fhk_v2){0, INFINITY};
+
+	if(bm->has_bound)
+		return y->cost_bound;
+
+	if(bm->given){
+		init_given_cost(y);
+		return y->cost_bound;
+	}
+
+	MARK(bm);
+
+	fhk_v2 vbound = { INFINITY, INFINITY };
+	for(unsigned i=0;i<y->n_mod;i++){
+		struct fhk_model *m = y->models[i];
+
+		// we don't care about the bounds here, however they must be solved to include
+		// the checks and their full induced subgraph later
+		for(unsigned j=0;j<m->n_check;j++)
+			rd_bound_cost_v(G, m->checks[j].var);
+
+		fhk_v2 mbound = CST_BOUND_ANYVALUE(G, m);
+		for(unsigned j=0;j<m->n_param;j++)
+			mbound += rd_bound_cost_v(G, m->params[j]);
+
+		mbound = costfv(m, mbound);
+		m->cost_bound = mbound;
+		m->bitmap->has_bound = 1;
+
+		dv("%s: model absolute cost bound: [%f, %f]\n", DESCM(m), MIN(mbound), MAX(mbound));
+		vbound = minv(vbound, mbound);
+	}
+
+	UNMARK(bm);
+
+	y->cost_bound = vbound;
+	bm->has_bound = 1;
+
+	dv("%s: var absolute cost bound: [%f, %f]\n", DESCV(y), MIN(vbound), MAX(vbound));
+	return vbound;
+}
+
+static void rd_mark_v(struct fhk_graph *G, struct fhk_var *y, bm8 *vmask, bm8 *mmask){
+	if(MARKED(y->bitmap))
+		return;
+
+	MARK(y->bitmap);
+	vmask[y->idx] = 0xff;
+
+	if(y->bitmap->given){
+		dv("%s: include in subgraph as given\n", DESCV(y));
+		return;
+	}
+
+	double beta = MAX(y->cost_bound);
+	bool havebeta = false;
+
+	// first pick the models we can't prove are never selected (note the strict inequality here)
+	for(unsigned i=0;i<y->n_mod;i++){
+		struct fhk_model *m = y->models[i];
+		if(MIN(m->cost_bound) < beta){
+
+			// check only for equality here: it's never possible that MAX(m->cost_bound) < beta,
+			// since y->cost_bound is the minimum bound of all models
+			if(MAX(m->cost_bound) == beta)
+				havebeta = true;
+
+			dv("%s: pick model %s in subgraph [%f, %f], beta=%f\n",
+					DESCV(y), DESCM(m), MIN(m->cost_bound), MAX(m->cost_bound), beta);
+
+			rd_mark_m(G, m, vmask, mmask);
+		}
+	}
+
+	if(havebeta)
+		// our selected models now quarantee us a solution in [alpha, beta] where alpha < beta
+		// (strict inequality), so we don't need to look at models where min=beta.
+		// this sometimes allows us to skip models, eg.
+		//   m1 : [0, 1]
+		//   m2 : [0.5, 100]
+		//   m3 : [1, 1]
+		// we could skip m3, even though it has min <= beta (equality holds)
+		return;
+
+	// selected models don't quarantee us a solution <=beta (ie. they have max>beta)
+	// we already picked all where min<beta, so the models remaining have min>=beta.
+	// since beta = min(max), there must be at least 1 model with min=max=beta, so we pick that.
+	// (there might be many but we only need 1)
+
+	for(unsigned i=0;i<y->n_mod;i++){
+		struct fhk_model *m = y->models[i];
+		if(MAX(m->cost_bound) == beta){
+			assert(HASVALUE(m->cost_bound));
+			dv("%s: pick model %s as only model in subgraph [%f, %f]\n",
+					DESCV(y), DESCM(m), MIN(m->cost_bound), MAX(m->cost_bound));
+			rd_mark_m(G, m, vmask, mmask);
+			return;
+		}
+	}
+
+	assert(y->n_mod == 0);
+
+	dv("%s: pick in subgraph with no models and not given\n", DESCV(y));
+}
+
+static void rd_mark_m(struct fhk_graph *G, struct fhk_model *m, bm8 *vmask, bm8 *mmask){
+	if(MARKED(m->bitmap))
+		return;
+
+	MARK(m->bitmap);
+	mmask[m->idx] = 0xff;
+
+	for(unsigned i=0;i<m->n_check;i++)
+		rd_mark_v(G, m->checks[i].var, vmask, mmask);
+
+	for(unsigned i=0;i<m->n_param;i++)
+		rd_mark_v(G, m->params[i], vmask, mmask);
+
+	// returns don't need to be marked recursively, if they are needed they are the param/check
+	// of another model and marked then. however all returns need to be present in the subgraph
+	// so we just put it in the mask for now
+	for(unsigned i=0;i<m->n_return;i++)
+		vmask[m->returns[i]->idx] = 0xff;
+}
+
 static void dj_mark_v(struct fhk_graph *G, struct fhk_var *y){
 	fhk_vbmap *bm = y->bitmap;
-	assert(bm->has_bound);
+	assert(bm->has_bound && !UNSOLVABLE(y));
 
 	if(MARKED(bm))
 		return;
@@ -499,11 +671,11 @@ static void dj_mark_v(struct fhk_graph *G, struct fhk_var *y){
 		heap_add_unordered(STATE()->heap, y, COST(m0));
 	}
 
-	double max_cost = MAX(y->cost_bound);
+	double beta = MAX(y->cost_bound);
 	for(unsigned i=0;i<y->n_mod;i++){
 		struct fhk_model *m = y->models[i];
 
-		if(MIN(m->cost_bound) <= max_cost && !UNSOLVABLE(m))
+		if(MIN(m->cost_bound) <= beta)
 			dj_mark_m(G, m);
 	}
 }
@@ -522,8 +694,7 @@ static void dj_mark_m(struct fhk_graph *G, struct fhk_model *m){
 }
 
 static void dj_visit_v(struct fhk_graph *G, struct fhk_var *y){
-	fhk_vbmap *bm = y->bitmap;
-	assert(MARKED(bm) && CHAINSELECTED(bm));
+	assert(MARKED(y->bitmap) && CHAINSELECTED(y->bitmap));
 
 	// Note: this is an inefficient way to do the check, ways to optimize this are:
 	// * during marking, collect the models in the subgraph to a separate array and iterate
@@ -721,8 +892,7 @@ static void dj_solve_bounded(struct fhk_graph *G, size_t nv, struct fhk_var **ys
 	}
 
 	for(size_t i=0;i<nv;i++){
-		fhk_vbmap *bm = ys[i]->bitmap;
-		assert(CHAINSELECTED(bm));
+		assert(CHAINSELECTED(ys[i]->bitmap));
 		resolve_value(G, ys[i]);
 	}
 }
@@ -1025,7 +1195,7 @@ INLINE FAST_MATH static fhk_v2 minv(fhk_v2 a, fhk_v2 b){
 #endif
 
 INLINE FAST_MATH NOUNROLL static fhk_v2 cst_bound(struct fhk_graph *G, struct fhk_model *m,
-		bool resolve){
+		bool resolve, bool use_value){
 
 	fhk_v2 ret = {0, 0};
 	size_t n_check = m->n_check;
@@ -1043,10 +1213,8 @@ INLINE FAST_MATH NOUNROLL static fhk_v2 cst_bound(struct fhk_graph *G, struct fh
 			resolve_given(G, x);
 		}
 
-		assert(!bm->given || bm->has_value);
-
 		double cost = c->cost[!check_cst(&c->cst, x->value)];
-		if(LIKELY(bm->has_value))
+		if(LIKELY(use_value && bm->has_value))
 			ret += cost;
 		else
 			ret += c->cost; // ret += {in, out}

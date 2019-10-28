@@ -13,7 +13,7 @@ local function from_conf(cfg)
 
 	local fhk = require("fhk")
 	local mapper = fhk.hook(fhk.build_graph(cfg.fhk_vars, cfg.fhk_models))
-	mapper:create_models(cfg.calib)
+	mapper:bind_models(fhk.create_models(cfg.fhk_vars, cfg.fhk_models, cfg.calib))
 
 	env:inject_base()
 	env:inject_fhk(mapper)

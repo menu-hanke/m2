@@ -4,26 +4,61 @@ local bg = require "buildgraph"
 local build, v, m = bg.build, bg.v, bg.m
 local any, none, ival = bg.any, bg.none, bg.ival
 
-local function valuetest(graph, values)
+local function valuetest(graph, answers)
 	return function()
-		local g = build(graph)
-		local solve = {}
-		for name,_ in pairs(values) do table.insert(solve, name) end
-		local r = g:solve(g:vpointers(solve))
-		assert(r == ffi.C.FHK_OK)
-		for name,val in pairs(values) do
-			assert(g:value(name) == val)
+		local g, _, _, given = build(graph)
+		local targets = {}
+		for name,_ in pairs(answers) do table.insert(targets, name) end
+		local solve = g:solve(targets)
+		local r, res = solve(given)
+		assert(r == true)
+		for name,val in pairs(answers) do
+			assert(res[name] == val)
 		end
 	end
 end
 
 local function failtest(graph, solve, status)
 	return function()
-		local g = build(graph)
-		local r = g:solve(g:vpointers(solve))
-		assert(r == status)
+		local g, _, _, given = build(graph)
+		local r, err = g:solve(solve)(given)
+		assert(r == false)
+		assert(err.err == status)
 	end
 end
+
+local function keyseq(tab, keys)
+	local kl = {}
+
+	-- keys <= tab
+	for _,k in ipairs(keys) do
+		assert(tab[k] ~= nil)
+		kl[k] = true
+	end
+
+	-- tab <= keys
+	for k,_ in pairs(tab) do
+		assert(kl[k])
+	end
+end
+
+local function reducetest(graph1, opt)
+	return function()
+		local g, _, _, given = build(graph1)
+		g:given_values(given)
+		local r, h = g:reduce(opt.ys)
+		if opt.fails then
+			assert(r == false)
+			assert(h.err == opt.fails)
+		else
+			assert(r == true)
+			if opt.vars then keyseq(h.vars, opt.vars) end
+			if opt.models then keyseq(h.models, opt.models) end
+		end
+	end
+end
+
+--------------------------------------------------------------------------------
 
 test_1model = valuetest(
 {
@@ -153,3 +188,104 @@ test_fail_constraint = failtest(
 	v("x", 0)
 },
 { "a" }, ffi.C.FHK_SOLVER_FAILED)
+
+test_reduce1 = reducetest(
+{
+	m("malli") + "x" - "a",
+	v("x", 0)
+},
+{
+	ys     = {"a"},
+	vars   = {"x", "a"},
+	models = {"malli"}
+})
+
+test_reduce_omit_model = reducetest(
+{
+	m("halpa")  * {k=1,   c=1  } + "x" - "a",
+	m("kallis") * {k=100, c=100} + "x" - "a",
+	v("x", 0)
+},
+{
+	ys     = {"a"},
+	vars   = {"x", "a"},
+	models = {"halpa"}
+})
+
+test_reduce_omit_var = reducetest(
+{
+	m("halpa")  * {k=1,   c=1  } + "x" - "a",
+	m("kallis") * {k=100, c=100} + "y" - "a",
+	v("x", 0),
+	v("y", 0)
+},
+{
+	ys     = {"a"},
+	vars   = {"x", "a"},
+	models = {"halpa"}
+})
+
+test_reduce_keep_strict_beta = reducetest(
+{
+	m("mcst")   % "x"^ival{100, 200} * {k=1,   c=1}   + "x" - "a",
+	m("mnocst")                      * {k=100, c=100} + "x" - "a",
+	v("x", 0)
+},
+{
+	ys     = {"a"},
+	vars   = {"x", "a"},
+	models = {"mcst", "mnocst"}
+})
+
+test_reduce_skip_high_beta = reducetest(
+{
+	m("m1")   % "x"^ival{100, 200}           + "x" - "a",
+	m("m2")   % "x"^ival{0, 1, m=50, M=100}  + "x" - "a",
+	m("m3")   % "x"^ival{1, 2, m=100, M=100} + "x" - "a",
+	v("x", 0)
+},
+{
+	ys     = {"a"},
+	vars   = {"x", "a"},
+	models = {"m1", "m2"}
+})
+
+test_reduce_omit_high_cycle = reducetest(
+{
+	m("x->y") * {k=100, c=100} + "x" - "y",
+	m("y->x")                  + "y" - "x",
+	m("x->z")                  + "x" - "z",
+	m("y->z")                  + "y" - "z",
+	m("x_0")  * {k=100, c=100} - "x",
+	m("y_0")                   - "y"
+},
+{
+	ys     = {"z"},
+	vars   = {"y", "z"},
+	models = {"y->z", "y_0"}
+})
+
+test_reduce_retain_bounded_cycle = reducetest(
+{
+	m("x->y")                  + "x" - "y",
+	m("y->x")                  + "y" - "x",
+	m("x->z")                  + "x" - "z",
+	m("y->z")                  + "y" - "z",
+	m("x_0")  % "w"^ival{0, 1} - "x",
+	m("y_0")  % "w"^ival{1, 2} - "y",
+	v("w", 0)
+},
+{
+	ys     = {"z"},
+	vars   = {"x", "y", "z", "w"},
+	models = {"x->y", "y->x", "x->z", "y->z", "x_0", "y_0"}
+})
+
+test_reduce_fail_no_solution = reducetest(
+{
+	m("x->y") + "x" - "y"
+},
+{
+	ys    = {"y"},
+	fails = ffi.C.FHK_SOLVER_FAILED
+})

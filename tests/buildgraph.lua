@@ -3,16 +3,12 @@ local fhk = require "fhk"
 local fhkdbg = require "fhkdbg"
 local typing = require "typing"
 
-local varset_mt = {
-	__index = function(self, k)
-		self[k] = { type = typing.builtin_types.real }
-		return self[k]
-	end
-}
+local function vsetdefault(vars, name)
+	vars[name] = vars[name] or { type = typing.builtin_types.real }
+end
 
 local function collect(def)
-	local vars = setmetatable({}, varset_mt)
-	local models, values = {}, {}
+	local vars, models, values = {}, {}, {}
 
 	for i,x in ipairs(def) do
 		if x.kind == "model" then
@@ -26,6 +22,12 @@ local function collect(def)
 		end
 	end
 
+	for _,m in pairs(models) do
+		for c,_ in pairs(m.checks) do vsetdefault(vars, c) end
+		for _,p in ipairs(m.params) do vsetdefault(vars, p) end
+		for _,r in ipairs(m.returns) do vsetdefault(vars, r) end
+	end
+
 	return vars, models, values
 end
 
@@ -37,41 +39,22 @@ local function rep(v, n)
 	return ret
 end
 
-local function make_cst(vars, m, f)
-	local rtypes = {}
-	for i,vname in ipairs(m.returns) do
-		rtypes[i] = vars[i].type.desc
-	end
-
-	if type(f) == "number" then
-		f = rep(f, #rtypes)
-	end
-
-	return function(ret)
-		for i,rt in ipairs(rtypes) do
-			ret[i-1] = ffi.C.vimportd(f[i], rt)
-		end
-	end
-end
-
-local function make_fs(exf, vars, models)
+local function make_exf(g, models)
 	for name,m in pairs(models) do
-		if type(m.f) ~= "function" then
-			m.f = make_cst(vars, m, m.f)
+		local f = m.f
+		if type(f) ~= "function" then
+			local data = type(f) == "number" and rep(f, #m.returns) or f
+			f = function() return unpack(data) end
 		end
-		exf[name] = m.f
+		g:exf(name, f)
 	end
 end
 
 local function build(def)
 	local vars, models, values = collect(def)
 	local g = fhkdbg.hook(fhk.build_graph(vars, models))
-	make_fs(g.exf, vars, models)
-	local given = {}
-	for v,_ in pairs(values) do table.insert(given, v) end
-	g:given(given)
-	g:setvalues(values)
-	return g
+	make_exf(g, models)
+	return g, vars, models, values
 end
 
 local function impl(models, impls)
@@ -85,7 +68,7 @@ local function mapper(opt)
 	local vars, models = collect(opt.graph)
 	impl(models, opt.impl or {})
 	local mp = fhk.hook(fhk.build_graph(vars, models))
-	mp:create_models(opt.calib)
+	mp:bind_models(fhk.create_models(vars, models, opt.calib))
 	return mp
 end
 

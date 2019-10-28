@@ -17,8 +17,10 @@ local function envmaker(opt)
 			env:inject_fhk(mapper)
 			debug.setfenv(setup, env.env)
 			local run = setup()
-			sim:compile()
-			run()
+			if run then
+				sim:compile()
+				run()
+			end
 		end
 	end
 end
@@ -32,6 +34,7 @@ end
 local with_graph = envmaker {
 	graph = {
 		m("idx2a")                             + "x"        - "a",
+		m("idx2d")                             + "x"        - "d",
 		m("idxy2ab")                           + {"x", "y"} - {"a", "b"},
 		m("idy2c")                             + "y"        - "c",
 		m("idx2d_pos") %"x"^ival{0, math.huge} + "x"        - "x_unsat_cst",
@@ -39,6 +42,7 @@ local with_graph = envmaker {
 	},
 	impl = {
 		idx2a     = {lang="Lua", opt="models::id"},
+		idx2d     = {lang="Lua", opt="models::id"},
 		idxy2ab   = {lang="Lua", opt="models::id"},
 		idy2c     = {lang="Lua", opt="models::id"},
 		idx2d_pos = {lang="Lua", opt="models::id"},
@@ -47,24 +51,13 @@ local with_graph = envmaker {
 }
 
 local type_xyz = maketype("vtest", {
-	x = "real",  --> a
-	y = "real",  --> b
+	x = "real",  --> a, d
+	y = "real",  --> b, c
 	z = "real"   --> unsolvable
 })
 
 local function type1(v)
 	return maketype(v, {[v] = "real"})
-end
-
-local function is_computed(x)
-	return x.resolve == ffi.NULL and x.supp == ffi.NULL
-end
-
-test_map_nothing = function()
-	local mp = bg.mapper { graph = { m("malli") + "x" - "a" } }
-	mp:bind_computed()
-	assert(is_computed(mp.vars.x.mapping))
-	assert(is_computed(mp.vars.a.mapping))
 end
 
 test_remap_not_allowed = function()
@@ -128,11 +121,7 @@ test_map_vec_vec_visibility = with_graph(function()
 	v1:alloc(1)
 	v2:alloc(1)
 
-	local solve_b = fhk.solve("b"):from(V1)
-
-	return function()
-		assert(fails(solve_b))
-	end
+	assert(fails(function() fhk.solve("b"):from(V1):create_solver() end))
 end)
 
 test_map_vec_vec_with = with_graph(function()
@@ -176,7 +165,7 @@ test_map_vec_globals_visibility = with_graph(function()
 	end
 end)
 
-test_solver_errors = with_graph(function()
+test_solver_error = with_graph(function()
 	globals.static { "x" }
 	fhk.expose(globals)
 	G.x = -1234
@@ -227,6 +216,26 @@ if ffi.C.HAVE_SOLVER_INTERRUPTS == 1 then
 			solve_c(v)
 			local cs = solve_c:res("c")
 			assert(cs[0] == 11 and cs[1] == 12 and cs[2] == 13)
+		end
+	end)
+
+	test_nested_virtuals = with_graph(function()
+		fhk.virtual("x", globals, function()
+			return 123
+		end)
+
+		local solve_d = fhk.solve("d"):from(globals)
+
+		fhk.virtual("y", globals, function()
+			solve_d()
+			return solve_d:res("d")[0] * 2
+		end)
+
+		local solve_c = fhk.solve("c"):from(globals)
+
+		return function()
+			solve_c()
+			assert(solve_c:res("c")[0] == 123*2)
 		end
 	end)
 

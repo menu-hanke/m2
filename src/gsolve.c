@@ -13,6 +13,12 @@
 	co_resume(gctx);                           \
 })
 
+#define COEXIT(ir) do {                        \
+	typeof(ir) _ir = (ir);                     \
+	co_exit();                                 \
+	gs_interrupt(_ir);                         \
+} while(0)
+
 static int solve_vec(struct vec *vec, struct fhk_solver *solver, unsigned *i_bind){
 	unsigned n = vec->n_used;
 
@@ -54,9 +60,7 @@ static int solve_vec_z(struct vec *vec, struct fhk_solver *solver, gridpos *z_bi
 #include <aco.h>
 
 struct gs_ctx {
-	aco_t *main_co;
 	aco_t *solver_co;
-	aco_share_stack_t *sstk;
 	gs_res ir;
 	pvalue *iv;
 	struct co_solve_args *arg;
@@ -71,24 +75,30 @@ struct co_solve_args {
 	int z_band;
 };
 
+static __thread aco_t *main_co = NULL;
+static __thread aco_share_stack_t *sstk = NULL;
+
+// Note: this only corresponds to the current coroutine just before entering,
+// use aco_get_arg() to get th ctx for current coro
 static __thread struct gs_ctx *gctx;
 
 struct gs_ctx *gs_create_ctx(){
-	aco_runtime_test();
-	aco_thread_init(NULL);
+	if(!main_co){
+		aco_runtime_test();
+		aco_thread_init(NULL);
+
+		main_co = aco_create(NULL, NULL, 0, NULL, NULL);
+		sstk = aco_share_stack_new(0);
+	}
 
 	struct gs_ctx *ctx = malloc(sizeof(*ctx));
-	ctx->main_co = aco_create(NULL, NULL, 0, NULL, ctx);
-	ctx->sstk = aco_share_stack_new(0);
-	ctx->solver_co = aco_create(ctx->main_co, ctx->sstk, 0, NULL, ctx);
-
+	ctx->solver_co = aco_create(main_co, sstk, 0, NULL, ctx);
 	return ctx;
 }
 
 void gs_destroy_ctx(struct gs_ctx *ctx){
 	aco_destroy(ctx->solver_co);
-	aco_destroy(ctx->main_co);
-	aco_share_stack_destroy(ctx->sstk);
+	free(ctx);
 }
 
 void gs_enter(struct gs_ctx *ctx){
@@ -106,8 +116,7 @@ static gs_res co_resume(struct gs_ctx *ctx){
 	return ctx->ir;
 }
 
-gs_res gs_resume(pvalue iv){
-	struct gs_ctx *ctx = aco_get_arg();
+gs_res gs_resume(struct gs_ctx *ctx, pvalue iv){
 	*ctx->iv = iv;
 	return co_resume(ctx);
 }
@@ -129,23 +138,31 @@ static void co_reset(struct gs_ctx *ctx, void *fp){
 	co->is_end = 0;
 }
 
+static void co_exit(){
+	struct gs_ctx *ctx = aco_get_arg();
+	aco_t *co = ctx->solver_co;
+
+	// don't save our stack, we are done (this is also a bit hacky)
+	co->share_stack->owner = NULL;
+	co->share_stack->align_validsz = 0;
+}
+
 static void co_solve_step(){
 	struct gs_ctx *ctx = aco_get_arg();
 	struct co_solve_args *arg = ctx->arg;
-	gs_interrupt(GS_RETURN | fhk_solver_step(arg->solver, arg->idx));
+	COEXIT(GS_RETURN | fhk_solver_step(arg->solver, arg->idx));
 }
 
 static void co_solve_vec(){
 	struct gs_ctx *ctx = aco_get_arg();
 	struct co_solve_args *arg = ctx->arg;
-	gs_interrupt(GS_RETURN | solve_vec(arg->vec, arg->solver, arg->i_bind));
+	COEXIT(GS_RETURN | solve_vec(arg->vec, arg->solver, arg->i_bind));
 }
 
 static void co_solve_vec_z(){
 	struct gs_ctx *ctx = aco_get_arg();
 	struct co_solve_args *arg = ctx->arg;
-	gs_interrupt(GS_RETURN
-			| solve_vec_z(arg->vec, arg->solver, arg->z_bind, arg->z_band, arg->i_bind));
+	COEXIT(GS_RETURN | solve_vec_z(arg->vec, arg->solver, arg->z_bind, arg->z_band, arg->i_bind));
 }
 
 #endif // M2_SOLVER_INTERRUPTS
@@ -168,7 +185,7 @@ gs_res gs_solve_vec(struct vec *vec, struct fhk_solver *solver, unsigned *i_bind
 #ifdef M2_SOLVER_INTERRUPTS
 	return COENTER(&co_solve_vec, {.i_bind=i_bind, .solver=solver, .vec=vec});
 #else
-	return GS_RETURN | solve_vec(vec, solver i_bind);
+	return GS_RETURN | solve_vec(vec, solver, i_bind);
 #endif
 }
 

@@ -17,9 +17,6 @@
 		}\
 	} while(0)
 
-static void init_vars(struct fhk_graph *G);
-static void init_models(struct fhk_graph *G);
-
 struct fhk_graph *fhk_alloc_graph(arena *arena, size_t n_var, size_t n_mod){
 	struct fhk_graph *G = arena_malloc(arena, sizeof(*G));
 	memset(G, 0, sizeof(*G));
@@ -31,8 +28,7 @@ struct fhk_graph *fhk_alloc_graph(arena *arena, size_t n_var, size_t n_mod){
 	memset(G->models, 0, sizeof(*G->models) * n_mod);
 	G->v_bitmaps = arena_alloc(arena, BITMAP_SIZE(n_var), BITMAP_ALIGN);
 	G->m_bitmaps = arena_alloc(arena, BITMAP_SIZE(n_mod), BITMAP_ALIGN);
-	init_vars(G);
-	init_models(G);
+	fhk_graph_init(G);
 	return G;
 }
 
@@ -103,16 +99,6 @@ void fhk_compute_links(arena *arena, struct fhk_graph *G){
 	}
 }
 
-struct fhk_var *fhk_get_var(struct fhk_graph *G, unsigned idx){
-	assert(idx < G->n_var);
-	return &G->vars[idx];
-}
-
-struct fhk_model *fhk_get_model(struct fhk_graph *G, unsigned idx){
-	assert(idx < G->n_mod);
-	return &G->models[idx];
-}
-
 void fhk_solver_init(struct fhk_solver *s, struct fhk_graph *G, unsigned nv){
 	s->G = G;
 	s->reset_v = bm_alloc(G->n_var);
@@ -141,20 +127,4 @@ int fhk_solver_step(struct fhk_solver *s, unsigned idx){
 	for(unsigned i=0;i<s->nv;i++)
 		s->res[i][idx] = s->xs[i]->value;
 	return r;
-}
-
-static void init_vars(struct fhk_graph *G){
-	for(size_t i=0;i<G->n_var;i++){
-		struct fhk_var *x = &G->vars[i];
-		x->idx = i;
-		x->bitmap = &G->v_bitmaps[i];
-	}
-}
-
-static void init_models(struct fhk_graph *G){
-	for(size_t i=0;i<G->n_mod;i++){
-		struct fhk_model *m = &G->models[i];
-		m->idx = i;
-		m->bitmap = &G->m_bitmaps[i];
-	}
 }

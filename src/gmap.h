@@ -108,7 +108,3 @@ int gmap_res_data(void *v, pvalue *p);
 
 void gmap_mark_visible(struct fhk_graph *G, bm8 *vmask, unsigned reason, tvalue parm);
 void gmap_mark_nonconstant(struct fhk_graph *G, bm8 *vmask, unsigned reason, tvalue parm);
-
-void gmap_make_reset_masks(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
-
-void gmap_init(struct fhk_graph *G, bm8 *init_v);

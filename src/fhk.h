@@ -68,6 +68,7 @@ typedef union fhk_vbmap BMU8({
 
 struct fhk_model {
 	unsigned idx : 16;
+	unsigned uidx : 16;         // index in original graph - not used by solver
 	unsigned n_check : 8;
 	unsigned n_param : 8;
 	unsigned n_return : 8;
@@ -79,11 +80,12 @@ struct fhk_model {
 	fhk_v2 ki, ci;              // <- to
 	fhk_v2 cost_bound;          // <- 16 bytes
 	pvalue *rvals;
-	void *udata;
+	void *udata;                // userdata - not used by solver
 };
 
 struct fhk_var {
 	unsigned idx : 16;
+	unsigned uidx : 16;         // index in original graph - not used by solver
 	unsigned n_fwd : 16;
 	unsigned n_mod : 8;
 	unsigned hptr : 8;
@@ -93,15 +95,15 @@ struct fhk_var {
 	struct fhk_model *model;
 	fhk_v2 cost_bound;          // <- align to 16 bytes
 	pvalue value;
-	void *udata;
+	void *udata;                // userdata - not used by solver
 };
-
 
 enum {
 	FHK_OK            = 0,
 	FHK_SOLVER_FAILED = 1,
 	FHK_VAR_FAILED    = 2,
 	FHK_MODEL_FAILED  = 3,
+	FHK_RECURSION     = 4
 };
 
 struct fhk_einfo {
@@ -110,7 +112,7 @@ struct fhk_einfo {
 	struct fhk_var *var;
 };
 
-struct fhk_graph fhk_graph;
+struct fhk_graph;
 
 typedef int (*fhk_model_exec)(struct fhk_graph *G, void *udata, pvalue *ret, pvalue *args);
 typedef int (*fhk_var_resolve)(struct fhk_graph *G, void *udata, pvalue *value);
@@ -131,7 +133,6 @@ struct fhk_graph {
 	fhk_mbmap *m_bitmaps;
 
 	struct fhk_einfo last_error;
-	unsigned dirty : 1;
 	void *solver_state;
 
 	void *udata;
@@ -147,16 +148,23 @@ struct fhk_solver {
 };
 
 /* fhk_graph.c */
+void fhk_init(struct fhk_graph *G, bm8 *init_v);
+void fhk_graph_init(struct fhk_graph *G);
+void fhk_subgraph_init(struct fhk_graph *G);
 void fhk_reset(struct fhk_graph *G, fhk_vbmap vmask, fhk_mbmap mmask);
 void fhk_reset_mask(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
-void fhk_supp(bm8 *vmask, bm8 *mmask, struct fhk_var *y);
+void fhk_compute_reset_mask(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
 void fhk_inv_supp(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
+size_t fhk_subgraph_size(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
+void fhk_copy_subgraph(void *dest, struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
+void fhk_transfer_mask(bm8 *mH, bm8 *mG, bm8 *mask, size_t n);
 void fhk_model_set_cost(struct fhk_model *m, double k, double c);
 void fhk_check_set_cost(struct fhk_check *c, double out, double in);
 double fhk_solved_cost(struct fhk_model *m);
 
 /* fhk_solve.c */
 int fhk_solve(struct fhk_graph *G, size_t nv, struct fhk_var **ys);
+int fhk_reduce(struct fhk_graph *G, size_t nv, struct fhk_var **ys, bm8 *vmask, bm8 *mmask);
 
 /* fhk_aux.c */
 struct fhk_graph *fhk_alloc_graph(arena *arena, size_t n_var, size_t n_mod);
@@ -164,8 +172,6 @@ void fhk_copy_checks(arena *arena, struct fhk_model *m, size_t n_check, struct f
 void fhk_copy_params(arena *arena, struct fhk_model *m, size_t n_param, struct fhk_var **params);
 void fhk_copy_returns(arena *arena, struct fhk_model *m, size_t n_ret, struct fhk_var **returns);
 void fhk_compute_links(arena *arena, struct fhk_graph *G);
-struct fhk_var *fhk_get_var(struct fhk_graph *G, unsigned idx);
-struct fhk_model *fhk_get_model(struct fhk_graph *G, unsigned idx);
 void fhk_solver_init(struct fhk_solver *s, struct fhk_graph *G, unsigned nv);
 void fhk_solver_destroy(struct fhk_solver *s);
 void fhk_solver_bind(struct fhk_solver *s, unsigned vidx, pvalue *res);

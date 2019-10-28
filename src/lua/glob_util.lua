@@ -125,3 +125,11 @@ function readjson(fname)
 	fp:close()
 	return ret
 end
+
+function countkeys(t)
+	local nk = 0
+	for _,_ in pairs(t) do
+		nk = nk + 1
+	end
+	return nk
+end

@@ -126,23 +126,6 @@ void gmap_mark_nonconstant(struct fhk_graph *G, bm8 *vmask, unsigned reason, tva
 
 #undef MARK_CALLBACK
 
-void gmap_make_reset_masks(struct fhk_graph *G, bm8 *vmask, bm8 *mmask){
-	fhk_inv_supp(G, vmask, mmask);
-
-	// Now vmask and mmask contain marked what we want to reset, so invert them
-	bm_not(vmask, G->n_var);
-	bm_not(mmask, G->n_mod);
-
-	// Finally, these bits shouldn't be touched when stepping
-	fhk_vbmap keep = { .given=1 };
-	bm_or8(vmask, G->n_var, keep.u8);
-}
-
-void gmap_init(struct fhk_graph *G, bm8 *init_v){
-	bm_copy((bm8 *) G->v_bitmaps, init_v, G->n_var);
-	bm_zero((bm8 *) G->m_bitmaps, G->n_mod);
-}
-
 static bool var_is_visible(tvalue to, unsigned reason, tvalue parm){
 	return reason == GMAP_BIND_OBJECT && (to.u64 & parm.u64);
 }
@@ -176,11 +159,13 @@ static int G_resolve_var(struct fhk_graph *G, void *udata, pvalue *value){
 }
 
 static const char *G_ddv(void *udata){
-	return ((struct gmap_any *) udata)->name;
+	struct gmap_any *v = udata;
+	return v ? v->name : "(unmapped)";
 }
 
 static const char *G_ddm(void *udata){
-	return ((struct gmap_model *) udata)->name;
+	struct gmap_model *m = udata;
+	return m ? m->name : "(unmapped)";
 }
 
 #ifdef DEBUG
