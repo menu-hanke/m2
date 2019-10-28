@@ -187,7 +187,7 @@ env.model = setmetatable({}, {
 })
 
 env.model.Const = function(...)
-	return {lang="Const", opt={...}}
+	return {lang="Const", opt={ret={...}}}
 end
 
 local function parse_impl(impl)
