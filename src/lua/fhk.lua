@@ -480,16 +480,13 @@ end
 if C.HAVE_SOLVER_INTERRUPTS == 1 then
 	local band, bnot = bit.band, bit.bnot
 
-	-- the actual signature is gs_res (*)(gs_ctx *, pvalue)
-	-- we cast to avoid unsupported conversions (pvalue is an aggregate).
-	local resume = ffi.cast("gs_res (*)(gs_ctx *, uint64_t)", C.gs_resume)
-
 	function solver_func_mt.__index:wrap_solver(f)
 		local sub = self.subgraph
 		local gsctx = ffi.gc(C.gs_create_ctx(), C.gs_destroy_ctx)
 		local virtuals = self.mapper.virtuals
 
 		return function(...)
+			C.fhk_clear(sub.G)
 			C.gs_enter(gsctx)
 
 			local r = f(...)
@@ -513,6 +510,7 @@ else
 		local sub = self.subgraph
 
 		return function(...)
+			C.fhk_clear(sub.G)
 			local r = f(...)
 			if r ~= C.FHK_OK then
 				sub:failed()
@@ -555,6 +553,10 @@ function solver_func_mt.__index:create_solver()
 	local H = sub.G
 	local iv = H:newvmask()
 	C.fhk_transfer_mask(iv, init_v, vmask, G.n_var)
+	H:init(iv)
+
+	-- H isn't shared by any other solver, so we never need iv/init_v again, given/target
+	-- flags can't change
 
 	-- (4) create solver on the reduced subgraph
 	local solver = ffi.gc(ffi.new("struct fhk_solver"), C.fhk_solver_destroy)
@@ -562,14 +564,18 @@ function solver_func_mt.__index:create_solver()
 	solver:init(H, nv)
 	sub:collectvs(self.names, solver.xs)
 	self.source:mark_nonconstant(mapper, H, solver.reset_v)
-	markvs(solver.reset_v, nv, ys)
 	solver:compute_reset_mask()
 
-	-- since this subgraph is only ever used by this solver, we only need to call init
-	-- (ie. set given/target flags) once, and then just reset it every time
-	-- (fhk_solver does this in C)
-	H:init(iv)
-
+	-- (5) wrap solver: the wrapper should
+	--   * reset the graph - only once before calling the solver. this assumes that the "world"
+	--     can't change inside the wrapped function (eg. between vector entries).
+	--     this enables the solver to only partially reset the graph, which allows fhk to cache
+	--     some values between calls to fhk_solve, so it won't needlessly recompute eg.
+	--     global values for every vector entry.
+	--   * call solver_func. this should solve the whole container (vector, grid, etc.)
+	--     this should NOT in any way modify any value fhk can read: globals, any containers
+	--     exposed to this solver, model coefficients, ...
+	--   * check the result, raise errors or handle virtuals if needed
 	local solver_func = self.source:solver_func(mapper, solver)
 	self.solve = self:wrap_solver(solver_func)
 

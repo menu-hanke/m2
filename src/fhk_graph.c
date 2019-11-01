@@ -43,6 +43,10 @@ void fhk_subgraph_init(struct fhk_graph *G){
 	}
 }
 
+void fhk_clear(struct fhk_graph *G){
+	fhk_reset(G, (fhk_vbmap){.given=1}, (fhk_mbmap){.u8=0});
+}
+
 void fhk_reset(struct fhk_graph *G, fhk_vbmap vmask, fhk_mbmap mmask){
 	bm_and8((bm8 *) G->v_bitmaps, G->n_var, vmask.u8);
 	bm_and8((bm8 *) G->m_bitmaps, G->n_mod, mmask.u8);
@@ -68,9 +72,7 @@ void fhk_compute_reset_mask(struct fhk_graph *G, bm8 *vmask, bm8 *mmask){
 // Compute inverse support of vmask, ie. mark all variables/models that vmask can be reached from
 // (= can be changed by vmask)
 void fhk_inv_supp(struct fhk_graph *G, bm8 *vmask, bm8 *mmask){
-	fhk_vbmap reset_v = { .mark=1 };
-	fhk_mbmap reset_m = {0};
-	fhk_reset(G, reset_v, reset_m);
+	fhk_clear(G);
 
 	for(size_t i=0;i<G->n_var;i++)
 		mark_isupp_v(G, vmask, mmask, &G->vars[i]);

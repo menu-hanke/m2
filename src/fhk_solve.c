@@ -605,7 +605,7 @@ static void rd_mark_v(struct fhk_graph *G, struct fhk_var *y, bm8 *vmask, bm8 *m
 		struct fhk_model *m = y->models[i];
 		if(MAX(m->cost_bound) == beta){
 			assert(HASVALUE(m->cost_bound));
-			dv("%s: pick model %s as only model in subgraph [%f, %f]\n",
+			dv("%s: pick model %s as upper bound in subgraph [%f, %f]\n",
 					DESCV(y), DESCM(m), MIN(m->cost_bound), MAX(m->cost_bound));
 			rd_mark_m(G, m, vmask, mmask);
 			return;

@@ -151,6 +151,7 @@ struct fhk_solver {
 void fhk_init(struct fhk_graph *G, bm8 *init_v);
 void fhk_graph_init(struct fhk_graph *G);
 void fhk_subgraph_init(struct fhk_graph *G);
+void fhk_clear(struct fhk_graph *G);
 void fhk_reset(struct fhk_graph *G, fhk_vbmap vmask, fhk_mbmap mmask);
 void fhk_reset_mask(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
 void fhk_compute_reset_mask(struct fhk_graph *G, bm8 *vmask, bm8 *mmask);
