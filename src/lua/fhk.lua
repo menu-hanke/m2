@@ -285,7 +285,8 @@ end
 function mapper_mt.__index:computed(name)
 	local ret = self.arena:new("struct gmap_any")
 	ret.resolve = nil
-	ret.supp = nil
+	ret.supp.is_visible = nil
+	ret.supp.is_constant = nil
 	self:bind_mapping(ret, name)
 end
 
@@ -302,10 +303,10 @@ if C.HAVE_SOLVER_INTERRUPTS == 1 then
 		local ptype = typing.promote(self.vars[name].type.desc)
 		local tname = typing.desc_builtin[tonumber(ptype)].tname
 
-		return function()
+		return function(ctx)
 			local ret = ffi.new("pvalue")
 			ret[tname] = func()
-			return ret.u64 -- see comment in solver, this must return u64
+			return tonumber(C.gs_resume1(ctx, ret))
 		end
 	end
 
@@ -316,9 +317,22 @@ if C.HAVE_SOLVER_INTERRUPTS == 1 then
 		self.virtuals[ret.handle] = self:wrap_virtual(name, func)
 		return self:bind_mapping(ret, name)
 	end
+
+	function mapper_mt.__index:lazy(name, func)
+		local handle = #self.virtuals + 1
+		C.gs_lazy(self.vars[name].mapping.lazy, handle)
+		self.virtuals[handle] = function(ctx)
+			func()
+			return tonumber(C.gs_resume0(ctx))
+		end
+	end
 else
 	function mapper_mt.__index:virtual()
 		error("No virtual support -- compile with SOLVER_INTERRUPTS=on")
+	end
+
+	function mapper_mt.__index:lazy()
+		error("No lazy support -- compile with SOLVER_INTERRUPTS=on")
 	end
 end
 
@@ -494,10 +508,9 @@ if C.HAVE_SOLVER_INTERRUPTS == 1 then
 			-- TODO: could specialize/generate code for this loop, since this kind of dispatch
 			-- probably has horrible performance
 			while band(r, bnot(C.GS_ARG_MASK)) ~= 0 do
-				assert(band(r, C.GS_INTERRUPT_VIRT) ~= 0)
+				assert(band(r, C.GS_INTERRUPT_VIRT + C.GS_INTERRUPT_LAZY) ~= 0)
 				local virt = virtuals[tonumber(band(r, C.GS_ARG_MASK))]
-				-- virt() must return uint64_t here!
-				r = tonumber(resume(gsctx, virt()))
+				r = virt(gsctx)
 			end
 
 			if r ~= C.FHK_OK then

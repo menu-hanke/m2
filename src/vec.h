@@ -33,6 +33,7 @@ struct vec_slice {
 #define VEC_HEADER_SIZE(info) (sizeof(struct vec) + (info)->n_bands * sizeof(void *))
 
 void vec_clear(struct vec *v);
+void vec_clear_bands(struct vec *v, unsigned n, unsigned *idx);
 void vec_init_range(struct vec *v, unsigned from, unsigned to, union vec_tpl *tpl);
 unsigned vec_copy_skip(struct vec *v, void **dst, unsigned n, unsigned *skip);
 unsigned vec_copy_skip_s(struct vec *v, void **dst, unsigned n, unsigned *skip);

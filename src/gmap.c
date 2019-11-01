@@ -15,10 +15,6 @@ static bool var_is_constant(tvalue to, unsigned reason, tvalue parm);
 static bool env_is_visible(tvalue to, unsigned reason, tvalue parm);
 static bool global_is_visible(tvalue to, unsigned reason, tvalue parm);
 
-static const gmap_support SUPP_VAR = { var_is_visible, var_is_constant };
-static const gmap_support SUPP_ENV = { env_is_visible, env_is_visible };
-static const gmap_support SUPP_GLOBAL = { global_is_visible, global_is_visible };
-
 static int G_model_exec(struct fhk_graph *G, void *udata, pvalue *ret, pvalue *args);
 static int G_resolve_var(struct fhk_graph *G, void *udata, pvalue *value);
 static const char *G_ddv(void *udata);
@@ -63,17 +59,20 @@ void gmap_unbind_model(struct fhk_graph *G, unsigned idx){
 }
 
 void gmap_supp_obj_var(struct gmap_any *v, uint64_t objid){
-	v->udata.u64 = objid;
-	v->supp = &SUPP_VAR;
+	v->supp.is_visible = var_is_visible;
+	v->supp.is_constant = var_is_constant;
+	v->supp.udata.u64 = objid;
 }
 
 void gmap_supp_grid_env(struct gmap_any *v, uint64_t order){
-	v->udata.u64 = order;
-	v->supp = &SUPP_ENV;
+	v->supp.is_visible = env_is_visible;
+	v->supp.is_constant = env_is_visible; // same as is_visible
+	v->supp.udata.u64 = order;
 }
 
 void gmap_supp_global(struct gmap_any *v){
-	v->supp = &SUPP_GLOBAL;
+	v->supp.is_visible = global_is_visible;
+	v->supp.is_constant = global_is_visible;
 }
 
 __attribute__((no_sanitize("alignment")))
@@ -85,6 +84,11 @@ int gmap_res_vec(void *v, pvalue *p){
 	unsigned idx = **gv->idx_bind;
 
 	void *band = vec->bands[off + flags.band];
+	if(UNLIKELY(gv->lazy.f && !band)){
+		gv->lazy.f(gv->lazy.udata);
+		band = vec->bands[off + flags.band];
+	}
+
 	tvalue tv = *(tvalue *) (((char *) band) + (flags.stride * idx + flags.offset));
 	*p = vpromote(tv, flags.type);
 	return FHK_OK;
@@ -108,20 +112,20 @@ int gmap_res_data(void *v, pvalue *p){
 	return FHK_OK;
 }
 
-#define MARK_CALLBACK(cb)\
+#define MARK_CALLBACK(cond)\
 	for(size_t i=0;i<G->n_var;i++){\
 		struct gmap_any *v = G->vars[i].udata;\
-		if(v && v->supp && cb(v->udata, reason, parm)){\
+		if(v && cond){\
 			vmask[i] = 0xff;\
 		}\
 	}\
 
 void gmap_mark_visible(struct fhk_graph *G, bm8 *vmask, unsigned reason, tvalue parm){
-	MARK_CALLBACK(v->supp->is_visible);
+	MARK_CALLBACK(v->supp.is_visible && v->supp.is_visible(v->supp.udata, reason, parm));
 }
 
 void gmap_mark_nonconstant(struct fhk_graph *G, bm8 *vmask, unsigned reason, tvalue parm){
-	MARK_CALLBACK(!v->supp->is_constant);
+	MARK_CALLBACK(v->supp.is_constant && !v->supp.is_constant(v->supp.udata, reason, parm));
 }
 
 #undef MARK_CALLBACK

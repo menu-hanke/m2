@@ -13,6 +13,7 @@ typedef uint32_t gs_res;
 enum {
 	GS_RETURN         = 0,
 	GS_INTERRUPT_VIRT = 1 << 31,
+	GS_INTERRUPT_LAZY = 1 << 30,
 	/* GS_INTERRUPT_MODEL - the same technique can be used to implement models in sim state */
 	GS_ARG_MASK       = (1 << 16) - 1
 };
@@ -33,8 +34,10 @@ void gs_destroy_ctx(gs_ctx *ctx);
 
 void gs_enter(gs_ctx *ctx);
 void gs_interrupt(gs_res ir);
-gs_res gs_resume(gs_ctx *ctx, pvalue iv);
+gs_res gs_resume1(gs_ctx *ctx, pvalue iv);
+gs_res gs_resume0(gs_ctx *ctx);
 
+void gs_lazy(gmap_lazy *lazy, int32_t handle);
 int gs_res_virt(void *v, pvalue *p);
 
 #endif

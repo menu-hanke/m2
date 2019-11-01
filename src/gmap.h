@@ -20,14 +20,19 @@ enum {
 typedef struct gmap_support {
 	bool (*is_visible)(tvalue to, unsigned reason, tvalue parm);
 	bool (*is_constant)(tvalue to, unsigned reason, tvalue parm);
+	tvalue udata;
 } gmap_support;
+
+typedef struct gmap_lazy {
+	void (*f)(tvalue udata);
+	tvalue udata;
+} gmap_lazy;
 
 typedef int (*gmap_resolve)(void *, pvalue *);
 
 #define GV_HEADER(...)          \
-	const gmap_support *supp;   \
+	gmap_support supp;          \
 	gmap_resolve resolve;       \
-	tvalue udata;               \
 	const char *name;           \
 	union {                     \
 		struct {                \
@@ -60,6 +65,7 @@ struct gv_vcomponent {
 			unsigned stride : 16;
 			unsigned band   : 16;
 	);
+	gmap_lazy lazy;
 	unsigned *offset_bind;
 	unsigned **idx_bind;
 	struct vec **v_bind;

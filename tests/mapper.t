@@ -2,8 +2,8 @@
 local ffi = require "ffi"
 local sim = require "sim"
 local sim_env = require "sim_env"
-local typing = require "typing"
 local bg = require "buildgraph"
+local bt = require "buildtype"
 local v, m, any, none, ival = bg.v, bg.m, bg.any, bg.none, bg.ival
 local fails = fails
 
@@ -25,12 +25,6 @@ local function envmaker(opt)
 	end
 end
 
-local function maketype(name, vs)
-	local t = typing.newtype(name)
-	for f,v in pairs(vs) do t.vars[f] = typing.builtin_types[v] end
-	return t
-end
-
 local with_graph = envmaker {
 	graph = {
 		m("idx2a")                             + "x"        - "a",
@@ -49,16 +43,6 @@ local with_graph = envmaker {
 		crash     = {lang="Lua", opt="models::crash"}
 	}
 }
-
-local type_xyz = maketype("vtest", {
-	x = "real",  --> a, d
-	y = "real",  --> b, c
-	z = "real"   --> unsolvable
-})
-
-local function type1(v)
-	return maketype(v, {[v] = "real"})
-end
 
 test_remap_not_allowed = function()
 	local mp = bg.mapper { graph = { m("malli") + "x" - "a" } }
@@ -84,8 +68,8 @@ local function runtest_vec_xy(fhk, V)
 
 	local v = V:vec()
 	v:alloc(3)
-	local xs = v:band("x")
-	local ys = v:band("y")
+	local xs = v:newband("x")
+	local ys = v:newband("y")
 
 	xs[0] = 1; ys[0] = 100
 	xs[1] = 2; ys[1] = 200
@@ -103,19 +87,19 @@ local function runtest_vec_xy(fhk, V)
 end
 
 test_map_vec = with_graph(function()
-	return runtest_vec_xy(fhk, obj(component(type_xyz)))
+	return runtest_vec_xy(fhk, obj(component(bt.reals("x", "y", "z"))))
 end)
 
 test_map_vec_components = with_graph(function()
 	return runtest_vec_xy(fhk, obj(
-		component(type1("x")),
-		component(type1("y"))
+		component(bt.reals("x")),
+		component(bt.reals("y"))
 	))
 end)
 
 test_map_vec_vec_visibility = with_graph(function()
-	local V1 = fhk.expose(obj(component(type1("x"))))
-	local V2 = fhk.expose(obj(component(type1("y"))))
+	local V1 = fhk.expose(obj(component(bt.reals("x"))))
+	local V2 = fhk.expose(obj(component(bt.reals("y"))))
 
 	local v1, v2 = V1:vec(), V2:vec()
 	v1:alloc(1)
@@ -125,15 +109,15 @@ test_map_vec_vec_visibility = with_graph(function()
 end)
 
 test_map_vec_vec_with = with_graph(function()
-	local V1 = fhk.expose(obj(component(type1("x"))))
-	local V2 = fhk.expose(obj(component(type1("y"))))
+	local V1 = fhk.expose(obj(component(bt.reals("x"))))
+	local V2 = fhk.expose(obj(component(bt.reals("y"))))
 
 	local v1, v2 = V1:vec(), V2:vec()
 	v1:alloc(1)
 	v2:alloc(1)
 
-	v1:band("x")[0] = 123
-	v2:band("y")[0] = 456
+	v1:newband("x")[0] = 123
+	v2:newband("y")[0] = 456
 
 	local solve_ab = fhk.solve("a", "b"):with(V2):from(V1)
 
@@ -146,13 +130,13 @@ test_map_vec_vec_with = with_graph(function()
 end)
 
 test_map_vec_globals_visibility = with_graph(function()
-	local V = fhk.expose(obj(component(type1("x"))))
+	local V = fhk.expose(obj(component(bt.reals("x"))))
 	globals.static { "y" }
 	fhk.expose(globals)
 
 	local v = V:vec()
 	v:alloc(1)
-	v:band("x")[0] = 123
+	v:newband("x")[0] = 123
 
 	G.y = 456
 
@@ -195,12 +179,12 @@ if ffi.C.HAVE_SOLVER_INTERRUPTS == 1 then
 	end)
 
 	test_map_virtual_comp = with_graph(function()
-		local comp = component(type1("x"))
+		local comp = component(bt.reals("x"))
 		local V = fhk.expose(obj(comp))
 
 		local v = V:vec()
 		v:alloc(3)
-		local xs = v:band("x")
+		local xs = v:newband("x")
 		xs[0] = 1
 		xs[1] = 2
 		xs[2] = 3
@@ -236,6 +220,34 @@ if ffi.C.HAVE_SOLVER_INTERRUPTS == 1 then
 		return function()
 			solve_c()
 			assert(solve_c:res("c")[0] == 123*2)
+		end
+	end)
+
+	test_map_lazy = with_graph(function()
+		local comp = component(bt.reals("x", "y"))
+
+		local calls = 0
+		comp:lazy("y", function(band, vs)
+			vs:bandv("x"):mul(10, band)
+			calls = calls + 1
+		end)
+
+		local V = fhk.expose(obj(comp))
+		local vec = V:vec()
+
+		vec:alloc(3)
+		local x = vec:newband("x")
+		x[0] = 7
+		x[1] = 6
+		x[2] = 5
+
+		local solve_c = fhk.solve("c"):from(V)
+
+		return function()
+			solve_c(vec)
+			local c = solve_c:res("c")
+			assert(c[0] == 70 and c[1] == 60 and c[2] == 50)
+			assert(calls == 1)
 		end
 	end)
 

@@ -59,8 +59,34 @@ function vec_mt.__index:swap(name, data)
 	return old
 end
 
+function vec_mt.__index:clear(name)
+	return self:swap(name, ffi.NULL)
+end
+
 function vec_mt.__index:alloc(n)
 	return (tonumber(C.simF_vec_alloc(self:info().sim, self:cvec(), n)))
+end
+
+local slice_mt = { __index = {} }
+
+function slice_mt.__index:len()
+	return self.to - self.from
+end
+
+function slice_mt.__index:typedvec(name, data)
+	return vmath.typed(tonumber(self.vec:info().desc[name]), data, self:len())
+end
+
+function slice_mt.__index:band(name)
+	local band = self.vec:band(name)
+	if band ~= ffi.NULL then
+		band = band + self.from
+	end
+	return band
+end
+
+function slice_mt.__index:bandv(name)
+	return self:typedvec(name, self:band(name))
 end
 
 --------------------------------------------------------------------------------
@@ -85,6 +111,7 @@ local component_mt = { __index={} }
 local function component(type, base)
 	base = base or {}
 	base.events = base.events or {}
+	base._lazy = {}
 	base.type = type
 	return setmetatable(base, component_mt)
 end
@@ -127,10 +154,24 @@ local function map_field(map, band, stride, container, field, off)
 end
 
 function component_mt.__index:map_bands(map)
-	for band,field in pairs(self.type.fields) do
+	for band,field in ipairs(self.type.fields) do
 		map_field(map, band, ffi.sizeof(self.type.vars[field].ctype), self.type, field, 0)
 	end
 end
+
+function component_mt.__index:lazy_compute_band(band, vs, field)
+	return self._lazy[field](band, vs)
+end
+
+function component_mt.__index:lazy(field, f)
+	self._lazy[field] = f
+end
+
+function component_mt.__index:is_lazy(field)
+	return self._lazy[field] ~= nil
+end
+
+-------------------- mapper --------------------
 
 function component_mt.__index:expose(mapper)
 	if self:is_mapped() or not self:any_mapped(mapper) then
@@ -152,6 +193,17 @@ function component_mt.__index:expose(mapper)
 			fhk.support.var(v, self.id)
 		end
 	end)
+
+	-- this only makes sense for primitives
+	for band,name in ipairs(self.type.fields) do
+		if self:is_lazy(name) and mapper.vars[name] then
+			local f = self._lazy[name]
+			mapper:lazy(name, function()
+				local v = ffi.cast(self.obj.vec_ctp, self.vc_bind.vec)
+				f(v:newband(name), v)
+			end)
+		end
+	end
 end
 
 function component_mt.__index:virtualize(mapper, name, f)
@@ -197,8 +249,7 @@ end
 local function collect_bands(comps)
 	local bands = {}
 	local offsets = {}
-
-	local names = {}
+	local containers = {}
 
 	local band = 0
 	for _,c in ipairs(comps) do
@@ -206,11 +257,11 @@ local function collect_bands(comps)
 		offsets[c] = band
 
 		for _,field in ipairs(t.fields) do
-			if names[field] then
+			if containers[field] then
 				error("Name clash: %s", field)
 			end
 
-			names[field] = true
+			containers[field] = c
 
 			-- lua table, so it's 1 indexed
 			bands[band+1] = {
@@ -222,10 +273,9 @@ local function collect_bands(comps)
 		end
 	end
 
-	return bands, offsets
+	return bands, offsets, containers
 end
 
-local _vmeta_uniq = 0 -- just to make metadata names unique
 local function genvectypes(sim, bands)
 	-- Note: this might not be completely safe and it's definitely not defined behavior by C
 	-- standard. But it should work. Basically we generate a struct type that's like struct vec
@@ -244,37 +294,9 @@ local function genvectypes(sim, bands)
 		table.insert(bnames, b.name)
 	end
 
-	local metaname = string.format("struct Lvec_metadata_%d", _vmeta_uniq)
-	_vmeta_uniq = _vmeta_uniq + 1
-	
-	-- Layout must match struct vec! The generated struct looks like this:
-	--
-	-- struct {
-	--     struct Lvec_metadata_... *___info; // <- struct vec_info *
-	--     unsigned ___nalloc;
-	--     unsigned ___nused;
-	--     type1 *band1;                      // <- void *bands[]
-	--     ...
-	--     typeN *bandN;
-	-- }
-	--
-	-- The vec is inside another struct so we can attach metatype functions to it without
-	-- name clashing issues. this doesn't cause problems with the C api because a struct can
-	-- always be cast to its first member.
-	local ct = string.format([[
-		struct {
-			struct {
-				%s *___info;
-				unsigned ___nalloc;
-				unsigned ___nused;
-				%s;
-			} vec;
-		}
-	]], metaname, table.concat(bs, "; "))
-
 	-- Layout (beginning) must match struct vec_info! The generated struct looks like this:
 	--
-	-- struct Lvec_metadata... {           // <- vec->info points here
+	-- struct {                            // <- vec->info points here
 	--     struct {                        // <- so stride info must be first member!
 	--         unsigned ___nbands;
 	--         unsigned band1, ..., bandN; // <- unsigned stride[]
@@ -286,8 +308,8 @@ local function genvectypes(sim, bands)
 	--     sim *sim;
 	-- }
 	bnames = table.concat(bnames, ", ")
-	local metact = string.format([[
-		%s {
+	local metact = ffi.typeof(string.format([[
+		struct {
 			struct {
 				unsigned ___nbands;
 				unsigned %s;
@@ -296,11 +318,51 @@ local function genvectypes(sim, bands)
 				uint8_t %s;
 			} desc;
 			sim *sim;
-		};
-	]], metaname, bnames, bnames)
+		}
+	]], bnames, bnames))
 
-	ffi.cdef(metact)
-	return ffi.typeof(metaname), ffi.metatype(ct, vec_mt)
+	-- Layout must match struct vec! The generated struct looks like this:
+	--
+	-- struct {
+	--     struct <metadata> *___info;  // <- struct vec_info *
+	--     unsigned ___nalloc;
+	--     unsigned ___nused;
+	--     type1 *band1;                // <- void *bands[]
+	--     ...
+	--     typeN *bandN;
+	-- }
+	--
+	-- The vec is inside another struct so we can attach metatype functions to it without
+	-- name clashing issues. this doesn't cause problems with the C api because a struct can
+	-- always be cast to its first member.
+	local ct = ffi.typeof(string.format([[
+		struct {
+			struct {
+				$ *___info;
+				unsigned ___nalloc;
+				unsigned ___nused;
+				%s;
+			} vec;
+		}
+	]], table.concat(bs, "; ")), metact)
+
+	-- Layout must match struct vec_slice! The generated struct here is just vec_slice but
+	-- the struct_vec * pointer replaced with the generated ctype:
+	--
+	-- struct {
+	--     struct <vectype> *vec;
+	--     unsigned from;
+	--     unsigned to;
+	-- }
+	local slicect = ffi.typeof([[
+		struct {
+			$ *vec;
+			unsigned from;
+			unsigned to;
+		}
+	]], ct)
+
+	return metact, ffi.metatype(ct, vec_mt), ffi.metatype(slicect, slice_mt)
 end
 
 local function initmeta(sim, bands, metact)
@@ -317,19 +379,33 @@ local function initmeta(sim, bands, metact)
 	return meta
 end
 
+local function collect_lazy(bands, bcomp)
+	local idx = {}
+	for i, b in ipairs(bands) do
+		if bcomp[b.name]._lazy[b.name] then
+			table.insert(idx, i-1)
+		end
+	end
+
+	return {n=#idx, buf=ffi.new("unsigned[?]", #idx, idx)}
+end
+
 local obj_mt = { __index={} }
 
 local function obj(sim, comps)
-	local bands, offsets = collect_bands(comps)
-	local metact, vct = genvectypes(sim, bands)
+	local bands, offsets, band_comps = collect_bands(comps)
+	local metact, vct, slicect = genvectypes(sim, bands)
 	local meta = initmeta(sim, bands, metact)
 
 	local ret = setmetatable({
-		sim      = sim,
-		vec_ctp  = ffi.typeof("$*", vct),
-		vec_info = ffi.cast("struct vec_info *", meta),
-		comps    = comps,
-		offsets  = offsets
+		sim        = sim,
+		vec_ctp    = ffi.typeof("$*", vct),
+		slice_ct   = slicect,
+		vec_info   = ffi.cast("struct vec_info *", meta),
+		comps      = comps,        -- component list
+		band_comps = band_comps,   -- band name -> component mapping
+		offsets    = offsets,      -- component -> offset (index) mapping
+		lazy_bands = collect_lazy(bands, band_comps) -- {n=num, buf=lazy band indices}
 	}, obj_mt)
 
 	ret:specialize()
@@ -339,6 +415,40 @@ end
 
 function obj_mt.__index:vec()
 	return (ffi.cast(self.vec_ctp, C.simL_vec_create(self.sim, self.vec_info, C.SIM_VSTACK)))
+end
+
+function obj_mt.__index:slice(vec, from, to)
+	return self.slice_ct(vec, from or 0, to or vec:len())
+end
+
+function obj_mt.__index:alloc(vec, n)
+	self:unrealize(vec)
+	local pos = vec:alloc(n)
+	return self:slice(vec, pos, pos+n)
+end
+
+function obj_mt.__index:realize(vs, field)
+	local band = vs:band(field)
+	if band == ffi.NULL then
+		band = vs:newband(field)
+		self.band_comps[field]:lazy_compute_band(band, vs, field)
+	end
+	return band
+end
+
+function obj_mt.__index:realizev(vs, field)
+	return vs:typedvec(field, self:realize(vs, field))
+end
+
+function obj_mt.__index:refresh(vs, field)
+	local band = vs:band(field)
+	if band ~= ffi.NULL then
+		self.band_comps[field]:lazy_compute_band(band, vs, field)
+	end
+end
+
+function obj_mt.__index:unrealize(vec)
+	C.vec_clear_bands(vec:cvec(), self.lazy_bands.n, self.lazy_bands.buf)
 end
 
 local function wrap(event, f)
@@ -375,6 +485,8 @@ function obj_mt.__index:specialize()
 	if sf then
 		self.solver_func = sf
 	end
+
+	self:specialize_realization()
 end
 
 function obj_mt.__index:specialize_bind()
@@ -391,7 +503,7 @@ function obj_mt.__index:specialize_bind()
 	-- local cN = self.comps[N]
 	-- local offN = self.offsets[N]
 	--
-	-- self.bind = function(mapper, vec, idxp)
+	-- self._bind = function(self, mapper, vec, idxp)
 	--     c1:bind(mapper, self, off1, vec, idxp)
 	--     ...
 	--     cN:bind(mapper, self, offN, vec, idxp)
@@ -421,6 +533,55 @@ function obj_mt.__index:specialize_bind()
 	self._bind = bind:compile({binds=binds}, "=(bind)")()
 end
 
+function obj_mt.__index:specialize_realization()
+	-- same idea as the above function, if the realizations are called in a loop, we get a side
+	-- trace for each one, which is absolutely not what we want
+	
+	-- this creates the following function:
+	--
+	-- local NULL  = ffi.NULL
+	-- local lazy1 = lazy[1].band
+	-- local comp1 = lazy[1].comp
+	-- ...
+	-- local lazyN = lazy[N].band
+	-- local compN = lazy[N].comp
+	--
+	-- self.refresh_slice = function(self, slice)
+	--     local band
+	--     band = slice:band(lazy1)
+	--     if band ~= ffi.NULL then comp1:lazy_compute_band(band, slice, lazy1) end
+	--     ...
+	--     band = slice:band(lazyN)
+	--     if band ~= ffi.NULL then compN:lazy_compute_band(band, slice, lazyN) end
+	-- end
+	
+	local lazy = {}
+	for band, comp in pairs(self.band_comps) do
+		if comp:is_lazy(band) then
+			table.insert(lazy, {band=band, comp=comp})
+		end
+	end
+
+	local rlz = code.new()
+
+	rlz:emit("local NULL = NULL")
+
+	for i,l in ipairs(lazy) do
+		rlz:emitf("local lazy%d = lazy[%d].band; local comp%d = lazy[%d].comp", i, i, i, i)
+	end
+
+	rlz:emit("return function(self, slice)")
+	rlz:emit("local band")
+
+	for i,l in ipairs(lazy) do
+		rlz:emitf("band = slice:band(lazy%d)", i)
+		rlz:emitf("if band ~= NULL then comp%d:lazy_compute_band(band, slice, lazy%d) end", i, i)
+	end
+
+	rlz:emit("end")
+	self.refresh_slice = rlz:compile({lazy=lazy, NULL=NULL}, "=(refresh_slice)")()
+end
+
 -------------------- mapper callbacks --------------------
 
 function obj_mt.__index:bind(mapper, vec, idx)
@@ -448,7 +609,9 @@ end
 
 function obj_mt.__index:solver_func(mapper, solver)
 	return function(vec)
-		-- No need to explicitly bind vec here, gs_solve_vec binds it while stepping
+		-- TODO: this should also accept slice?
+
+		-- No need to explicitly bind idx here, gs_solve_vec binds it while stepping
 		self:bind(mapper, vec)
 
 		-- TODO: allow configuring if this should allocate vec:len() or vec.n_alloc

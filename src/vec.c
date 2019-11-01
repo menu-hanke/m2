@@ -31,11 +31,18 @@ void vec_clear(struct vec *v){
 		v->bands[i] = NULL;
 }
 
+void vec_clear_bands(struct vec *v, unsigned n, unsigned *idx){
+	for(unsigned i=0;i<n;i++)
+		v->bands[idx[i]] = NULL;
+}
+
 void vec_init_range(struct vec *v, unsigned from, unsigned to, union vec_tpl *tpl){
 	assert(to >= from);
 	for(unsigned i=0;i<v->info->n_bands;i++){
-		unsigned stride = v->info->stride[i];
-		rep_tpl(((char *) v->bands[i]) + stride*from, to-from, stride, tpl[i]);
+		if(v->bands[i]){
+			unsigned stride = v->info->stride[i];
+			rep_tpl(((char *) v->bands[i]) + stride*from, to-from, stride, tpl[i]);
+		}
 	}
 }
 
@@ -48,8 +55,10 @@ unsigned vec_copy_skip_s(struct vec *v, void **dst, unsigned n, unsigned *skip){
 	struct cpy_interval cpy[n + 1];
 	unsigned ncpy;
 	unsigned tail = calc_intervals_s(cpy, &ncpy, n, skip, v->n_used);
-	for(unsigned i=0;i<v->info->n_bands;i++)
-		copy_intervals(cpy, ncpy, dst[i], v->bands[i], v->info->stride[i]);
+	for(unsigned i=0;i<v->info->n_bands;i++){
+		if(v->bands[i])
+			copy_intervals(cpy, ncpy, dst[i], v->bands[i], v->info->stride[i]);
+	}
 	return tail;
 }
 
@@ -68,8 +77,7 @@ struct vec *simL_vec_create(sim *sim, struct vec_info *info, int lifetime){
 	struct vec *v = sim_alloc(sim, VEC_HEADER_SIZE(info), alignof(*v), lifetime);
 
 	v->info = info;
-	v->n_alloc = 0;
-	v->n_used = 0;
+	vec_clear(v);
 
 	dv("vec<%p>: info<%p> life=%#x\n", v, info, lifetime);
 	return v;
@@ -80,7 +88,21 @@ void *simF_vec_create_band(sim *sim, struct vec *v, unsigned band){
 }
 
 void *simF_vec_create_band_stride(sim *sim, struct vec *v, unsigned stride){
-	return sim_frame_alloc(sim, v->n_alloc * stride, VEC_ALIGN);
+	void *ret = sim_frame_alloc(sim, v->n_alloc * stride, VEC_ALIGN);
+
+#ifdef DEBUG
+	// fill it with NaNs to help the user detect if they are doing something stupid.
+	// note that we can't just fill it with all ones, we must use NaNs with ones in exponent
+	// and zeros in mantissa to not confuse luajit nan tagging.
+	// (if the array isn't supposed to contain doubles/floats then this just fills it with
+	// some invalid pattern, which is also completely ok.)
+	if(stride == 4 || stride == 8){
+		uint64_t tpl = stride == 8 ? 0xfff8000000000000 : 0xffc00000ffc00000;
+		mrep_small(ret, v->n_alloc, stride, tpl);
+	}
+#endif
+
+	return ret;
 }
 
 unsigned simF_vec_alloc(sim *sim, struct vec *v, unsigned n){
@@ -98,7 +120,7 @@ void simF_vec_delete(sim *sim, struct vec *v, unsigned n, unsigned *idx){
 
 	void *newbands[v->info->n_bands];
 	for(unsigned i=0;i<v->info->n_bands;i++)
-		newbands[i] = simF_vec_create_band(sim, v, i);
+		newbands[i] = v->bands[i] ? simF_vec_create_band(sim, v, i) : NULL;
 
 	vec_copy_skip(v, newbands, n, idx);
 
@@ -222,9 +244,10 @@ static void F_ensure_capacity(sim *sim, struct vec *v, unsigned n){
 	// NOTE: this will not work if we some day do interleaved bands!
 	for(unsigned i=0;i<v->info->n_bands;i++){
 		void *old = v->bands[i];
-		v->bands[i] = sim_frame_alloc(sim, na*v->info->stride[i], VEC_ALIGN);
-		if(v->n_used)
+		if(old){
+			v->bands[i] = simF_vec_create_band(sim, v, i);
 			memcpy(v->bands[i], old, v->n_used*v->info->stride[i]);
+		}
 	}
 
 	assert(na == ALIGN(na, VEC_ALIGN));

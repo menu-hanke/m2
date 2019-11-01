@@ -116,9 +116,22 @@ static gs_res co_resume(struct gs_ctx *ctx){
 	return ctx->ir;
 }
 
-gs_res gs_resume(struct gs_ctx *ctx, pvalue iv){
+gs_res gs_resume1(struct gs_ctx *ctx, pvalue iv){
 	*ctx->iv = iv;
 	return co_resume(ctx);
+}
+
+gs_res gs_resume0(struct gs_ctx *ctx){
+	return co_resume(ctx);
+}
+
+static void lazy_interrupt(tvalue udata){
+	gs_interrupt(GS_INTERRUPT_LAZY | udata.u32);
+}
+
+void gs_lazy(gmap_lazy *lazy, int32_t handle){
+	lazy->f = lazy_interrupt;
+	lazy->udata.u32 = handle;
 }
 
 int gs_res_virt(void *v, pvalue *p){
