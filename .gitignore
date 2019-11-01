@@ -2,3 +2,4 @@
 /src/m2
 .gdb_history
 /simo-libs
+src/lua/m2_cdef.lua
