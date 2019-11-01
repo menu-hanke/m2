@@ -22,7 +22,7 @@ local function runtests(tests, out)
 	for i,t in ipairs(tests) do
 		local ok, err = xpcall(t.func, debug.traceback)
 		if ok then
-			out:write("ok ", i, "\n")
+			out:write("ok ", i, " - ", t.name, "\n")
 		else
 			out:write("not ok ", i, " - ", t.name, "\n")
 			out:write("# ", err:gsub("\n", "\n# "), "\n")
