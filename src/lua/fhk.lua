@@ -42,6 +42,9 @@ local function copy_vars(names, fvars)
 	local ret = ffi.new("struct fhk_var *[?]", #names)
 
 	for i,name in ipairs(names) do
+		if not fvars[name] then
+			error(string.format("Unmapped variable '%s'", name))
+		end
 		ret[i-1] = fvars[name]
 	end
 
@@ -109,7 +112,7 @@ local function create_models(vars, models, calib)
 		local mod = def()
 
 		if mod == ffi.NULL then
-			error(string.format("Failed to create model '%s': %s", name, models.error()))
+			error(string.format("Failed to create model '%s': %s", name, model.error()))
 		end
 
 		exf[name] = mod
