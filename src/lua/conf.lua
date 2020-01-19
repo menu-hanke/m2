@@ -144,6 +144,12 @@ local function create_models(data, vars)
 	return data.models
 end
 
+local function get_builtin_file(fname)
+	-- XXX: this is a turbo hack, it relies on the C code putting this as the first thing
+	-- in search path, this should be written in C and replace on M2_LUAPATH
+	return package.path:gsub("%?.lua;.*$", fname)
+end
+
 local function newconf()
 	local conf_env = get_builtin_file("conf_env.lua")
 	local env, data = dofile(conf_env)

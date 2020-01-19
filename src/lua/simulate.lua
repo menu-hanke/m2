@@ -1,3 +1,4 @@
+local aux = require "aux"
 local cli = require "cli"
 local conf = require "conf"
 local sim_env = require "sim_env"
@@ -12,7 +13,7 @@ local function main(args)
 	instr = sim:compile_instr(instr)
 
 	if args.input then
-		local data = readjson(args.input)
+		local data = aux.readjson(args.input)
 		sim:savepoint()
 		for i,v in ipairs(data) do
 			io.stderr:write(string.format("[%s] %d/%d\n", args.input, i, #data))

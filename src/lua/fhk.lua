@@ -1,7 +1,8 @@
-local ffi = require "ffi"
 local model = require "model"
 local typing = require "typing"
 local alloc = require "alloc"
+local aux = require "aux"
+local ffi = require "ffi"
 local C = ffi.C
 
 local function copy_cst(check, cst)
@@ -18,7 +19,7 @@ local function copy_cst(check, cst)
 end
 
 local function create_checks(checks, fvars)
-	local nc = countkeys(checks)
+	local nc = aux.countkeys(checks)
 
 	if nc == 0 then
 		return 0, nil
@@ -86,7 +87,7 @@ end
 
 local function build_graph(vars, models)
 	local arena = alloc.arena_nogc()
-	local G = ffi.gc(C.fhk_alloc_graph(arena, countkeys(vars), countkeys(models)),
+	local G = ffi.gc(C.fhk_alloc_graph(arena, aux.countkeys(vars), aux.countkeys(models)),
 		function() C.arena_destroy(arena) end)
 	local fv, fm = assign_ptrs(G, vars, models)
 	build_models(G, arena, fv, fm, models)

@@ -1,6 +1,6 @@
 require "m2_cdef"
 require "alloc"
-require "glob_util"
+local aux = require "aux"
 local cli = require "cli"
 
 function main(args)
@@ -14,7 +14,7 @@ function main(args)
 	flags.j = function(_, P)
 		local val = P()
 		local module, args = val:match("(%w+)=?(.*)")
-		require("jit."..module).start(unpack(split(args or "")))
+		require("jit."..module).start(unpack(aux.split(args or "")))
 	end
 
 	cmd.main(cli.parse_opts(P, flags))

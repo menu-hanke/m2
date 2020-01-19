@@ -1,8 +1,9 @@
+local aux = require "aux"
 local ffi = require "ffi"
 local C = ffi.C
 
 local typedef_f = {}
-local typedef_mt = { __index = lazy(typedef_f, {kind="struct"}) }
+local typedef_mt = { __index = aux.lazy(typedef_f, {kind="struct"}) }
 local frozen_mt = {}
 
 local builtin_mt = { __index = { kind = "builtin" } }
@@ -90,7 +91,7 @@ end
 --------------------------------------------------------------------------------
 
 local enum_f = {}
-local enum_mt = { __index = lazy(enum_f, {kind="enum"}) }
+local enum_mt = { __index = aux.lazy(enum_f, {kind="enum"}) }
 local enum_values_mt = {}
 
 local function newenum()

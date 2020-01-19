@@ -1,5 +1,6 @@
-local ffi = require "ffi"
+local aux = require "aux"
 local alloc = require "alloc"
+local ffi = require "ffi"
 
 ffi.metatype("struct model", {
 	__call  = function(self, ret, arg) return self.func.call(self, ret, arg) end,
@@ -72,7 +73,7 @@ end
 -- Init these lazily.
 -- Support for each language is optional and may not be compiled in, so symbol definitions
 -- may be missing and we can't just init them all eagerly.
-local impls = setmetatable({}, {__index = lazy {
+local impls = setmetatable({}, {__index = aux.lazy {
 
 	Const = mod {
 		create = function(self) return ffi.C.mod_Const_create(self.n_ret, self.ret) end,

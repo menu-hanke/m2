@@ -1,4 +1,5 @@
 local code = require "code"
+local aux = require "aux"
 local jit = require "jit"
 local ffi = require "ffi"
 local C = ffi.C
@@ -189,8 +190,8 @@ local function inject(env, sim)
 	env.choice = choice
 	-- shortcuts
 	env.on = function(...) return sim:on(...) end
-	env.branch = delegate(sim, sim.branch)
-	env.event = delegate(sim, sim.event)
+	env.branch = aux.delegate(sim, sim.branch)
+	env.event = aux.delegate(sim, sim.event)
 end
 
 function sim_mt.__index:on(event, f, prio)

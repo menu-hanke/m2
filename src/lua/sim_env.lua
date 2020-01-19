@@ -1,3 +1,5 @@
+local aux = require "aux"
+
 local simenv_mt = { __index = {} }
 
 local function create(sim)
@@ -32,7 +34,7 @@ function simenv_mt.__index:inject(name, value)
 end
 
 function simenv_mt.__index:inject_env()
-	self.env.require = delegate(self, self.require)
+	self.env.require = aux.delegate(self, self.require)
 end
 
 function simenv_mt.__index:inject_base()

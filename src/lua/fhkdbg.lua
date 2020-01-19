@@ -1,8 +1,9 @@
 local cli = require "cli"
-local ffi = require "ffi"
 local conf = require "conf"
 local fhk = require "fhk"
 local typing = require "typing"
+local aux = require "aux"
+local ffi = require "ffi"
 local C = ffi.C
 
 local function hook_udata(fvars, fmodels)
@@ -319,25 +320,6 @@ local function print_report(rep)
 	end
 end
 
-local function readcsv(fname)
-	local f = io.open(fname)
-	local header = map(split(f:read()), trim)
-	local data = {}
-
-	for l in f:lines() do
-		local d = map(split(l), tonumber)
-		if #d ~= #header then
-			error(string.format("Invalid line: %s (expected %d values but have %d)",
-				l, #d, #header))
-		end
-		table.insert(data, d)
-	end
-
-	f:close()
-
-	return header, data
-end
-
 --------------------------------------------------------------------------------
 
 local function main(args)
@@ -349,7 +331,7 @@ local function main(args)
 	end
 
 	local solve = g:solve(args.vars)
-	local given, values = readcsv(args.input)
+	local given, values = aux.readcsv(args.input)
 
 	local vs = {}
 
@@ -376,7 +358,7 @@ return {
 	flags = {
 		c = cli.opt("config"),
 		i = cli.opt("input"),
-		f = function(ret, ai) ret.vars = map(split(ai()), trim) end
+		f = function(ret, ai) ret.vars = aux.map(aux.split(ai()), aux.trim) end
 	},
 	main = main,
 	hook = hook
