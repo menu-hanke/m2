@@ -5,12 +5,8 @@ local sim_env = require "sim_env"
 local function main(args)
 	local cfg = conf.read_cmdline(args.config)
 	local sim, env = sim_env.from_conf(cfg)
-
-	for _,s in ipairs(args.scripts) do
-		env:run_file(s)
-	end
-
-	local instr = env:run_file(args.instr)
+	env:require_all(args.scripts or {})
+	local instr = env:run_file(args.instr or "instr.lua")
 
 	sim:compile()
 	instr = sim:compile_instr(instr)

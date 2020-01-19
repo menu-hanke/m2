@@ -155,7 +155,6 @@ end
 
 
 local function main(args)
-	if not args.scripts then error("No scripts given, give some with -s") end
 	if not args.coefs then error("No coefficient file, give with -p") end
 	if not args.calibrator then error("No calibrator script, give with -C") end
 
@@ -169,10 +168,7 @@ local function main(args)
 	set_updates(coefs, env.mapper)
 	local cs = collect_coefs(coefs)
 	local cmodels = collect_cmodels(coefs, env.mapper)
-
-	for _,s in ipairs(args.scripts) do
-		env:run_file(s)
-	end
+	env:require_all(args.scripts or {})
 
 	env:inject("args", args)
 	-- XXX: this is a bit ugly but it's needed so the cost function can call setup

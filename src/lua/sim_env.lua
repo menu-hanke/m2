@@ -20,6 +20,10 @@ local function from_conf(cfg)
 	env:inject_fhk(mapper)
 	env:inject_types(cfg)
 
+	for _,modname in pairs(cfg.modules) do
+		env:require(modname)
+	end
+
 	return sim, env
 end
 
@@ -82,6 +86,12 @@ function simenv_mt.__index:require(module, global)
 	end
 
 	error(string.format("Module '%s' not found: %s", module, table.concat(err, "\n")))
+end
+
+function simenv_mt.__index:require_all(modules)
+	for i,mod in ipairs(modules) do
+		self:require(mod)
+	end
 end
 
 function simenv_mt.__index:run_file(fname)

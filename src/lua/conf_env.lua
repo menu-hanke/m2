@@ -45,6 +45,14 @@ end
 
 --------------------------------------------------------------------------------
 
+local modules = {}
+
+env.sim = function(modname)
+	table.insert(modules, modname)
+end
+
+--------------------------------------------------------------------------------
+
 local function namespace(index)
 	return setmetatable({}, {
 		__index=function(_, k)
@@ -304,8 +312,9 @@ end
 --------------------------------------------------------------------------------
 
 return env, {
-	calib = calib,
-	types = types,
-	models = models,
-	vars = vars
+	calib   = calib,
+	modules = modules,
+	types   = types,
+	models  = models,
+	vars    = vars
 }
