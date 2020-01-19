@@ -41,6 +41,7 @@ function simenv_mt.__index:inject_base()
 	require("vec").inject(self.env, self.sim._sim)
 	require("typing").inject(self.env)
 	require("sched").inject(self.env)
+	require("vmath").inject(self.env, self.sim)
 end
 
 function simenv_mt.__index:inject_fhk(mapper)

@@ -20,6 +20,7 @@ void varead(vreal *d, vreal *x, size_t n);
 void vsorti(unsigned *idx, vreal *x, size_t n);
 vreal vsum(vreal *x, size_t n);
 vreal vsumm(vreal *x, vmask *m, vmask mask, size_t n);
+vreal vavgw(const vreal *restrict x, const vreal *restrict w, size_t n);
 void vpsumi(vreal *d, const vreal *restrict x, unsigned *idx, size_t n);
 void vpsumim(vreal *d, const vreal *restrict x, unsigned *idx, vmask *m, vmask mask, size_t n);
 

@@ -107,6 +107,14 @@ vreal vsumm(vreal *x, vmask *m, vmask mask, size_t n){
 	return ret;
 }
 
+/* weighted average
+ * sum(x*w) / sum(w) */
+vreal vavgw(const vreal *restrict x, const vreal *restrict w, size_t n){
+	vreal sxw = 0, sw = 0;
+	V(n, sxw += x[i]*w[i]; sw += w[i]);
+	return sxw / sw;
+}
+
 /* prefix sum by index sorting
  * d[idx[i]] <- sum(x[idx[j]] : j=1..i) */
 void vpsumi(vreal *d, const vreal *restrict x, unsigned *idx, size_t n){

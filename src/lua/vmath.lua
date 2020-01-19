@@ -114,6 +114,7 @@ ffi.metatype("struct Lvec", {
 			return ret
 		end,
 		sum   = function(self) return (C.vsum(self.data, self.n)) end,
+		avgw  = function(self, w) return (C.vavgw(self.data, todata(w), self.n)) end,
 		psumi = function(self, dest, idx) return (C.vpsumi(todata(dest), self.data, idx, self.n)) end
 	},
 
@@ -260,6 +261,14 @@ local function typed(desc, data, n)
 	end
 end
 
+local function inject(env, sim)
+	-- Note: maybe add a function to alloc from sim pool instead if malloc is too slow
+	env.vmath = {
+		allocv = allocvec
+		-- allocbitmap?
+	}
+end
+
 return {
 	vec       = vec,
 	allocvec  = allocvec,
@@ -267,5 +276,6 @@ return {
 	bitmap    = bitmap,
 	bitmapstr = bitmapstr,
 	typed     = typed,
-	todata    = todata
+	todata    = todata,
+	inject    = inject
 }
