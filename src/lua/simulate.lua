@@ -3,10 +3,7 @@ local conf = require "conf"
 local sim_env = require "sim_env"
 
 local function main(args)
-	if not args.scripts then error("No scripts given, give some with -s") end
-	if not args.instr then error("No instructions, give some with -I") end
-
-	local cfg = conf.read(args.config)
+	local cfg = conf.read_cmdline(args.config)
 	local sim, env = sim_env.from_conf(cfg)
 
 	for _,s in ipairs(args.scripts) do

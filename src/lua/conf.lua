@@ -167,11 +167,17 @@ local function read(...)
 		enums = enums,
 		types = types,
 		calib = data.calib,
+		modules = data.modules,
 		fhk_vars = fhk_vars,
 		fhk_models = fhk_models
 	}
 end
 
+local function read_cmdline(fname)
+	return read(fname or "Melasim.lua")
+end
+
 return {
-	read = read
+	read         = read,
+	read_cmdline = read_cmdline
 }

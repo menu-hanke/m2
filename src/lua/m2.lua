@@ -4,22 +4,19 @@ require "glob_util"
 local cli = require "cli"
 
 function main(args)
-	local ai, cmd
-	if #args<2 or args[2]:sub(1, 1) == "-" then
-		cmd = require "simulate"
-		ai = cli.argiter(args, 2)
-	else
-		cmd = require(args[2])
-		ai = cli.argiter(args, 3)
-	end
+	local P = cli.parser(args)
+	P() -- skip file name
 
-	local flags = cmd.flags
+	local cmd = P("val") or "simulate"
+	cmd = require(cmd)
+	local flags = cmd.flags or {}
 
-	flags.j = function(_, _, flag)
-		local module, args = flag:match("-j(%w+)=?(.*)")
+	flags.j = function(_, P)
+		local val = P()
+		local module, args = val:match("(%w+)=?(.*)")
 		require("jit."..module).start(unpack(split(args or "")))
 	end
 
-	cmd.main(cli.parse(ai, flags))
+	cmd.main(cli.parse_opts(P, flags))
 	return 0
 end

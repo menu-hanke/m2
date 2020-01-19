@@ -162,7 +162,7 @@ local function main(args)
 	math.randomseed(os.time())
 
 	local coefs = read_coefs(readjson(args.coefs))
-	local cfg = conf.read(args.config)
+	local cfg = conf.read_cmdline(args.config)
 	write_defaults(cfg.calib, coefs)
 	local sim, env = sim_env.from_conf(cfg)
 
