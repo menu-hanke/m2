@@ -48,8 +48,8 @@ end
 local function checked(f)
 	return function(...)
 		local ret = f(...)
-		if not ret then
-			error(ffi.C.model_error())
+		if ret == ffi.NULL then
+			error(ffi.string(ffi.C.model_error()))
 		end
 		return ret
 	end

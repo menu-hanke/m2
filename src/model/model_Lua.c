@@ -29,13 +29,13 @@ static const struct model_func MOD_LUA = {
 };
 
 static void init_lua_state();
-static int require(const char *module);
+static int require_func(const char *module, const char *func);
 static int pcall(int narg, int nres);
 
 model *mod_Lua_create(struct mod_Lua_def *def){
 	init_lua_state();
 
-	if(require(def->module))
+	if(require_func(def->module, def->func))
 		return NULL;
 
 	struct model_Lua *m = malloc(sizeof *m);
@@ -48,9 +48,9 @@ model *mod_Lua_create(struct mod_Lua_def *def){
 
 	m->mode = def->mode;
 
-	lua_pushlightuserdata(L, MADDR(m));
-	lua_getglobal(L, def->func);
-	lua_settable(L, LUA_REGISTRYINDEX);
+	lua_pushlightuserdata(L, MADDR(m));     // stack: func addr
+	lua_insert(L, -2);                      // stack: addr func
+	lua_settable(L, LUA_REGISTRYINDEX);     // reg[addr] = func
 
 	return (model *) m;
 }
@@ -140,11 +140,35 @@ static void init_lua_state(){
 	luaL_openlibs(L);
 }
 
-static int require(const char *module){
-	dv("Lua: require %s\n", module);
+static int require_func(const char *module, const char *func){
+	dv("Lua: require %s (looking for function %s)\n", module, func);
+
 	lua_getglobal(L, "require");
 	lua_pushstring(L, module);
-	return pcall(1, 0);
+	if(pcall(1, 1))
+		return -1;
+
+	// stack: module
+
+	if(!lua_istable(L, -1)){
+		maux_errf("Expected table (module: '%s')", module);
+		lua_pop(L, 1);
+		return -1;
+	}
+
+	lua_getfield(L, -1, func);
+	// stack: module func
+
+	if(lua_isnil(L, -1)){
+		maux_errf("Function '%s' not in module '%s'", func, module);
+		lua_pop(L, 2);
+		return -1;
+	}
+
+	lua_remove(L, -2);
+	// stack: func
+	
+	return 0;
 }
 
 static int pcall(int narg, int nres){
