@@ -78,6 +78,13 @@ local function lazy(fs, index)
 	end
 end
 
+local function merge(dest, src)
+	for k,v in pairs(src) do
+		dest[k] = v
+	end
+	return dest
+end
+
 return {
 	split     = split,
 	map       = map,
@@ -86,5 +93,6 @@ return {
 	readcsv   = readcsv,
 	delegate  = delegate,
 	countkeys = countkeys,
-	lazy      = lazy
+	lazy      = lazy,
+	merge     = merge
 }

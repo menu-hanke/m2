@@ -641,14 +641,16 @@ local rebind = function(sim, solver, n)
 	end
 end
 
-local function inject(env, mapper)
-	env.fhk = {
+local function inject(env)
+	local mapper = env.mapper
+
+	env.m2.fhk = {
 		bind    = function(x, ...) x:bind(mapper, ...) end,
 		expose  = function(x) x:expose(mapper) return x end,
 		virtual = function(name, x, f) return x:virtualize(mapper, name, f) end,
 		solve   = function(...)
 			local s = mapper:solver({...})
-			env.on("sim:compile", function() s:create_solver() end)
+			env.sim:on("sim:compile", function() s:create_solver() end)
 			return s
 		end,
 		typeof  = function(x)
@@ -658,6 +660,10 @@ local function inject(env, mapper)
 			return mapper.vars[x].type
 		end
 	}
+
+	-- shortcut
+	env.m2.expose = env.m2.fhk.expose
+	env.m2.solve = env.m2.fhk.solve
 end
 
 return {

@@ -23,21 +23,21 @@ end
 test_chain_order = with_env(function()
 	local x = 0
 
-	on("event", function()
+	m2.on("event", function()
 		assert(x == 1)
 		x = x+1
 	end)
 
-	on("event#-1", function()
+	m2.on("event#-1", function()
 		assert(x == 0)
 		x = x+1
 	end)
 
-	on("event#1", function()
+	m2.on("event#1", function()
 		assert(x == 2)
 	end)
 
-	local instr = record()
+	local instr = m2.record()
 	instr.event()
 	return instr
 end)
@@ -45,17 +45,17 @@ end)
 test_multi_chain = with_env(function()
 	local x = 0
 
-	on("event1", function()
+	m2.on("event1", function()
 		assert(x % 2 == 0)
 		x = x+1
 	end)
 
-	on("event2", function()
+	m2.on("event2", function()
 		assert(x % 2 == 1)
 		x = x+1
 	end)
 
-	local instr = record()
+	local instr = m2.record()
 	for i=1, 10 do
 		instr.event1()
 		instr.event2()
@@ -66,15 +66,15 @@ end)
 test_chain_arg = with_env(function()
 	local x = 0
 
-	on("set", function(v)
+	m2.on("set", function(v)
 		x = v
 	end)
 
-	on("check", function(v)
+	m2.on("check", function(v)
 		assert(x == v)
 	end)
 
-	local instr = record()
+	local instr = m2.record()
 	for i=1, 10 do
 		instr.set(i)
 		instr.check(i)
@@ -83,36 +83,37 @@ test_chain_arg = with_env(function()
 end)
 
 test_binary_numbers_branching = with_env(function()
-	globals.dynamic("bit", "uint32_t")
-	globals.dynamic("value", "uint32_t")
+	local G = m2.G
+	m2.globals.dynamic("bit", "uint32_t")
+	m2.globals.dynamic("value", "uint32_t")
 	local seen = {}
 
 	local function notset() end
 	local function set() G.value = G.value + G.bit end
 
-	local br = branch {
-		choice(0x1, notset),
-		choice(0x2, set)
+	local br = m2.branch {
+		m2.choice(0x1, notset),
+		m2.choice(0x2, set)
 	}
 
-	on("firstbit", function()
+	m2.on("firstbit", function()
 		G.bit = 1
 		G.value = 0
 		br()
 	end)
 
-	on("nextbit", function()
+	m2.on("nextbit", function()
 		G.bit = G.bit * 2
 		br()
 	end)
 
-	on("leaf", function()
+	m2.on("leaf", function()
 		local x = tonumber(G.value)
 		assert(not seen[x])
 		seen[x] = true
 	end)
 
-	local instr = record()
+	local instr = m2.record()
 	instr.firstbit()         -- bit 0
 	for i=1, 9 do
 		instr.nextbit()      -- bits 1..9
@@ -134,21 +135,21 @@ test_branch_continue_chain = with_env(function()
 		return function() x = v end
 	end
 
-	local br = branch {
-		choice(0x1, set(1)),
-		choice(0x2, set(2)),
-		choice(0x3, set(3))
+	local br = m2.branch {
+		m2.choice(0x1, set(1)),
+		m2.choice(0x2, set(2)),
+		m2.choice(0x3, set(3))
 	}
 
-	on("event", function()
+	m2.on("event", function()
 		br()
 	end)
 
-	on("event#1", function()
+	m2.on("event#1", function()
 		seen[x] = true
 	end)
 
-	local instr = record()
+	local instr = m2.record()
 	instr.event()
 
 	return instr, function()
@@ -157,7 +158,7 @@ test_branch_continue_chain = with_env(function()
 end)
 
 test_vec_codegen = with_env(function()
-	local V = obj(component(bt.builtins {
+	local V = m2.obj(m2.component(bt.builtins {
 		f32 = "real32",
 		f64 = "real64",
 		b8  = "bit8",
@@ -204,13 +205,13 @@ test_vec_codegen = with_env(function()
 end)
 
 test_vec_lazy = with_env(function()
-	local comp = component(bt.reals("x", "y"))
+	local comp = m2.component(bt.reals("x", "y"))
 
 	comp:lazy("y", function(band, vs)
 		vs:bandv("x"):add(100, band)
 	end)
 
-	local V = obj(comp)
+	local V = m2.obj(comp)
 	local v = V:vec()
 
 	v:alloc(4)

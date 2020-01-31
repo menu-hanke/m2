@@ -630,9 +630,10 @@ end
 
 --------------------------------------------------------------------------------
 
-local function inject(env, sim)
-	env.component = component
-	env.obj = function(...) return obj(sim, {...}) end
+local function inject(env)
+	env.m2.component = component
+	local _sim = env.sim._sim
+	env.m2.obj = function(...) return obj(_sim, {...}) end
 end
 
 return {

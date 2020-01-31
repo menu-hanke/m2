@@ -3,8 +3,12 @@ local aux = require "aux"
 local simenv_mt = { __index = {} }
 
 local function create(sim)
+	local m2 = {}
 	return setmetatable({
-		env = setmetatable({ _loaded={} }, {__index=_G}),
+		-- put the 'm2' module as both in _loaded (proxy for package.loaded) and the global 'm2'.
+		-- this is intentional and the same behavior as luajit does with the 'jit' module.
+		env = setmetatable({ _loaded={m2=m2}, m2=m2 }, {__index=_G}),
+		m2  = m2,
 		sim = sim
 	}, simenv_mt)
 end
@@ -29,35 +33,32 @@ local function from_conf(cfg)
 	return sim, env
 end
 
-function simenv_mt.__index:inject(name, value)
-	self.env[name] = value
-end
-
 function simenv_mt.__index:inject_env()
 	self.env.require = aux.delegate(self, self.require)
 end
 
 function simenv_mt.__index:inject_base()
-	require("sim").inject(self.env, self.sim)
-	require("globals").inject(self.env, self.sim._sim)
-	require("vec").inject(self.env, self.sim._sim)
-	require("typing").inject(self.env)
-	require("sched").inject(self.env)
-	require("vmath").inject(self.env, self.sim)
+	require("sim").inject(self)
+	require("globals").inject(self)
+	require("vec").inject(self)
+	require("typing").inject(self)
+	require("sched").inject(self)
+	require("vmath").inject(self)
 end
 
 function simenv_mt.__index:inject_fhk(mapper)
 	self.mapper = mapper
-	require("fhk").inject(self.env, mapper)
+	require("fhk").inject(self)
 end
 
 function simenv_mt.__index:inject_types(cfg)
-	self.env.enum = {}
+	local masks = {}
 	for name,e in pairs(cfg.enums) do
-		self.env.enum[name] = e.values
+		masks[name] = e.values
 	end
 
-	self.env.types = cfg.types
+	self.m2.masks = masks
+	self.m2.types = cfg.types
 end
 
 -- replace require so that sim modules automagically have sim environment

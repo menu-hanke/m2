@@ -51,11 +51,11 @@ test_remap_not_allowed = function()
 end
 
 test_map_global = with_graph(function()
-	globals.static { "x" }
-	fhk.expose(globals)
-	G.x = 1234
+	m2.globals.static { "x" }
+	m2.expose(m2.globals)
+	m2.G.x = 1234
 
-	local solve_a = fhk.solve("a"):from(globals)
+	local solve_a = m2.solve("a"):from(m2.globals)
 
 	return function()
 		solve_a()
@@ -63,8 +63,8 @@ test_map_global = with_graph(function()
 	end
 end)
 
-local function runtest_vec_xy(fhk, V)
-	fhk.expose(V)
+local function runtest_vec_xy(m2, V)
+	m2.expose(V)
 
 	local v = V:vec()
 	v:alloc(3)
@@ -75,7 +75,7 @@ local function runtest_vec_xy(fhk, V)
 	xs[1] = 2; ys[1] = 200
 	xs[2] = 3; ys[2] = 300
 
-	local solve_ab = fhk.solve("a", "b"):from(V)
+	local solve_ab = m2.solve("a", "b"):from(V)
 
 	return function()
 		solve_ab(v)
@@ -87,30 +87,30 @@ local function runtest_vec_xy(fhk, V)
 end
 
 test_map_vec = with_graph(function()
-	return runtest_vec_xy(fhk, obj(component(bt.reals("x", "y", "z"))))
+	return runtest_vec_xy(m2, m2.obj(m2.component(bt.reals("x", "y", "z"))))
 end)
 
 test_map_vec_components = with_graph(function()
-	return runtest_vec_xy(fhk, obj(
-		component(bt.reals("x")),
-		component(bt.reals("y"))
+	return runtest_vec_xy(m2, m2.obj(
+		m2.component(bt.reals("x")),
+		m2.component(bt.reals("y"))
 	))
 end)
 
 test_map_vec_vec_visibility = with_graph(function()
-	local V1 = fhk.expose(obj(component(bt.reals("x"))))
-	local V2 = fhk.expose(obj(component(bt.reals("y"))))
+	local V1 = m2.expose(m2.obj(m2.component(bt.reals("x"))))
+	local V2 = m2.expose(m2.obj(m2.component(bt.reals("y"))))
 
 	local v1, v2 = V1:vec(), V2:vec()
 	v1:alloc(1)
 	v2:alloc(1)
 
-	assert(fails(function() fhk.solve("b"):from(V1):create_solver() end))
+	assert(fails(function() m2.solve("b"):from(V1):create_solver() end))
 end)
 
 test_map_vec_vec_with = with_graph(function()
-	local V1 = fhk.expose(obj(component(bt.reals("x"))))
-	local V2 = fhk.expose(obj(component(bt.reals("y"))))
+	local V1 = m2.expose(m2.obj(m2.component(bt.reals("x"))))
+	local V2 = m2.expose(m2.obj(m2.component(bt.reals("y"))))
 
 	local v1, v2 = V1:vec(), V2:vec()
 	v1:alloc(1)
@@ -119,10 +119,10 @@ test_map_vec_vec_with = with_graph(function()
 	v1:newband("x")[0] = 123
 	v2:newband("y")[0] = 456
 
-	local solve_ab = fhk.solve("a", "b"):with(V2):from(V1)
+	local solve_ab = m2.solve("a", "b"):with(V2):from(V1)
 
 	return function()
-		fhk.bind(V2, v2, 0)
+		m2.fhk.bind(V2, v2, 0)
 		solve_ab(v1)
 		assert(solve_ab:res("a")[0] == 123)
 		assert(solve_ab:res("b")[0] == 456)
@@ -130,17 +130,17 @@ test_map_vec_vec_with = with_graph(function()
 end)
 
 test_map_vec_globals_visibility = with_graph(function()
-	local V = fhk.expose(obj(component(bt.reals("x"))))
-	globals.static { "y" }
-	fhk.expose(globals)
+	local V = m2.expose(m2.obj(m2.component(bt.reals("x"))))
+	m2.globals.static { "y" }
+	m2.expose(m2.globals)
 
 	local v = V:vec()
 	v:alloc(1)
 	v:newband("x")[0] = 123
 
-	G.y = 456
+	m2.G.y = 456
 
-	local solve_ab = fhk.solve("a", "b"):from(V)
+	local solve_ab = m2.solve("a", "b"):from(V)
 
 	return function()
 		solve_ab(v)
@@ -150,12 +150,12 @@ test_map_vec_globals_visibility = with_graph(function()
 end)
 
 test_solver_error = with_graph(function()
-	globals.static { "x" }
-	fhk.expose(globals)
-	G.x = -1234
+	m2.globals.static { "x" }
+	m2.expose(m2.globals)
+	m2.G.x = -1234
 
-	local solve_unsat = fhk.solve("x_unsat_cst"):from(globals)
-	local solve_crash = fhk.solve("x_crash"):from(globals)
+	local solve_unsat = m2.solve("x_unsat_cst"):from(m2.globals)
+	local solve_crash = m2.solve("x_crash"):from(m2.globals)
 
 	return function()
 		assert(fails(solve_unsat))
@@ -166,11 +166,11 @@ end)
 if ffi.C.HAVE_SOLVER_INTERRUPTS == 1 then
 
 	test_map_virtual = with_graph(function()
-		fhk.virtual("x", globals, function()
+		m2.fhk.virtual("x", m2.globals, function()
 			return 3.14
 		end)
 
-		local solve_a = fhk.solve("a"):from(globals)
+		local solve_a = m2.solve("a"):from(m2.globals)
 
 		return function()
 			solve_a()
@@ -179,8 +179,8 @@ if ffi.C.HAVE_SOLVER_INTERRUPTS == 1 then
 	end)
 
 	test_map_virtual_comp = with_graph(function()
-		local comp = component(bt.reals("x"))
-		local V = fhk.expose(obj(comp))
+		local comp = m2.component(bt.reals("x"))
+		local V = m2.expose(m2.obj(comp))
 
 		local v = V:vec()
 		v:alloc(3)
@@ -189,12 +189,12 @@ if ffi.C.HAVE_SOLVER_INTERRUPTS == 1 then
 		xs[1] = 2
 		xs[2] = 3
 
-		fhk.virtual("y", comp, function(vec, idx)
+		m2.fhk.virtual("y", comp, function(vec, idx)
 			assert(vec == v)
 			return vec:band("x")[idx] + 10
 		end)
 
-		local solve_c = fhk.solve("c"):from(V)
+		local solve_c = m2.solve("c"):from(V)
 
 		return function()
 			solve_c(v)
@@ -204,18 +204,18 @@ if ffi.C.HAVE_SOLVER_INTERRUPTS == 1 then
 	end)
 
 	test_nested_virtuals = with_graph(function()
-		fhk.virtual("x", globals, function()
+		m2.fhk.virtual("x", m2.globals, function()
 			return 123
 		end)
 
-		local solve_d = fhk.solve("d"):from(globals)
+		local solve_d = m2.solve("d"):from(m2.globals)
 
-		fhk.virtual("y", globals, function()
+		m2.fhk.virtual("y", m2.globals, function()
 			solve_d()
 			return solve_d:res("d")[0] * 2
 		end)
 
-		local solve_c = fhk.solve("c"):from(globals)
+		local solve_c = m2.solve("c"):from(m2.globals)
 
 		return function()
 			solve_c()
@@ -224,7 +224,7 @@ if ffi.C.HAVE_SOLVER_INTERRUPTS == 1 then
 	end)
 
 	test_map_lazy = with_graph(function()
-		local comp = component(bt.reals("x", "y"))
+		local comp = m2.component(bt.reals("x", "y"))
 
 		local calls = 0
 		comp:lazy("y", function(band, vs)
@@ -232,7 +232,7 @@ if ffi.C.HAVE_SOLVER_INTERRUPTS == 1 then
 			calls = calls + 1
 		end)
 
-		local V = fhk.expose(obj(comp))
+		local V = m2.expose(m2.obj(comp))
 		local vec = V:vec()
 
 		vec:alloc(3)
@@ -241,7 +241,7 @@ if ffi.C.HAVE_SOLVER_INTERRUPTS == 1 then
 		x[1] = 6
 		x[2] = 5
 
-		local solve_c = fhk.solve("c"):from(V)
+		local solve_c = m2.solve("c"):from(V)
 
 		return function()
 			solve_c(vec)

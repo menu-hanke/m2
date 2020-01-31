@@ -184,14 +184,15 @@ local function choice(id, func)
 	return {id=id, func=func}
 end
 
-local function inject(env, sim)
-	env.sim = sim
-	env.record = record
-	env.choice = choice
+local function inject(env)
+	local sim = env.sim
+	env.m2.sim = sim
+	env.m2.record = record
+	env.m2.choice = choice
 	-- shortcuts
-	env.on = function(...) return sim:on(...) end
-	env.branch = aux.delegate(sim, sim.branch)
-	env.event = aux.delegate(sim, sim.event)
+	env.m2.on = aux.delegate(sim, sim.on)
+	env.m2.branch = aux.delegate(sim, sim.branch)
+	env.m2.event = aux.delegate(sim, sim.event)
 end
 
 function sim_mt.__index:on(event, f, prio)

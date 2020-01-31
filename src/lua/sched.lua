@@ -19,9 +19,9 @@ local function create(tags)
 end
 
 local function inject(env)
-	env.scheduler = function(tags)
+	env.m2.scheduler = function(tags)
 		local ret = create(tags)
-		env.on("sim:compile", function() ret:compile(env.sim) end)
+		env.sim:on("sim:compile", function() ret:compile(env.sim) end)
 		return ret
 	end
 end

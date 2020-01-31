@@ -171,10 +171,11 @@ local function main(args)
 	local cmodels = collect_cmodels(coefs, env.mapper)
 	env:require_all(args.scripts or {})
 
-	env:inject("args", args)
-	-- XXX: this is a bit ugly but it's needed so the cost function can call setup
-	-- there's probably a better way to achieve this
-	env:inject("env", env)
+	env.m2.calibrate = {
+		args = args,
+		env  = env
+	}
+
 	local costf = env:run_file(args.calibrator)
 
 	sim:compile()

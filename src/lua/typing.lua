@@ -159,15 +159,12 @@ local function mask(bits)
 end
 
 local function inject(env)
-	env.import = {
-		enum = C.vbpack,
-		bool = function(v) return v and 1 or 0 end
-	}
-
-	env.export = {
-		enum = C.vbunpack,
-		bool = function(v) return v ~= 0 end
-	}
+	aux.merge(env.m2, {
+		import_enum = C.vbpack,
+		import_bool = function(v) return v and 1 or 0 end,
+		export_enum = C.vbunpack,
+		export_bool = function(v) return v ~= 0 end
+	})
 end
 
 return {

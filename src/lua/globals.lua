@@ -76,23 +76,23 @@ local function get_ctype(name, ctype, env)
 	return env.fhk.typeof(name).ctype
 end
 
-local function globalsfunc(env, static)
+local function globalsfunc(m2, static)
 	return function(names, ctype)
 		names = type(names) == "string" and {names} or names
 		ctype = type(ctype) == "string" and ctype or (ctype and ctype.ctype)
 		for _,name in ipairs(names) do
-			env.globals.define(name, ctype or env.fhk.typeof(name).ctype, static)
+			m2.globals.define(name, ctype or m2.fhk.typeof(name).ctype, static)
 		end
 	end
 end
 
-local function inject(env, sim)
-	local gs = globals(sim)
-	gs.dynamic = globalsfunc(env, false)
-	gs.static = globalsfunc(env, true)
+local function inject(env)
+	local gs = globals(env.sim._sim)
+	gs.dynamic = globalsfunc(env.m2, false)
+	gs.static = globalsfunc(env.m2, true)
 
-	env.globals = gs
-	env.G = gs.G
+	env.m2.globals = gs
+	env.m2.G = gs.G
 end
 
 return {

@@ -261,12 +261,10 @@ local function typed(desc, data, n)
 	end
 end
 
-local function inject(env, sim)
+local function inject(env)
 	-- Note: maybe add a function to alloc from sim pool instead if malloc is too slow
-	env.vmath = {
-		allocv = allocvec
-		-- allocbitmap?
-	}
+	env.m2.allocv = allocvec
+	-- allocbitmap?
 end
 
 return {
