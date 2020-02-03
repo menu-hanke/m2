@@ -1,5 +1,12 @@
 local aux = require "aux"
 
+local sandbox = {}
+
+local function init_sandbox(path, loaded)
+	sandbox.path = path
+	sandbox.loaded = loaded
+end
+
 local simenv_mt = { __index = {} }
 
 local function create(sim)
@@ -7,7 +14,7 @@ local function create(sim)
 	return setmetatable({
 		-- put the 'm2' module as both in _loaded (proxy for package.loaded) and the global 'm2'.
 		-- this is intentional and the same behavior as luajit does with the 'jit' module.
-		env = setmetatable({ _loaded={m2=m2}, m2=m2 }, {__index=_G}),
+		env = setmetatable({ m2=m2 }, {__index=_G}),
 		m2  = m2,
 		sim = sim
 	}, simenv_mt)
@@ -34,6 +41,16 @@ local function from_conf(cfg)
 end
 
 function simenv_mt.__index:inject_env()
+	-- low-effort "sandbox"
+	-- Not a sandbox in any security sense, just to give a bit of isolation to scripts,
+	-- and automatically give them the sim environment (ie. the m2 global)
+	--
+	-- Note that scripts may still break each other or the simulator, eg. by modifying built-ins
+	-- like string or math
+	
+	self.env.package = aux.merge({}, package)
+	self.env.package.loaded = aux.merge({m2=self.m2}, sandbox.loaded)
+	self.env.package.path = sandbox.path
 	self.env.require = aux.delegate(self, self.require)
 end
 
@@ -61,28 +78,20 @@ function simenv_mt.__index:inject_types(cfg)
 	self.m2.types = cfg.types
 end
 
--- replace require so that sim modules automagically have sim environment
-function simenv_mt.__index:require(module, global)
-	if global then
-		return require(module)
-	end
-
-	if self.env._loaded[module] ~= nil then
-		return self.env._loaded[module]
-	end
-
+local function sandbox_require(env, module)
+	local package = env.package
 	local err = {}
 
-	for _,ld in ipairs(self.env.package.loaders) do
+	for _,ld in ipairs(package.loaders) do
 		local f = ld(module)
 		if type(f) == "function" then
-			setfenv(f, self.env)
+			setfenv(f, env)
 			local m = f(module)
 			if m == nil then
 				m = true
 			end
 
-			self.env._loaded[module] = m
+			package.loaded[module] = m
 			return m
 		elseif f then
 			table.insert(err, f)
@@ -90,6 +99,37 @@ function simenv_mt.__index:require(module, global)
 	end
 
 	error(string.format("Module '%s' not found: %s", module, table.concat(err, "\n")))
+end
+
+-- replace require so that sim modules automagically have sim environment
+function simenv_mt.__index:require(module, global)
+	if global then
+		return require(module)
+	end
+
+	local mod = self.env.package.loaded[module]
+	if mod then
+		return mod
+	end
+
+	-- XXX: this is an awkward way to do it, hovewer the functions in package.loaders read
+	-- the path/cpath from their (C) environment, so there is no good way to change it.
+	-- ie. we _must_ change the actual package.path.
+	-- ie. we must set it, then load, then restore it.
+	-- Note: this doesn't prevent the script from modifying eg. package.loaders but it should
+	-- cover most cases
+	local path, cpath = package.path, package.cpath
+	package.path = self.env.package.path
+	package.cpath = self.env.package.cpath
+	local ok, r = pcall(sandbox_require, self.env, module)
+	package.path = path
+	package.cpath = cpath
+
+	if ok then
+		return r
+	end
+
+	error(r)
 end
 
 function simenv_mt.__index:require_all(modules)
@@ -111,6 +151,7 @@ function simenv_mt.__index:setup(data)
 end
 
 return {
-	create    = create,
-	from_conf = from_conf
+	init_sandbox = init_sandbox,
+	create       = create,
+	from_conf    = from_conf
 }

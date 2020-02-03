@@ -3,11 +3,13 @@ local ffi = require "ffi"
 local sim = require "sim"
 local sim_env = require "sim_env"
 local bt = require "buildtype"
+local fails = fails
 
 local function with_env(setup)
 	return function()
 		local sim = sim.create()
 		local env = sim_env.create(sim)
+		env:inject_env()
 		env:inject_base()
 		debug.setfenv(setup, env.env)
 		local instr, cb = setup()
@@ -19,6 +21,15 @@ local function with_env(setup)
 		end
 	end
 end
+
+test_require_sim_env = with_env(function()
+	local f = require "read_sim_env"
+	assert(f() == m2)
+end)
+
+test_require_hide_path = with_env(function()
+	assert(fails(function() require "sim_env" end))
+end)
 
 test_chain_order = with_env(function()
 	local x = 0
