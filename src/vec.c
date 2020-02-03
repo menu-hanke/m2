@@ -240,6 +240,9 @@ static void F_ensure_capacity(sim *sim, struct vec *v, unsigned n){
 
 	dv("realloc vector %p grow %u -> %u\n", v, v->n_alloc, na);
 
+	assert(na == ALIGN(na, VEC_ALIGN));
+	v->n_alloc = na;
+
 	// frame-alloc new bands, no need to free old ones since they were frame-alloced as well
 	// NOTE: this will not work if we some day do interleaved bands!
 	for(unsigned i=0;i<v->info->n_bands;i++){
@@ -249,7 +252,4 @@ static void F_ensure_capacity(sim *sim, struct vec *v, unsigned n){
 			memcpy(v->bands[i], old, v->n_used*v->info->stride[i]);
 		}
 	}
-
-	assert(na == ALIGN(na, VEC_ALIGN));
-	v->n_alloc = na;
 }
