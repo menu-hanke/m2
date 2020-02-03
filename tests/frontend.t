@@ -83,9 +83,7 @@ test_chain_arg = with_env(function()
 end)
 
 test_binary_numbers_branching = with_env(function()
-	local G = m2.G
-	m2.globals.dynamic("bit", "uint32_t")
-	m2.globals.dynamic("value", "uint32_t")
+	local _, G = m2.ns.dynamic({"bit", "value"}, "uint32_t")
 	local seen = {}
 
 	local function notset() end
@@ -158,7 +156,7 @@ test_branch_continue_chain = with_env(function()
 end)
 
 test_vec_codegen = with_env(function()
-	local V = m2.obj(m2.component(bt.builtins {
+	local V = m2.obj(bt.builtins {
 		f32 = "real32",
 		f64 = "real64",
 		b8  = "bit8",
@@ -166,7 +164,7 @@ test_vec_codegen = with_env(function()
 		b32 = "bit32",
 		b64 = "bit64",
 		p   = "udata"
-	}))
+	})
 
 	local vec = V:vec()
 	vec:alloc(1)
@@ -204,42 +202,18 @@ test_vec_codegen = with_env(function()
 	end
 end)
 
-test_vec_lazy = with_env(function()
-	local comp = m2.component(bt.reals("x", "y"))
-
-	comp:lazy("y", function(band, vs)
-		vs:bandv("x"):add(100, band)
-	end)
-
-	local V = m2.obj(comp)
+test_vec_alloc = with_env(function()
+	local V = m2.obj(bt.reals("a", "b"))
 	local v = V:vec()
+	v:newband("a")
+	v:newband("b")
 
-	v:alloc(4)
-	local x = v:newband("x")
-	x[0] = 1
-	x[1] = 2
-	x[2] = 7
-	x[3] = 3
-
-	assert(v:band("y") == ffi.NULL)
-
-	local y = V:realize(v, "y")
-	assert(y[0] == 101 and y[1] == 102 and y[2] == 107 and y[3] == 103)
-
-	-- shouldn't be recomputed
-	x[0] = 0
-	assert(V:realize(v, "y") == y)
-	assert(y[0] == 101)
-
-	-- should be cleared
-	V:unrealize(v)
-	y = V:realize(v, "y")
-	assert(y[0] == 100)
-
-	-- this should also recompute
-	V:alloc(v, 1):band("x")[0] = 123
-	y = V:realize(v, "y")
-	assert(y[0] == 100 and y[1] == 102 and y[2] == 107 and y[3] == 103 and y[4] == 223)
+	for i=1, 100 do
+		v:alloc(i)
+		local a = ffi.cast("uintptr_t", v:band("a"))
+		local b = ffi.cast("uintptr_t", v:band("b"))
+		assert((a < b and a+v:len() < b) or (a > b and a > b+v:len()))
+	end
 end)
 
 -- TODO: scheduler tests go here

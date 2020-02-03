@@ -35,66 +35,63 @@ local function globals(sim)
 	}, globals_mt)
 end
 
-function globals_mt.__index:expose(mapper)
-	for name,p in pairs(self.ns) do
-		if mapper.vars[name] then
-			fhk.support.global(mapper:data(name, p))
-		end
+function globals_mt.__index:is_visible()
+	return true
+end
+
+function globals_mt.__index:is_constant()
+	return true
+end
+
+function globals_mt.__index:mark_mappings(mark)
+	for name,_ in pairs(self.ns) do
+		mark(name)
 	end
 end
 
-function globals_mt.__index:mark_visible(mapper, G, vmask)
-	G:mark_visible(vmask, C.GMAP_BIND_GLOBAL, typing.tvalue.u64(0))
+function globals_mt.__index:map_var(v, solver)
+	return solver.mapper:data(v.name, self.ns[v.name])
 end
 
-function globals_mt.__index:mark_nonconstant(mapper, G, vmask)
-	G:mark_nonconstant(vmask, C.GMAP_BIND_GLOBAL, typing.tvalue.u64(0))
-end
-
-function globals_mt.__index:solver_func(mapper, solver)
-	local values = ffi.cast("pvalue *", C.sim_static_alloc(self.sim,
-		solver.nv * ffi.sizeof("pvalue"), ffi.alignof("pvalue")))
-	
-	for i=0, tonumber(solver.nv)-1 do
-		solver:bind(i, values+i)
-	end
-
-	return function()
-		return (C.gs_solve_step(solver, 0))
-	end
-end
-
-function globals_mt.__index:virtualize(mapper, name, f)
-	fhk.support.global(mapper:virtual(name, f))
+function globals_mt.__index:create_solver(sf)
+	return fhk.create_solver1(sf)
 end
 
 --------------------------------------------------------------------------------
 
-local function get_ctype(name, ctype, env)
-	if type(ctype) == "string" then return ctype end
-	if ctype and ctype.ctype then return ctype.ctype end
-	return env.fhk.typeof(name).ctype
-end
-
-local function globalsfunc(m2, static)
+local function nsdefine(m2, define, static)
 	return function(names, ctype)
 		names = type(names) == "string" and {names} or names
 		ctype = type(ctype) == "string" and ctype or (ctype and ctype.ctype)
 		for _,name in ipairs(names) do
-			m2.globals.define(name, ctype or m2.fhk.typeof(name).ctype, static)
+			define(name, ctype or m2.fhk.typeof(name).ctype, static)
 		end
 	end
 end
 
 local function inject(env)
-	local gs = globals(env.sim._sim)
-	gs.dynamic = globalsfunc(env.m2, false)
-	gs.static = globalsfunc(env.m2, true)
+	local make_ns = function()
+		local ret = globals(env.sim._sim)
+		ret.dynamic = nsdefine(env.m2, ret.define, false)
+		ret.static = nsdefine(env.m2, ret.define, true)
+		return ret, ret.G
+	end
 
-	env.m2.globals = gs
-	env.m2.G = gs.G
+	env.m2.ns = setmetatable({
+		dynamic = function(names, ctype)
+			local ret, G = make_ns()
+			ret.dynamic(names, ctype)
+			return ret, G
+		end,
+		static = function(names, ctype)
+			local ret, G = make_ns()
+			ret.static(names, ctype)
+			return ret, G
+		end
+	}, { __call = make_ns })
 end
 
 return {
-	inject = inject
+	inject         = inject,
+	create_solver1 = create_solver1
 }

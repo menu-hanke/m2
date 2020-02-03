@@ -1,4 +1,5 @@
 #include "gmap.h"
+#include "gsolve.h"
 #include "type.h"
 #include "fhk.h"
 #include "bitmap.h"
@@ -9,34 +10,48 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
 
-static bool var_is_visible(tvalue to, unsigned reason, tvalue parm);
-static bool var_is_constant(tvalue to, unsigned reason, tvalue parm);
-static bool env_is_visible(tvalue to, unsigned reason, tvalue parm);
-static bool global_is_visible(tvalue to, unsigned reason, tvalue parm);
+// these checks are just for debugging
+#define IS_MAINGRAPH(G) (!(G)->udata)
+#define IS_SUBGRAPH(G)  (!(IS_MAINGRAPH(G)))
 
 static int G_model_exec(struct fhk_graph *G, void *udata, pvalue *ret, pvalue *args);
 static int G_resolve_var(struct fhk_graph *G, void *udata, pvalue *value);
+static inline tvalue resv_vec(struct gv_vec *v, uint64_t f);
+static inline tvalue resv_grid(struct gv_grid *g, uint64_t f);
+static inline tvalue resv_data(struct gv_data *d);
+
+static int G_fail_exec(struct fhk_graph *G, void *udata, pvalue *ret, pvalue *args);
+static int G_fail_resolve(struct fhk_graph *G, void *udata, pvalue *value);
+
 static const char *G_ddv(void *udata);
 static const char *G_ddm(void *udata);
 
-DD(static void debug_var_bind(struct fhk_graph *G, unsigned idx, struct gmap_any *g));
+DD(static void debug_var_bind(struct fhk_graph *G, unsigned idx, struct gv_any *v));
 
-void gmap_hook(struct fhk_graph *G){
+void gmap_hook_main(struct fhk_graph *G){
 	for(size_t i=0;i<G->n_var;i++)
 		gmap_unbind(G, i);
 	for(size_t i=0;i<G->n_mod;i++)
 		gmap_unbind_model(G, i);
 
-	G->exec_model = G_model_exec;
-	G->resolve_var = G_resolve_var;
+	G->udata = NULL;
+	G->exec_model = G_fail_exec;
+	G->resolve_var = G_fail_resolve;
 	G->debug_desc_var = G_ddv;
 	G->debug_desc_model = G_ddm;
 }
 
-void gmap_bind(struct fhk_graph *G, unsigned idx, struct gmap_any *g){
-	DD(debug_var_bind(G, idx, g));
-	G->vars[idx].udata = g;
+void gmap_hook_subgraph(struct fhk_graph *G, struct fhk_graph *H){
+	H->udata = G;
+	H->exec_model = G_model_exec;
+	H->resolve_var = G_resolve_var;
+}
+
+void gmap_bind(struct fhk_graph *G, unsigned idx, struct gv_any *v){
+	DD(debug_var_bind(G, idx, v));
+	G->vars[idx].udata = v;
 }
 
 void gmap_unbind(struct fhk_graph *G, unsigned idx){
@@ -44,6 +59,7 @@ void gmap_unbind(struct fhk_graph *G, unsigned idx){
 }
 
 void gmap_bind_model(struct fhk_graph *G, unsigned idx, struct gmap_model *m){
+	assert(IS_MAINGRAPH(G));
 	dv("%smap %s (%p) -> fhk model[%u]\n",
 			G->models[idx].udata ? "(!) re" : "",
 			m->name,
@@ -58,154 +74,142 @@ void gmap_unbind_model(struct fhk_graph *G, unsigned idx){
 	G->models[idx].udata = NULL;
 }
 
-void gmap_supp_obj_var(struct gmap_any *v, uint64_t objid){
-	v->supp.is_visible = var_is_visible;
-	v->supp.is_constant = var_is_constant;
-	v->supp.udata.u64 = objid;
-}
-
-void gmap_supp_grid_env(struct gmap_any *v, uint64_t order){
-	v->supp.is_visible = env_is_visible;
-	v->supp.is_constant = env_is_visible; // same as is_visible
-	v->supp.udata.u64 = order;
-}
-
-void gmap_supp_global(struct gmap_any *v){
-	v->supp.is_visible = global_is_visible;
-	v->supp.is_constant = global_is_visible;
-}
-
-__attribute__((no_sanitize("alignment")))
-int gmap_res_vec(void *v, pvalue *p){
-	struct gv_vcomponent *gv = v;
-	GV_GETFLAGS(flags, gv);
-	struct vec *vec = *gv->v_bind;
-	unsigned off = *gv->offset_bind;
-	unsigned idx = **gv->idx_bind;
-
-	void *band = vec->bands[off + flags.band];
-	if(UNLIKELY(gv->lazy.f && !band)){
-		gv->lazy.f(gv->lazy.udata);
-		band = vec->bands[off + flags.band];
-	}
-
-	tvalue tv = *(tvalue *) (((char *) band) + (flags.stride * idx + flags.offset));
-	*p = vpromote(tv, flags.type);
-	return FHK_OK;
-}
-
-__attribute__((no_sanitize("alignment")))
-int gmap_res_grid(void *v, pvalue *p){
-	struct gv_grid *g = v;
-	GV_GETFLAGS(flags, g);
-
-	gridpos z = grid_zoom_up(*g->bind, GRID_POSITION_ORDER, g->grid->order);
-	tvalue tv = *(tvalue *) (((char *) grid_data(g->grid, z)) + flags.offset);
-	*p = vpromote(tv, flags.type);
-	return FHK_OK;
-}
-
-__attribute__((no_sanitize("alignment")))
-int gmap_res_data(void *v, pvalue *p){
-	struct gv_data *d = v;
-	*p = vpromote(*(tvalue *) d->ref, d->flags.type);
-	return FHK_OK;
-}
-
-#define MARK_CALLBACK(cond)\
-	for(size_t i=0;i<G->n_var;i++){\
-		struct gmap_any *v = G->vars[i].udata;\
-		if(v && cond){\
-			vmask[i] = 0xff;\
-		}\
-	}\
-
-void gmap_mark_visible(struct fhk_graph *G, bm8 *vmask, unsigned reason, tvalue parm){
-	MARK_CALLBACK(v->supp.is_visible && v->supp.is_visible(v->supp.udata, reason, parm));
-}
-
-void gmap_mark_nonconstant(struct fhk_graph *G, bm8 *vmask, unsigned reason, tvalue parm){
-	MARK_CALLBACK(v->supp.is_constant && !v->supp.is_constant(v->supp.udata, reason, parm));
-}
-
-#undef MARK_CALLBACK
-
-static bool var_is_visible(tvalue to, unsigned reason, tvalue parm){
-	return reason == GMAP_BIND_OBJECT && (to.u64 & parm.u64);
-}
-
-static bool var_is_constant(tvalue to, unsigned reason, tvalue parm){
-	return reason == GMAP_BIND_OBJECT && !(to.u64 & parm.u64);
-}
-
-static bool env_is_visible(tvalue to, unsigned reason, tvalue parm){
-	return reason == GMAP_BIND_Z && to.u64 <= parm.u64;
-}
-
-static bool global_is_visible(tvalue to, unsigned reason, tvalue parm){
-	(void)to;
-	(void)reason;
-	(void)parm;
-	return true;
-}
-
 static int G_model_exec(struct fhk_graph *G, void *udata, pvalue *ret, pvalue *args){
 	(void)G;
+	assert(IS_SUBGRAPH(G));
 	struct model *m = ((struct gmap_model *) udata)->mod;
 	return MODEL_CALL(m, ret, args);
 }
 
+#define FLAGS(v)  typeof((v)->flags)
+#define XFLAGS(t) FLAGS((t*)0)
+
 static int G_resolve_var(struct fhk_graph *G, void *udata, pvalue *value){
 	(void)G;
-	// TODO: speedup: get flags and do switch(res_type), use special type for virt
-	struct gmap_any *v = udata;
-	return v->resolve(v, value);
+	assert(IS_SUBGRAPH(G));
+
+	XFLAGS(struct gv_any) flags = ((struct gv_any *) udata)->flags;
+
+	switch(flags.rtype){
+		case GMAP_VEC: *value = vpromote(resv_vec(udata, flags.u64), flags.vtype); break;
+		case GMAP_ENV: *value = vpromote(resv_grid(udata, flags.u64), flags.vtype); break;
+		case GMAP_DATA: *value = vpromote(resv_data(udata), flags.vtype); break;
+#ifdef M2_SOLVER_INTERRUPTS
+		case GMAP_INTERRUPT: {
+				XFLAGS(struct gv_int) iflags = {.u64 = flags.u64};
+				gs_intv(iflags.handle, value);
+			}
+			break;
+#endif
+		default: UNREACHABLE();
+	}
+
+	return FHK_OK;
 }
 
+__attribute__((no_sanitize("alignment")))
+static inline tvalue resv_vec(struct gv_vec *v, uint64_t f){
+	FLAGS(v) flags = {.u64 = f};
+	struct vec *vec = *v->v_bind;
+	unsigned idx = *v->idx_bind;
+	void *band = vec->bands[flags.band];
+	return *(tvalue *) (((char *) band) + (flags.stride * idx + flags.offset));
+}
+
+__attribute__((no_sanitize("alignment")))
+static inline tvalue resv_grid(struct gv_grid *g, uint64_t f){
+	FLAGS(g) flags = {.u64 = f};
+	gridpos z = grid_zoom_up(*g->bind, GRID_POSITION_ORDER, g->grid->order);
+	return *(tvalue *) (((char *) grid_data(g->grid, z)) + flags.offset);
+}
+
+__attribute__((no_sanitize("alignment")))
+static inline tvalue resv_data(struct gv_data *d){
+	return *(tvalue *) d->ref;
+}
+
+static int G_fail_exec(struct fhk_graph *G, void *udata, pvalue *ret, pvalue *args){
+	(void)G;
+	(void)udata;
+	(void)ret;
+	(void)args;
+
+	assert(IS_MAINGRAPH(G));
+	dv("Trying execute model from main graph, this should never happen\n");
+	return -1;
+}
+
+static int G_fail_resolve(struct fhk_graph *G, void *udata, pvalue *value){
+	(void)G;
+	(void)udata;
+	(void)value;
+
+	assert(IS_MAINGRAPH(G));
+	dv("Trying to resolve var from main graph, use a subgraph instead\n");
+	return -1;
+}
+
+#define NAME(x) ((x) ? (x)->name : "(unmapped)")
+
 static const char *G_ddv(void *udata){
-	struct gmap_any *v = udata;
-	return v ? v->name : "(unmapped)";
+	return NAME((struct gv_any *) udata);
 }
 
 static const char *G_ddm(void *udata){
-	struct gmap_model *m = udata;
-	return m ? m->name : "(unmapped)";
+	return NAME((struct gmap_model *) udata);
 }
 
 #ifdef DEBUG
 
-static void debug_var_bind(struct fhk_graph *G, unsigned idx, struct gmap_any *g){
+static void debug_var_bind(struct fhk_graph *G, unsigned idx, struct gv_any *g){
 	char buf[1024];
 
-	if(g->resolve == gmap_res_vec){
-		struct gv_vcomponent *v = (struct gv_vcomponent *) g;
-		snprintf(buf, sizeof(buf), "vec<bind=%p> band[*%p+%u][**%p]*%u+%u",
-				v->v_bind,
-				v->offset_bind,
-				v->flags.band,
-				v->idx_bind,
-				v->flags.stride,
-				v->flags.offset
-		);
-	}else if(g->resolve == gmap_res_grid){
-		struct gv_grid *v = (struct gv_grid *) g;
-		snprintf(buf, sizeof(buf), "grid<%p, z=%p> +%u",
-				v->grid,
-				v->bind,
-				v->flags.offset
-		);
-	}else if(g->resolve == gmap_res_data){
-		struct gv_data *v = (struct gv_data *) g;
-		snprintf(buf, sizeof(buf), "ptr<%p>", v->ref);
-	}else{
-		snprintf(buf, sizeof(buf), "(resolve: %p)", g->resolve);
+	switch(g->flags.rtype){
+		case GMAP_VEC: {
+			struct gv_vec *v = (struct gv_vec *) g;
+			snprintf(buf, sizeof(buf), "vec<bind=%p> band[%u][*%p]*%u+%u",
+					v->v_bind,
+					v->flags.band,
+					v->idx_bind,
+					v->flags.stride,
+					v->flags.offset
+			);
+		}
+		break;
+
+		case GMAP_ENV: {
+			struct gv_grid *v = (struct gv_grid *) g;
+			snprintf(buf, sizeof(buf), "grid<%p, z=%p> +%u",
+					v->grid,
+					v->bind,
+					v->flags.offset
+			);
+		}
+		break;
+
+		case GMAP_DATA: {
+			struct gv_data *v = (struct gv_data *) g;
+			snprintf(buf, sizeof(buf), "ptr<%p>", v->ref);
+		}
+		break;
+
+		case GMAP_INTERRUPT: {
+			struct gv_int *v = (struct gv_int *) g;
+			snprintf(buf, sizeof(buf), "interrupt#%d", v->flags.handle);
+		}
+		break;
+
+		case GMAP_COMPUTED:
+			return; // not bound to anything, don't log these
+
+		default: UNREACHABLE();
 	}
 
 	dv("%smap %s type=%u.%u : %s -> fhk var[%u]\n",
 			G->vars[idx].udata ? "(!) re" : "",
 			g->name,
-			TYPE_BASE(g->flags.type),
-			TYPE_SIZE(g->flags.type),
+			TYPE_BASE(g->flags.vtype),
+			TYPE_SIZE(g->flags.vtype),
 			buf,
 			idx
 	);

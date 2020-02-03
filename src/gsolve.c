@@ -125,21 +125,10 @@ gs_res gs_resume0(struct gs_ctx *ctx){
 	return co_resume(ctx);
 }
 
-static void lazy_interrupt(tvalue udata){
-	gs_interrupt(GS_INTERRUPT_LAZY | udata.u32);
-}
-
-void gs_lazy(gmap_lazy *lazy, int32_t handle){
-	lazy->f = lazy_interrupt;
-	lazy->udata.u32 = handle;
-}
-
-int gs_res_virt(void *v, pvalue *p){
+void gs_intv(uint32_t handle, pvalue *p){
 	struct gs_ctx *ctx = aco_get_arg();
 	ctx->iv = p;
-	struct gs_virt *virt = v;
-	gs_interrupt(GS_INTERRUPT_VIRT | virt->handle);
-	return FHK_OK;
+	gs_interrupt(GS_INTERRUPT_VIRT | handle);
 }
 
 // reuse coroutine object to save mallocs (this is a bit hacky)

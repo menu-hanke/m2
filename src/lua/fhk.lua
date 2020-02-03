@@ -141,12 +141,10 @@ local function newbitmap(n)
 end
 
 ffi.metatype("struct fhk_graph", { __index = {
-	newvmask         = function(self) return newbitmap(self.n_var) end,
-	newmmask         = function(self) return newbitmap(self.n_mod) end,
-	init             = C.fhk_init,
-	reset            = C.fhk_reset_mask,
-	mark_visible     = C.gmap_mark_visible,
-	mark_nonconstant = C.gmap_mark_nonconstant
+	newvmask = function(self) return newbitmap(self.n_var) end,
+	newmmask = function(self) return newbitmap(self.n_mod) end,
+	init     = C.fhk_init,
+	reset    = C.fhk_reset_mask
 }})
 
 --------------------------------------------------------------------------------
@@ -179,7 +177,7 @@ local function create_subgraph(mapper, G, fvars, fmodels)
 end
 
 local function hook(G, fvars, fmodels, vars, models)
-	C.gmap_hook(G)
+	C.gmap_hook_main(G)
 
 	local mvars, mmods = {}, {}
 
@@ -208,13 +206,15 @@ local function hook(G, fvars, fmodels, vars, models)
 		arena      = arena,
 		vars       = mvars,
 		models     = mmods,
-		virtuals   = {},
+		virtuals   = require("virtual").virtuals(),
+		visible    = {},
 		bind       = {
 			z      = bind_ns(function() return arena:new("gridpos") end)
 		}
 	}, mapper_mt)
 
 	mapper.G_subgraph = create_subgraph(mapper, G, fvars, fmodels)
+	mapper:bind_main_graph()
 
 	return mapper
 end
@@ -223,121 +223,86 @@ function mapper_mt.__index:G()
 	return self.G_subgraph.G
 end
 
-function mapper_mt.__index:new_objid()
-	if not self._next_objid then
-		self._next_objid = 1ULL
-	end
-
-	if self._next_objid == 0 then
-		error("Ran out of objid bits, maybe create less objects")
-	end
-
-	-- Note: this is not performance sensitive, so if the 64 obj limit becomes a problem,
-	-- then objs can be implemented in gmap as objid array.
-	-- A bitmask is just a much simpler way to do it
-
-	local ret = self._next_objid
-	self._next_objid = bit.lshift(self._next_objid, 1)
-	return ret
-end
-
-function mapper_mt.__index:bind_mapping(mapping, name)
+function mapper_mt.__index:getvar(name)
 	local v = self.vars[name]
+
 	if not v then
-		error(string.format("Can't bind mapping '%s': there is no such variable", name))
-	end
-	if v.mapping then
-		error(string.format("Variable '%s' already has this mapping -> %s", name, v.mapping))
+		error(string.format("No such variable: '%s'", name))
 	end
 
-	mapping.name = name
-	mapping.flags.type = v.type.desc
-	local fv = self.G_subgraph.fvars[name]
-	C.gmap_bind(self:G(), fv.idx, ffi.cast("struct gmap_any *", mapping))
-	v.mapping = mapping
-	return mapping
+	return v
 end
 
-function mapper_mt.__index:vcomponent(name, offset, stride, band, offset_bind, idx_bind, v_bind)
-	local ret = self.arena:new("struct gv_vcomponent")
-	ret.resolve = C.gmap_res_vec
+function mapper_mt.__index:own(name, owner)
+	local v = self:getvar(name)
+	
+	if v.owner then
+		error(string.format("Variable '%s' already has this owner -> %s", v.owner))
+	end
+
+	v.owner = owner
+end
+
+function mapper_mt.__index:always_visible(x)
+	table.insert(self.visible, x)
+	return x
+end
+
+function mapper_mt.__index:bind_main_graph()
+	-- treat each var as computed here
+	local G = self:G()
+	local mappings = self.arena:new("struct gv_any", G.n_var)
+
+	for i=0, tonumber(G.n_var)-1 do
+		local name = self.vars[i].name
+		local fv = self.G_subgraph.fvars[name]
+		self:init_header(mappings[fv.idx], name, C.GMAP_COMPUTED)
+	end
+
+	for i=0, tonumber(G.n_var)-1 do
+		C.gmap_bind(G, i, mappings[i])
+	end
+end
+
+function mapper_mt.__index:subgraph(vmask, mmask)
+	return self.G_subgraph:subgraph(vmask, mmask, function(size) return self.arena:malloc(size) end)
+end
+
+function mapper_mt.__index:init_header(gv, name, rtype)
+	gv.name = name
+	gv.flags.rtype = rtype
+	gv.flags.vtype = self:getvar(name).type.desc
+	return gv
+end
+
+function mapper_mt.__index:vec(name, offset, stride, band, idx_bind, v_bind)
+	local ret = self:init_header(self.arena:new("struct gv_vec"), name, C.GMAP_VEC)
 	ret.flags.offset = offset
 	ret.flags.stride = stride
 	ret.flags.band = band
-	ret.offset_bind = offset_bind
 	ret.idx_bind = idx_bind
 	ret.v_bind = v_bind
-	return self:bind_mapping(ret, name)
+	return ret
 end
 
 function mapper_mt.__index:grid(name, offset, grid, bind)
-	local ret = self.arena:new("struct gv_grid")
-	ret.resolve = C.gmap_res_grid
+	local ret = self:init_header(self.arena:new("struct gv_grid"), name, C.GMAP_ENV)
 	ret.flags.offset = offset
 	ret.grid = grid
 	ret.bind = bind
-	return self:bind_mapping(ret, name)
+	return ret
 end
 
 function mapper_mt.__index:data(name, ref)
-	local ret = self.arena:new("struct gv_data")
-	ret.resolve = C.gmap_res_data
+	local ret = self:init_header(self.arena:new("struct gv_data"), name, C.GMAP_DATA)
 	ret.ref = ref
-	return self:bind_mapping(ret, name)
+	return ret
 end
 
-function mapper_mt.__index:computed(name)
-	local ret = self.arena:new("struct gmap_any")
-	ret.resolve = nil
-	ret.supp.is_visible = nil
-	ret.supp.is_constant = nil
-	self:bind_mapping(ret, name)
-end
-
-function mapper_mt.__index:lazy_bind_vars(names)
-	for _,name in ipairs(names) do
-		if not self.vars[name].mapping then
-			self:computed(name)
-		end
-	end
-end
-
-if C.HAVE_SOLVER_INTERRUPTS == 1 then
-	function mapper_mt.__index:wrap_virtual(name, func)
-		local ptype = typing.promote(self.vars[name].type.desc)
-		local tname = typing.desc_builtin[tonumber(ptype)].tname
-
-		return function(ctx)
-			local ret = ffi.new("pvalue")
-			ret[tname] = func()
-			return tonumber(C.gs_resume1(ctx, ret))
-		end
-	end
-
-	function mapper_mt.__index:virtual(name, func)
-		local ret = self.arena:new("struct gs_virt")
-		ret.resolve = C.gs_res_virt
-		ret.handle = #self.virtuals + 1
-		self.virtuals[ret.handle] = self:wrap_virtual(name, func)
-		return self:bind_mapping(ret, name)
-	end
-
-	function mapper_mt.__index:lazy(name, func)
-		local handle = #self.virtuals + 1
-		C.gs_lazy(self.vars[name].mapping.lazy, handle)
-		self.virtuals[handle] = function(ctx)
-			func()
-			return tonumber(C.gs_resume0(ctx))
-		end
-	end
-else
-	function mapper_mt.__index:virtual()
-		error("No virtual support -- compile with SOLVER_INTERRUPTS=on")
-	end
-
-	function mapper_mt.__index:lazy()
-		error("No lazy support -- compile with SOLVER_INTERRUPTS=on")
-	end
+function mapper_mt.__index:interrupt(name, handle)
+	local ret = self:init_header(self.arena:new("struct gv_int"), name, C.GMAP_INTERRUPT)
+	ret.flags.handle = handle
+	return ret
 end
 
 function mapper_mt.__index:bind_model(name, mod)
@@ -377,9 +342,14 @@ local function sg_fnodes(G, mapper)
 	return fv, fm
 end
 
-function subgraph_mt.__index:subgraph(vmask, mmask)
+function subgraph_mt.__index:subgraph(vmask, mmask, malloc, free)
+	if not malloc then
+		malloc = C.malloc
+		free = C.free
+	end
 	local size = C.fhk_subgraph_size(self.G, vmask, mmask)
-	local H = ffi.gc(ffi.cast("struct fhk_graph *", C.malloc(size)), C.free)
+	local H = ffi.cast("struct fhk_graph *", malloc(size))
+	if free then ffi.gc(H, free) end
 	C.fhk_copy_subgraph(H, self.G, vmask, mmask)
 	return create_subgraph(self.mapper, H, sg_fnodes(H, self.mapper))
 end
@@ -449,15 +419,6 @@ local function markvs(vmask, nv, fvs, mark)
 	end
 end
 
-local function make_solver_vmask(G, vmask, nv, fvs)
-	local given = ffi.new("fhk_vbmap")
-	given.given = 1
-	C.bm_and64(vmask, G.n_var, C.bmask8(given.u8))
-
-	-- clear given bit for targets
-	markvs(vmask, nv, fvs, 0)
-end
-
 local function solver_make_res(names, vs)
 	local ret = {}
 	for i,name in pairs(names) do
@@ -477,6 +438,8 @@ function mapper_mt.__index:solver(names)
 		mapper   = self,
 		names    = names,
 		visible  = {},
+		mappings = {},
+		binds    = {}, -- not used by solver, for sources to put their binding info
 		res_info = solver_make_res(names, self.vars)
 	}, solver_func_mt)
 end
@@ -501,7 +464,7 @@ if C.HAVE_SOLVER_INTERRUPTS == 1 then
 	function solver_func_mt.__index:wrap_solver(f)
 		local sub = self.subgraph
 		local gsctx = ffi.gc(C.gs_create_ctx(), C.gs_destroy_ctx)
-		local virtuals = self.mapper.virtuals
+		local callbacks = self.mapper.virtuals.callbacks
 
 		return function(...)
 			C.fhk_clear(sub.G)
@@ -512,9 +475,9 @@ if C.HAVE_SOLVER_INTERRUPTS == 1 then
 			-- TODO: could specialize/generate code for this loop, since this kind of dispatch
 			-- probably has horrible performance
 			while band(r, bnot(C.GS_ARG_MASK)) ~= 0 do
-				assert(band(r, C.GS_INTERRUPT_VIRT + C.GS_INTERRUPT_LAZY) ~= 0)
-				local virt = virtuals[tonumber(band(r, C.GS_ARG_MASK))]
-				r = virt(gsctx)
+				assert(band(r, C.GS_INTERRUPT_VIRT) ~= 0)
+				local virt = callbacks[tonumber(band(r, C.GS_ARG_MASK))]
+				r = virt(gsctx, self)
 			end
 
 			if r ~= C.FHK_OK then
@@ -536,36 +499,112 @@ else
 	end
 end
 
-function solver_func_mt.__index:mark_visible(init_v)
+function solver_func_mt.__index:each_visible(f)
+	for _,vis in ipairs(self.mapper.visible) do
+		f(vis)
+	end
+
 	for _,vis in ipairs(self.visible) do
-		vis:mark_visible(self.mapper, self.mapper:G(), init_v)
+		f(vis)
+	end
+end
+
+function solver_func_mt.__index:create_mappings()
+	self:each_visible(function(vis)
+		vis:mark_mappings(function(name)
+			if not self.mapper.vars[name] then
+				return
+			end
+
+			if self.mappings[name] and self.mappings[name] ~= vis then
+				error(string.format("Mapping conflict! Variable '%s' is marked by %s and %s",
+				name, self.mappings[name], vis))
+			end
+
+			self.mappings[name] = vis
+		end)
+	end)
+end
+
+function solver_func_mt.__index:mark_visible(G, vis, vmask, mark)
+	mark = mark or 0xff
+	for i=0, tonumber(G.n_var)-1 do
+		local v = self.mapper.vars[tonumber(G.vars[i].uidx)]
+		if self.mappings[v.name] and self.mappings[v.name]:is_visible(vis, v) then
+			vmask[i] = mark
+		end
+	end
+end
+
+function solver_func_mt.__index:mark_nonconstant(G, vis, vmask, mark)
+	mark = mark or 0xff
+	for i=0, tonumber(G.n_var)-1 do
+		local v = self.mapper.vars[tonumber(G.vars[i].uidx)]
+		if self.mappings[v.name] and not self.mappings[v.name]:is_constant(vis, v) then
+			vmask[i] = mark
+		end
+	end
+end
+
+function solver_func_mt.__index:create_visible_mask(mark)
+	mark = mark or 0xff
+	local G = self.mapper:G()
+	local vmask = G:newvmask()
+
+	self:each_visible(function(vis)
+		self:mark_visible(G, vis, vmask, mark)
+	end)
+
+	return vmask
+end
+
+function solver_func_mt.__index:mark_reset_nonconstant(G, reset_v)
+	self:each_visible(function(vis)
+		self:mark_nonconstant(G, vis, reset_v)
+	end)
+end
+
+function solver_func_mt.__index:prepare_binds()
+	-- Note: potential optimization? here is to not prepare it if it doesn't have any mapped vars
+	-- (ie. all vars were cut when solving the subgraph)
+	self:each_visible(function(vis)
+		if vis.prepare then
+			vis:prepare(self)
+		end
+	end)
+end
+
+function solver_func_mt.__index:map_subgraph()
+	local G = self.subgraph.G
+	C.gmap_hook_subgraph(self.mapper:G(), G)
+
+	for i=0, tonumber(G.n_var)-1 do
+		local v = self.mapper.vars[tonumber(G.vars[i].uidx)]
+		if self.mappings[v.name] then
+			local mp = self.mappings[v.name]:map_var(v, self)
+			C.gmap_bind(G, i, ffi.cast("struct gv_any *", mp))
+		end
 	end
 end
 
 function solver_func_mt.__index:create_solver()
 	-- (1) make init mask for the full graph
-	local mapper = self.mapper
-	local G = mapper:G()
-	local init_v = G:newvmask()
-	self:mark_visible(init_v)
-	local nv, ys = mapper.G_subgraph:collectvs(self.names)
-	make_solver_vmask(G, init_v, nv, ys)
+	self:create_mappings()
+	local init_v = self:create_visible_mask(ffi.new("fhk_vbmap", {given=1}).u8)
+	local nv, ys = self.mapper.G_subgraph:collectvs(self.names)
+	markvs(init_v, nv, ys, 0) -- unmark given for roots
 
 	-- (2) reduce on full graph, after this v/mmask contain subgraph selection
+	local G = self.mapper:G()
 	local vmask = G:newvmask()
 	local mmask = G:newmmask()
 	G:init(init_v)
 	if C.fhk_reduce(G, nv, ys, vmask, mmask) ~= C.FHK_OK then
-		mapper.G_subgraph:failed()
+		self.mapper.G_subgraph:failed()
 	end
 
-	-- make sure everything is bound before creating the subgraph, since creating it copies udata
-	-- pointers, so later modifications wouldn't show in the subgraph
-	local ynames = mapper.G_subgraph:collectvmask(vmask)
-	mapper:lazy_bind_vars(ynames)
-
 	-- (3) create subgraph
-	local sub = mapper.G_subgraph:subgraph(vmask, mmask)
+	local sub = self.mapper:subgraph(vmask, mmask)
 	self.subgraph = sub
 	local H = sub.G
 	local iv = H:newvmask()
@@ -580,7 +619,7 @@ function solver_func_mt.__index:create_solver()
 	self.solver = solver
 	solver:init(H, nv)
 	sub:collectvs(self.names, solver.xs)
-	self.source:mark_nonconstant(mapper, H, solver.reset_v)
+	self:mark_reset_nonconstant(H, solver.reset_v)
 	solver:compute_reset_mask()
 
 	-- (5) wrap solver: the wrapper should
@@ -593,7 +632,9 @@ function solver_func_mt.__index:create_solver()
 	--     this should NOT in any way modify any value fhk can read: globals, any containers
 	--     exposed to this solver, model coefficients, ...
 	--   * check the result, raise errors or handle virtuals if needed
-	local solver_func = self.source:solver_func(mapper, solver)
+	self:prepare_binds()
+	local solver_func = self.source:create_solver(self)
+	self:map_subgraph()
 	self.solve = self:wrap_solver(solver_func)
 
 	return self
@@ -602,6 +643,10 @@ end
 function solver_func_mt.__index:res(name)
 	local info = self.res_info[name]
 	return (ffi.cast(info.ctype, self.solver.res[info.idx]))
+end
+
+function solver_func_mt.__index:bind(x, ...)
+	x:bind_solver(self, ...)
 end
 
 function solver_func_mt:__call(...)
@@ -618,26 +663,20 @@ ffi.metatype("struct fhk_solver", { __index = {
 	step = C.fhk_solver_step
 }})
 
-local function cast_any(f)
-	return function(self, ...)
-		return f(ffi.cast("struct gmap_any *", self), ...)
-	end
-end
-
-local support = {
-	var    = cast_any(C.gmap_supp_obj_var),
-	env    = cast_any(C.gmap_supp_grid_env),
-	global = cast_any(C.gmap_supp_global)
-}
-
 --------------------------------------------------------------------------------
 
-local rebind = function(sim, solver, n)
-	local res_size = n * ffi.sizeof("pvalue")
-
+-- XXX: does this belong here?
+local function create_solver1(sf)
+	local solver = sf.solver
+	local values = ffi.new("pvalue[?]", solver.nv)
+	sf._result_buf = values -- attach it to the solver to prevent it from being gc'd
+	
 	for i=0, tonumber(solver.nv)-1 do
-		local res = C.sim_alloc(sim, res_size, ffi.alignof("pvalue"), C.SIM_FRAME)
-		solver:bind(i, res)
+		solver:bind(i, values+i)
+	end
+
+	return function()
+		return (C.gs_solve_step(solver, 0))
 	end
 end
 
@@ -646,8 +685,8 @@ local function inject(env)
 
 	env.m2.fhk = {
 		bind    = function(x, ...) x:bind(mapper, ...) end,
-		expose  = function(x) x:expose(mapper) return x end,
 		virtual = function(name, x, f) return x:virtualize(mapper, name, f) end,
+		global  = function(vis, ...) return mapper:always_visible(vis), ... end,
 		solve   = function(...)
 			local s = mapper:solver({...})
 			env.sim:on("sim:compile", function() s:create_solver() end)
@@ -662,15 +701,23 @@ local function inject(env)
 	}
 
 	-- shortcut
-	env.m2.expose = env.m2.fhk.expose
 	env.m2.solve = env.m2.fhk.solve
+
+	env.m2.virtuals = function(vis)
+		local vset = mapper.virtuals:vset(vis)
+		vset.virtual = function(name, f)
+			local ptype = typing.promote(mapper.vars[name].type.desc)
+			local tname = typing.desc_builtin[tonumber(ptype)].tname
+			return vset:define(name, f, tname)
+		end
+		return vset
+	end
 end
 
 return {
 	build_graph     = build_graph,
 	create_models   = create_models,
 	hook            = hook,
-	support         = support,
 	inject          = inject,
-	rebind          = rebind
+	create_solver1  = create_solver1
 }

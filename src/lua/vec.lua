@@ -1,7 +1,7 @@
 local ffi = require "ffi"
+local aux = require "aux"
 local typing = require "typing"
 local vmath = require "vmath"
-local code = require "code"
 local fhk = require "fhk"
 local C = ffi.C
 
@@ -91,192 +91,7 @@ end
 
 --------------------------------------------------------------------------------
 
-local vcomp_bind = ffi.typeof [[
-	struct {
-		unsigned offset;
-		unsigned *idx;
-		struct vec *vec;
-	}
-]]
-
-local function structp(t, s, x)
-	-- This is a bit ugly but luajit doesn't let me directly take the address of a struct member
-	-- so I have to use a workaround.
-	-- This will return (void *) &s.x, where s is a struct and x is a field
-	return ffi.cast("void *", ffi.cast("char *", s) + ffi.offsetof(t, x))
-end
-
-local component_mt = { __index={} }
-
-local function component(type, base)
-	base = base or {}
-	base.events = base.events or {}
-	base._lazy = {}
-	base.type = type
-	return setmetatable(base, component_mt)
-end
-
-function component_mt.__index:bind(mapper, obj, offset, vec, idxp)
-	if not self.id then
-		return
-	end
-
-	self.vc_bind.offset = offset
-	self.vc_bind.vec = vec
-	self.vc_bind.idx = idxp
-
-	-- store the currently bound object because we may need to cast the vector later in virtual
-	self.obj = obj
-end
-
-function component_mt.__index:is_mapped()
-	return self.id ~= nil
-end
-
-function component_mt.__index:any_mapped(mapper)
-	for _,field in ipairs(self.type.fields) do
-		if mapper.vars[field] then
-			return true
-		end
-	end
-end
-
-local function map_field(map, band, stride, container, field, off)
-	local t = container.vars[field]
-
-	if t.vars then
-		for _,name in ipairs(t.fields) do
-			map_field(map, band, stride, t, name, off+typing.offsetof(t, name))
-		end
-	else
-		map(field, off, stride, band-1)
-	end
-end
-
-function component_mt.__index:map_bands(map)
-	for band,field in ipairs(self.type.fields) do
-		map_field(map, band, ffi.sizeof(self.type.vars[field].ctype), self.type, field, 0)
-	end
-end
-
-function component_mt.__index:lazy_compute_band(band, vs, field)
-	return self._lazy[field](band, vs)
-end
-
-function component_mt.__index:lazy(field, f)
-	self._lazy[field] = f
-end
-
-function component_mt.__index:is_lazy(field)
-	return self._lazy[field] ~= nil
-end
-
--------------------- mapper --------------------
-
-function component_mt.__index:expose(mapper)
-	if self:is_mapped() or not self:any_mapped(mapper) then
-		return
-	end
-
-	self.id = mapper:new_objid()
-
-	-- the address needs to stay constant (gv_vcomponent will point here) so ffi can't be used here
-	self.vc_bind = mapper.arena:new(vcomp_bind)
-
-	local op = structp(vcomp_bind, self.vc_bind, "offset")  -- &bind.offset
-	local ip = structp(vcomp_bind, self.vc_bind, "idx")     -- &bind.idx
-	local vp = structp(vcomp_bind, self.vc_bind, "vec")     -- &bind.vec
-
-	self:map_bands(function(name, offset, stride, band)
-		if mapper.vars[name] then
-			local v = mapper:vcomponent(name, offset, stride, band, op, ip, vp)
-			fhk.support.var(v, self.id)
-		end
-	end)
-
-	-- this only makes sense for primitives
-	for band,name in ipairs(self.type.fields) do
-		if self:is_lazy(name) and mapper.vars[name] then
-			local f = self._lazy[name]
-			mapper:lazy(name, function()
-				local v = ffi.cast(self.obj.vec_ctp, self.vc_bind.vec)
-				f(v:newband(name), v)
-			end)
-		end
-	end
-end
-
-function component_mt.__index:virtualize(mapper, name, f)
-	fhk.support.var(mapper:virtual(name, function()
-		return f(ffi.cast(self.obj.vec_ctp, self.vc_bind.vec), tonumber(self.vc_bind.idx[0]))
-	end), self.id)
-end
-
---------------------------------------------------------------------------------
-
-local function zcomponent(name, typename)
-	local type = typing.newtype(typename or string.format("%s_z", name))
-	type.vars[name] = typing.builtin_types.z
-
-	local comp = component(type)
-
-	comp.bind = function(comp, mapper, offset, vec, idx)
-		if comp.id and vec then
-			mapper.bind.z.global(vec:band(name)[idx])
-		end
-	end
-
-	comp.solver_func = function(obj, mapper, solver)
-		local z_bind = mapper.bind.z.global.ref
-		local z_band = obj.offsets[comp]
-
-		return function(vec)
-			obj:bind(mapper, vec)
-			fhk.rebind(obj.sim, solver, vec:alloc_len())
-			return (C.gs_solve_vec_z(vec:cvec(), solver, z_bind, z_band, self.solver_idxp))
-		end
-	end
-
-	comp.events.mark_visible = function(obj, mapper, vmask)
-		mapper:mark_visible(vmask, C.GMAP_BIND_Z, typing.tvalue.u64(C.POSITION_ORDER))
-	end
-
-	return comp
-end
-
---------------------------------------------------------------------------------
-
-local function collect_bands(comps)
-	local bands = {}
-	local offsets = {}
-	local containers = {}
-
-	local band = 0
-	for _,c in ipairs(comps) do
-		local t = c.type
-		offsets[c] = band
-
-		for _,field in ipairs(t.fields) do
-			if containers[field] then
-				error("Name clash: %s", field)
-			end
-
-			containers[field] = c
-
-			-- lua table, so it's 1 indexed
-			bands[band+1] = {
-				name = field,
-				type = t.vars[field]
-			}
-
-			band = band + 1
-		end
-	end
-
-	return bands, offsets, containers
-end
-
-local function genvectypes(sim, bands)
+local function genvectypes(sim, typ)
 	-- Note: this might not be completely safe and it's definitely not defined behavior by C
 	-- standard. But it should work. Basically we generate a struct type that's like struct vec
 	-- (see vec.c/vec.h), but all the void *s, have been replaced by the actual types.
@@ -285,14 +100,6 @@ local function genvectypes(sim, bands)
 	-- It also may speed up band accesses a bit, though this alone wouldn't be worth it.
 	-- BIG NOTE: IF YOU CHANGE THE STRUCT IN VEC.H THEN THIS ALSO NEEDS TO CHANGE
 	-- (TODO add unit test ensuring this doesn't happen)
-	
-	local bs = {}
-	local bnames = {}
-
-	for _,b in ipairs(bands) do
-		table.insert(bs, string.format("%s *%s", b.type.ctype, b.name))
-		table.insert(bnames, b.name)
-	end
 
 	-- Layout (beginning) must match struct vec_info! The generated struct looks like this:
 	--
@@ -307,7 +114,7 @@ local function genvectypes(sim, bands)
 	--     } desc;
 	--     sim *sim;
 	-- }
-	bnames = table.concat(bnames, ", ")
+	local bnames = table.concat(typ.fields, ", ")
 	local metact = ffi.typeof(string.format([[
 		struct {
 			struct {
@@ -320,6 +127,12 @@ local function genvectypes(sim, bands)
 			sim *sim;
 		}
 	]], bnames, bnames))
+	
+	local bandp = {}
+
+	for idx,field in ipairs(typ.fields) do
+		bandp[idx] = string.format("%s *%s", typ.vars[field].ctype, field)
+	end
 
 	-- Layout must match struct vec! The generated struct looks like this:
 	--
@@ -344,7 +157,7 @@ local function genvectypes(sim, bands)
 				%s;
 			} vec;
 		}
-	]], table.concat(bs, "; ")), metact)
+	]], table.concat(bandp, "; ")), metact)
 
 	-- Layout must match struct vec_slice! The generated struct here is just vec_slice but
 	-- the struct_vec * pointer replaced with the generated ctype:
@@ -365,52 +178,34 @@ local function genvectypes(sim, bands)
 	return metact, ffi.metatype(ct, vec_mt), ffi.metatype(slicect, slice_mt)
 end
 
-local function initmeta(sim, bands, metact)
+local function initmeta(sim, typ, metact)
 	local metap = ffi.typeof("$*", metact)
 	local meta = ffi.cast(metap, C.sim_static_alloc(sim, ffi.sizeof(metact), ffi.alignof(metact)))
-	meta.stride.___nbands = #bands
+	meta.stride.___nbands = #typ.fields
 	meta.sim = sim
 
-	for _,b in ipairs(bands) do
-		meta.desc[b.name] = b.type.desc or typing.udata.desc
-		meta.stride[b.name] = ffi.sizeof(b.type.ctype)
+	for _,name in ipairs(typ.fields) do
+		local t = typ.vars[name]
+		meta.desc[name] = t.desc or typing.udata.desc
+		meta.stride[name] = ffi.sizeof(t.ctype)
 	end
 
 	return meta
 end
 
-local function collect_lazy(bands, bcomp)
-	local idx = {}
-	for i, b in ipairs(bands) do
-		if bcomp[b.name]._lazy[b.name] then
-			table.insert(idx, i-1)
-		end
-	end
-
-	return {n=#idx, buf=ffi.new("unsigned[?]", #idx, idx)}
-end
-
 local obj_mt = { __index={} }
 
-local function obj(sim, comps)
-	local bands, offsets, band_comps = collect_bands(comps)
-	local metact, vct, slicect = genvectypes(sim, bands)
-	local meta = initmeta(sim, bands, metact)
+local function obj(sim, typ)
+	local metact, vct, slicect = genvectypes(sim, typ)
+	local meta = initmeta(sim, typ, metact)
 
-	local ret = setmetatable({
+	return setmetatable({
 		sim        = sim,
+		type       = typ,
 		vec_ctp    = ffi.typeof("$*", vct),
 		slice_ct   = slicect,
 		vec_info   = ffi.cast("struct vec_info *", meta),
-		comps      = comps,        -- component list
-		band_comps = band_comps,   -- band name -> component mapping
-		offsets    = offsets,      -- component -> offset (index) mapping
-		lazy_bands = collect_lazy(bands, band_comps) -- {n=num, buf=lazy band indices}
 	}, obj_mt)
-
-	ret:specialize()
-
-	return ret
 end
 
 function obj_mt.__index:vec()
@@ -427,213 +222,134 @@ function obj_mt.__index:alloc(vec, n)
 	return self:slice(vec, pos, pos+n)
 end
 
-function obj_mt.__index:realize(vs, field)
-	local band = vs:band(field)
-	if band == ffi.NULL then
-		band = vs:newband(field)
-		self.band_comps[field]:lazy_compute_band(band, vs, field)
-	end
-	return band
-end
+local function map_field(offsets, band, stride, container, field, off)
+	local t = container.vars[field]
 
-function obj_mt.__index:realizev(vs, field)
-	return vs:typedvec(field, self:realize(vs, field))
-end
-
-function obj_mt.__index:refresh(vs, field)
-	local band = vs:band(field)
-	if band ~= ffi.NULL then
-		self.band_comps[field]:lazy_compute_band(band, vs, field)
-	end
-end
-
-function obj_mt.__index:unrealize(vec)
-	C.vec_clear_bands(vec:cvec(), self.lazy_bands.n, self.lazy_bands.buf)
-end
-
-local function wrap(event, f)
-	if not event then
-		return f
-	end
-
-	-- TODO: may need to generate code or use string.dump+load here if this has bad performance
-	return function(...)
-		event(...)
-		f(...)
-	end
-end
-
-function obj_mt.__index:specialize()
-	for _,c in ipairs(self.comps) do
-		for event,f in pairs(c.events) do
-			self[event] = wrap(self[event], f)
+	if t.vars then
+		for _,name in ipairs(t.fields) do
+			map_field(offsets, band, stride, t, name, off+typing.offsetof(t, name))
 		end
+	else
+		offsets[field] = {
+			offset = off,
+			stride = stride,
+			band = band-1
+		}
 	end
-
-	-- only 1 component may override the solver, otherwise we will just do multiple runs over
-	-- the vector with different data available
-	local sf
-	for _,c in ipairs(self.comps) do
-		if c.solver_func then
-			if solver_func then
-				error(string.format("Only 1 component may override solver"))
-			end
-			sf = c.solver_func
-		end
-	end
-
-	if sf then
-		self.solver_func = sf
-	end
-
-	self:specialize_realization()
 end
 
-function obj_mt.__index:specialize_bind()
-	-- "unroll" these to prevent a huge amount of small 1-3 element loops
-	-- codegen is not a very elegant solution here, but since bind is often called in a
-	-- loop over each element of some vector, we need performance here
-	-- Note: don't call this function before calling expose()
-	
-	-- this creates the following function:
-	--
-	-- local c1 = self.comps[1]
-	-- local off1 = self.offsets[c1]
-	-- ...
-	-- local cN = self.comps[N]
-	-- local offN = self.offsets[N]
-	--
-	-- self._bind = function(self, mapper, vec, idxp)
-	--     c1:bind(mapper, self, off1, vec, idxp)
-	--     ...
-	--     cN:bind(mapper, self, offN, vec, idxp)
-	-- end
+function obj_mt.__index:map_offsets()
+	local offsets = {}
 
-	local binds = {}
-
-	for _,c in ipairs(self.comps) do
-		if c:is_mapped() then
-			table.insert(binds, {off=self.offsets[c], c=c})
-		end
+	for band,field in ipairs(self.type.fields) do
+		map_field(offsets, band, ffi.sizeof(self.type.vars[field].ctype), self.type, field, 0)
 	end
 
-	local bind = code.new()
-
-	for i,b in ipairs(binds) do
-		bind:emitf("local c%d = binds[%d].c; local off%d = binds[%d].off;", i, i, i, i)
-	end
-
-	bind:emit("return function(self, mapper, vec, idxp)")
-	
-	for i,b in ipairs(binds) do
-		bind:emitf("c%d:bind(mapper, self, off%d, vec, idxp)", i, i)
-	end
-
-	bind:emit("end")
-	self._bind = bind:compile({binds=binds}, "=(bind)")()
-end
-
-function obj_mt.__index:specialize_realization()
-	-- same idea as the above function, if the realizations are called in a loop, we get a side
-	-- trace for each one, which is absolutely not what we want
-	
-	-- this creates the following function:
-	--
-	-- local NULL  = ffi.NULL
-	-- local lazy1 = lazy[1].band
-	-- local comp1 = lazy[1].comp
-	-- ...
-	-- local lazyN = lazy[N].band
-	-- local compN = lazy[N].comp
-	--
-	-- self.refresh_slice = function(self, slice)
-	--     local band
-	--     band = slice:band(lazy1)
-	--     if band ~= ffi.NULL then comp1:lazy_compute_band(band, slice, lazy1) end
-	--     ...
-	--     band = slice:band(lazyN)
-	--     if band ~= ffi.NULL then compN:lazy_compute_band(band, slice, lazyN) end
-	-- end
-	
-	local lazy = {}
-	for band, comp in pairs(self.band_comps) do
-		if comp:is_lazy(band) then
-			table.insert(lazy, {band=band, comp=comp})
-		end
-	end
-
-	local rlz = code.new()
-
-	rlz:emit("local NULL = NULL")
-
-	for i,l in ipairs(lazy) do
-		rlz:emitf("local lazy%d = lazy[%d].band; local comp%d = lazy[%d].comp", i, i, i, i)
-	end
-
-	rlz:emit("return function(self, slice)")
-	rlz:emit("local band")
-
-	for i,l in ipairs(lazy) do
-		rlz:emitf("band = slice:band(lazy%d)", i)
-		rlz:emitf("if band ~= NULL then comp%d:lazy_compute_band(band, slice, lazy%d) end", i, i)
-	end
-
-	rlz:emit("end")
-	self.refresh_slice = rlz:compile({lazy=lazy, NULL=NULL}, "=(refresh_slice)")()
+	self.offsets = offsets
 end
 
 -------------------- mapper callbacks --------------------
 
-function obj_mt.__index:bind(mapper, vec, idx)
-	self:_bind(mapper, vec:cvec(), self.solver_idxp)
+function obj_mt.__index:is_visible(vis)
+	return vis == self
+end
 
-	if idx then
-		self.solver_idxp[0] = idx
+function obj_mt.__index:is_constant(vis)
+	return vis ~= self
+end
+
+function obj_mt.__index:mark_mappings(mark)
+	if not self.offsets then
+		self:map_offsets()
+	end
+
+	for field,_ in pairs(self.offsets) do
+		mark(field)
 	end
 end
 
-function obj_mt.__index:expose(mapper)
-	local id = 0ULL
+function obj_mt.__index:map_var(v, solver)
+	if not self.offsets then
+		self:map_offsets()
+	end
 
-	for _,c in ipairs(self.comps) do
-		c:expose(mapper)
-		if c.id then
-			id = bit.bor(id, c.id)
+	local off = self.offsets[v.name]
+	local binds = solver.binds[self]
+	return solver.mapper:vec(v.name, off.offset, off.stride, off.band, binds.idx, binds.v)
+end
+
+local function alloc_result(sim, solver, n)
+	local res_size = n * ffi.sizeof("pvalue")
+
+	for i=0, tonumber(solver.nv)-1 do
+		local res = C.sim_alloc(sim, res_size, ffi.alignof("pvalue"), C.SIM_FRAME)
+		solver:bind(i, res)
+	end
+end
+
+local function bind_result(solver, bufs)
+	for i=0, tonumber(solver.nv)-1 do
+		-- bufs is a lua array, so +1
+		solver:bind(i, ffi.cast("pvalue *", bufs[i+1]))
+	end
+end
+
+function obj_mt.__index:prepare(solver)
+	solver.binds[self] = {
+		v = solver.mapper.arena:new("struct vec *"),
+		idx = solver.mapper.arena:new("unsigned")
+	}
+end
+
+function obj_mt.__index:create_solver(solver)
+	local v_bind = solver.binds[self].v
+	local idx_bind = solver.binds[self].idx
+
+	local c_solver = solver.solver
+	local sim = self.sim
+
+	-- alloc:
+	-- * nil          -> allocate buffers of size vec:alloc_len() on sim memory
+	-- * number (n)   -> allocate buffers of size n on sim memory
+	-- * table        -> solve to given buffers
+	return function(vec, alloc)
+		if not alloc then
+			alloc_result(sim, c_solver, vec:alloc_len())
+		elseif type(alloc) == "number" then
+			alloc_result(sim, c_solver, alloc)
+		else
+			bind_result(c_solver, alloc)
 		end
-	end
 
-	self.id = id
-	self.solver_idxp = mapper.arena:new("unsigned")
-	self:specialize_bind()
-end
-
-function obj_mt.__index:solver_func(mapper, solver)
-	return function(vec)
-		-- TODO: this should also accept slice?
-
-		-- No need to explicitly bind idx here, gs_solve_vec binds it while stepping
-		self:bind(mapper, vec)
-
-		-- TODO: allow configuring if this should allocate vec:len() or vec.n_alloc
-		fhk.rebind(self.sim, solver, vec:alloc_len())
-		return (C.gs_solve_vec(vec:cvec(), solver, self.solver_idxp))
+		local cvec = vec:cvec()
+		v_bind[0] = cvec
+		return (C.gs_solve_vec(cvec, c_solver, idx_bind))
 	end
 end
 
-function obj_mt.__index:mark_visible(mapper, G, vmask)
-	G:mark_visible(vmask, C.GMAP_BIND_OBJECT, typing.tvalue.u64(self.id))
+function obj_mt.__index:bind_solver(solver, vec, idx)
+	local binds = solver.binds[self]
+	binds.v[0] = vec:cvec()
+	if idx then
+		binds.idx[0] = idx
+	end
 end
 
-function obj_mt.__index:mark_nonconstant(mapper, G, vmask)
-	G:mark_nonconstant(vmask, C.GMAP_BIND_OBJECT, typing.tvalue.u64(self.id))
+function obj_mt.__index:virtualize(f)
+	local vec_ctp = self.vec_ctp
+
+	return function(solver)
+		local binds = solver.binds[self]
+		return f(ffi.cast(vec_ctp, binds.v[0]), tonumber(binds.idx[0]))
+	end
 end
+
+-- TODO: zband solver
 
 --------------------------------------------------------------------------------
 
 local function inject(env)
-	env.m2.component = component
-	local _sim = env.sim._sim
-	env.m2.obj = function(...) return obj(_sim, {...}) end
+	env.m2.obj = aux.delegate(env.sim._sim, obj)
 end
 
 return {
