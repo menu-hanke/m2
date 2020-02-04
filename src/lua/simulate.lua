@@ -2,6 +2,7 @@ local aux = require "aux"
 local cli = require "cli"
 local conf = require "conf"
 local sim_env = require "sim_env"
+local log = require("log").logger
 
 local function main(args)
 	local cfg = conf.read_cmdline(args.config)
@@ -16,7 +17,7 @@ local function main(args)
 		local data = aux.readjson(args.input)
 		sim:savepoint()
 		for i,v in ipairs(data) do
-			io.stderr:write(string.format("[%s] %d/%d\n", args.input, i, #data))
+			log:verbose("[%s] %d/%d", args.input, i, #data)
 			sim:enter()
 			env:setup(v)
 			sim:simulate(instr)

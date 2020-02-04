@@ -1,4 +1,5 @@
 local vmath = require "vmath"
+local log = require("log").logger
 
 -- Nelder-Mead optimizer
 -- See http://www.scholarpedia.org/article/Nelder-Mead_algorithm
@@ -58,7 +59,7 @@ function optimizer_mt.__index:newpop(newf)
 	for i,x in ipairs(self.xs) do
 		newf(x)
 		self.fs[i] = self.F(x)
-		print(string.format("[%d/%d]: %f --", i, #self.xs, self.fs[i]), x)
+		log:verbose("[%d/%d]: %f -- %s", i, #self.xs, self.fs[i], x)
 	end
 end
 
@@ -119,13 +120,13 @@ function optimizer_mt:__call()
 		local i_1, i_n, i_n1 = psort(xs, fs)
 
 		if fs[i_1] < best_f then
-			print(string.format("%d/%d: %f -> %f", niter, self.max_iter, best_f, fs[i_1]))
+			log:verbose("%d/%d: %f -> %f", niter, self.max_iter, best_f, fs[i_1])
 			best = xs[i_1]
 			best_f = fs[i_1]
 		end
 
 		if math.abs(fs[i_1] - fs[i_n1]) < self.epsilon*fs[i_n1] then
-			print(string.format("%d/%d: converged: %f", niter, self.max_iter, best_f))
+			log:verbose("%d/%d: converged: %f", niter, self.max_iter, best_f)
 			break
 		end
 

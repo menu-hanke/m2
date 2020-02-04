@@ -2,6 +2,7 @@ local model = require "model"
 local typing = require "typing"
 local alloc = require "alloc"
 local aux = require "aux"
+local log = require("log").logger
 local ffi = require "ffi"
 local C = ffi.C
 
@@ -74,8 +75,7 @@ local function build_models(G, arena, fvars, fmodels, models)
 		local m = models[name]
 
 		if not m.k or not m.c then
-			io.stderr:write(string.format(
-				"warn: No cost given for model %s - defaulting to k=1 c=2\n", name))
+			log:warn("No cost given for model %s - defaulting to k=1, c=2", name)
 		end
 
 		C.fhk_model_set_cost(fm, m.k or 1, m.c or 2)
