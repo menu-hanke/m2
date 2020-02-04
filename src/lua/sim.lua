@@ -275,22 +275,6 @@ function sim_mt.__index:exit()
 	C.sim_exit(self._sim)
 end
 
-function sim_mt.__index:alloc(size, align, life)
-	return (C.sim_alloc(self._sim, size, align, life))
-end
-
-function sim_mt.__index:allocator(ct, life)
-	local rt = ct .. "*"
-	local size = ffi.sizeof(ct)
-	local align = ffi.alignof(ct)
-	life = life or ffi.C.SIM_FRAME
-
-	return function(n)
-		n = n or 1
-		return (ffi.cast(rt, self:alloc(n * size, align, life)))
-	end
-end
-
 function sim_mt.__index:branch(choices)
 	local nb = #choices
 	local branches = ffi.new("sim_branchid[?]", nb)
