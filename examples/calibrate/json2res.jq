@@ -1,0 +1,11 @@
+[
+	.gro_manty.c_0,
+	.gro_manty.c_sqrtd,
+	.gro_manty.c_logG,
+	.gro_manty.c_baL,
+	.gro_manty.c_logts,
+	.gro_manty.c_omt,
+	.gro_manty.c_vt,
+	.gro_manty.c_ct,
+	.gro_manty.c_suo
+]

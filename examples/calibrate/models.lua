@@ -30,7 +30,7 @@ end
 
 --------------------------------------------------------------------------------
 
-function gro_manty(step, mtyyppi, d, G, ba, ba_L, ts, atyyppi,
+local function gro_manty(step, mtyyppi, d, G, ba, ba_L, ts, atyyppi,
 	c_0, c_sqrtd, c_d, c_logG, c_baL, c_logts, c_omt, c_vt, c_ct, c_suo)
 
 	-- either all coefficients should be given or none
@@ -67,7 +67,7 @@ function gro_manty(step, mtyyppi, d, G, ba, ba_L, ts, atyyppi,
 	))
 end
 
-function gro_kuusi(step, mtyyppi, d, G, ba, ba_L, ba_Lku, ts,
+local function gro_kuusi(step, mtyyppi, d, G, ba, ba_L, ba_Lku, ts,
 	c_0, c_sqrtd, c_d, c_logG, c_baL, c_baLku, c_logts, c_omt, c_vt, c_ct)
 
 	if not c_0 then
@@ -101,7 +101,7 @@ function gro_kuusi(step, mtyyppi, d, G, ba, ba_L, ba_Lku, ts,
 	))
 end
 
-function gro_lehti(step, mtyyppi, d, G, ba, ba_Lku, ba_Lko, ts, spe,
+local function gro_lehti(step, mtyyppi, d, G, ba, ba_Lku, ba_Lko, ts, spe,
 	c_0, c_sqrtd, c_d, c_logG, c_baL, c_logts, c_omt, c_vt, c_ct, c_raha)
 
 	if not c_0 then
@@ -138,7 +138,7 @@ end
 
 --------------------------------------------------------------------------------
 
-function sur_manty(step, d, ba, ba_L, atyyppi,
+local function sur_manty(step, d, ba, ba_L, atyyppi,
 	c_0, c_sqrtd, c_d, c_baL, c_suo)
 
 	if not c_0 then
@@ -161,7 +161,7 @@ function sur_manty(step, d, ba, ba_L, atyyppi,
 	))
 end
 
-function sur_kuusi(step, d, ba, ba_Lku, atyyppi,
+local function sur_kuusi(step, d, ba, ba_Lku, atyyppi,
 	c_0, c_sqrtd, c_d, c_baLku, c_suo)
 
 	if not c_0 then
@@ -184,7 +184,7 @@ function sur_kuusi(step, d, ba, ba_Lku, atyyppi,
 	))
 end
 
-function sur_lehti(step, d, ba, ba_Lma, ba_Lku, ba_Lko, atyyppi, spe,
+local function sur_lehti(step, d, ba, ba_Lma, ba_Lku, ba_Lko, atyyppi, spe,
 	c_0, c_sqrtd, c_d, c_baLma, c_baLkuko, c_suo, c_koivu, c_haapa)
 
 	if not c_0 then
@@ -217,7 +217,7 @@ end
 
 --------------------------------------------------------------------------------
 
-function ingrowth_manty(step, ts, G, mtyyppi,
+local function ingrowth_manty(step, ts, G, mtyyppi,
 	c_0, c_logts, c_sqrtG, c_omt, c_vt)
 
 	if not c_0 then
@@ -241,7 +241,7 @@ function ingrowth_manty(step, ts, G, mtyyppi,
 	))
 end
 
-function ingrowth_kuusi(step, ts, G, Gma, mtyyppi,
+local function ingrowth_kuusi(step, ts, G, Gma, mtyyppi,
 	c_0, c_logts, c_sqrtG, c_sqrtGma, c_vtct)
 
 	if not c_0 then
@@ -265,7 +265,7 @@ function ingrowth_kuusi(step, ts, G, Gma, mtyyppi,
 	))
 end
 
-function ingrowth_koivu(step, ts, G, Gma, mtyyppi, atyyppi,
+local function ingrowth_koivu(step, ts, G, Gma, mtyyppi, atyyppi,
 	c_0, c_logts, c_sqrtG, c_sqrtGma, c_vtct)
 
 	if not c_0 then
@@ -295,7 +295,7 @@ function ingrowth_koivu(step, ts, G, Gma, mtyyppi, atyyppi,
 	end
 end
 
-function ingrowth_leppa(step, ts, G, mtyyppi,
+local function ingrowth_leppa(step, ts, G, mtyyppi,
 	c_0, c_logts, c_sqrtG, c_omt, c_vtct)
 
 	if not c_0 then
@@ -318,3 +318,20 @@ function ingrowth_leppa(step, ts, G, mtyyppi,
 		+ c_vtct * vtct
 	))
 end
+
+--------------------------------------------------------------------------------
+
+return {
+	gro_manty = gro_manty,
+	gro_kuusi = gro_kuusi,
+	gro_lehti = gro_lehti,
+
+	sur_manty = sur_manty,
+	sur_kuusi = sur_kuusi,
+	sur_lehti = sur_lehti,
+
+	ingrowth_manty = ingrowth_manty,
+	ingrowth_kuusi = ingrowth_kuusi,
+	ingrowth_koivu = ingrowth_koivu,
+	ingrowth_leppa = ingrowth_leppa
+}

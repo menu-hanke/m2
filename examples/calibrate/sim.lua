@@ -1,19 +1,12 @@
-globals.static {
-	"ts",
-	"mtyyppi",
-	"atyyppi"
-}
+local m2 = require "m2"
+local Spe = m2.masks.species
 
-globals.dynamic {
-	"step",
-	"G",
-	"Gma"
-}
+local Plot, plot = m2.fhk.global(m2.ns())
+Plot.static { "ts", "mtyyppi", "atyyppi" }
+Plot.dynamic { "step", "G", "Gma" }
 
-fhk.expose(globals)
-
-Tree = fhk.expose(obj(component(types.tree)))
-trees = Tree:vec()
+local Tree = m2.obj(m2.types.tree)
+trees = Tree:vec() -- globaaleja, kalibrointiskripti lukee näitä
 
 local function update_ba()
 	local f = trees:band("f")
@@ -34,19 +27,19 @@ local function update_baL()
 	local spe = trees:bandv("spe"):vmask()
 
 	ba:psumi(ba_L, ind)
-	ba:mask(spe, enum.species.manty):psumi(ba_Lma, ind)
-	ba:mask(spe, enum.species.kuusi):psumi(ba_Lku, ind)
-	ba:mask(spe, bit.bnot(enum.species.manty + enum.species.kuusi)):psumi(ba_Lko, ind)
+	ba:mask(spe, Spe.manty):psumi(ba_Lma, ind)
+	ba:mask(spe, Spe.kuusi):psumi(ba_Lku, ind)
+	ba:mask(spe, bit.bnot(Spe.manty + Spe.kuusi)):psumi(ba_Lko, ind)
 end
 
 local function update_G()
 	local ba = trees:bandv("ba")
 	local spe = trees:bandv("spe"):vmask()
-	G.G, G.Gma = ba:sum(), ba:mask(spe, enum.species.manty):sum()
+	plot.G, plot.Gma = ba:sum(), ba:mask(spe, Spe.manty):sum()
 end
 
-local solve_growstep = fhk.solve("i_d", "sur"):from(Tree)
-local solve_ingrowth = fhk.solve("fma", "fku", "fra", "fhi", "fle"):from(globals)
+local solve_growstep = m2.solve("i_d", "sur"):from(Tree)
+local solve_ingrowth = m2.solve("fma", "fku", "fra", "fhi", "fle"):from(Plot)
 
 local function grow_trees()
 	solve_growstep(trees)
@@ -61,13 +54,7 @@ local function grow_trees()
 	d:add(i_d, newd)
 end
 
-local newspe = {
-	enum.species.manty,
-	enum.species.kuusi,
-	enum.species.rauduskoivu,
-	enum.species.hieskoivu,
-	enum.species.haapa
-}
+local newspe = { Spe.manty, Spe.kuusi, Spe.rauduskoivu, Spe.hieskoivu, Spe.haapa }
 
 local function ingrowth()
 	solve_ingrowth()
@@ -110,22 +97,22 @@ end
 
 --------------------------------------------------------------------------------
 
-on("sim:setup", function(state)
-	G.ts = state.ts
-	G.mtyyppi = state.mtyyppi
-	G.atyyppi = state.atyyppi
+m2.on("sim:setup", function(state)
+	plot.ts = state.ts
+	plot.mtyyppi = state.mtyyppi
+	plot.atyyppi = state.atyyppi
 
 	local idx = trees:alloc(#state.trees)
 
-	local f = trees:band("f")
-	local spe = trees:band("spe")
-	local dbh = trees:band("dbh")
-	local ba = trees:band("ba")
+	local f = trees:newband("f")
+	local spe = trees:newband("spe")
+	local dbh = trees:newband("dbh")
+	local ba = trees:newband("ba")
 
 	for i,t in ipairs(state.trees) do
 		local pos = idx + i-1
 		f[pos] = t.f
-		spe[pos] = import.enum(math.min(t.spe, 6))
+		spe[pos] = m2.import_enum(math.min(t.spe, 6))
 		dbh[pos] = t.dbh
 		ba[pos] = t.ba
 	end
@@ -134,8 +121,8 @@ on("sim:setup", function(state)
 	update_G()
 end)
 
-on("grow", function(step)
-	G.step = step
+m2.on("grow", function(step)
+	plot.step = step
 	grow_trees()
 	ingrowth()
 	update_ba()

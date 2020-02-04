@@ -1,3 +1,6 @@
+local m2 = require "m2"
+local sim = m2.sim
+
 local dclass = {
 	[0] = -math.huge,
 	3.1,6.1,9.1,12.1,15.1,18.1,21.1,24.1,27.1,30.1,
@@ -84,8 +87,6 @@ local function psum(x)
 end
 
 local costf = {
-	[1] = function()
-	end,
 	[2] = function(state)
 		local n = trees:len()
 		local dbh = trees:bandv("dbh")
@@ -109,18 +110,21 @@ local costf = {
 	end
 }
 
-on("measure", function(state)
+m2.on("measure", function(state)
 	state.cost = costf[use_costf](state)
 end)
 
-local data = readjson(args.input)
+local decode = require "json.decode"
+local infile = io.open(m2.calibrate.args.input)
+local data = decode(infile:read("*a"))
+infile:close()
 
-on("sim:compile", function()
+m2.on("sim:compile", function()
 	for i,v in ipairs(data) do
 		v.index = i
 		precalc_dist(v)
 
-		local instr = record()
+		local instr = m2.record()
 		local t_left = v.step
 		while t_left > 0 do
 			local step = math.min(t_left, 5)
@@ -136,7 +140,7 @@ return function()
 	for i,v in ipairs(data) do
 		sim:restore()
 		sim:enter()
-		env:setup(v)
+		sim:event("sim:setup", v) -- XXX
 		sim:simulate(v.instr)
 		sim:exit()
 	end

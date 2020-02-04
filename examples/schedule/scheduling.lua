@@ -1,12 +1,13 @@
-local operations = scheduler {
+local m2 = require "m2"
+
+local operations = m2.scheduler {
 	a = 1,
 	b = 2,
 	c = 3
 }
 
 local x = 1
-
-globals.dynamic({"operaatiot"}, "struct { bool eka; bool toka; bool kolmas; }")
+local _, G = m2.ns.dynamic({"operaatiot"}, "struct { bool eka; bool toka; bool kolmas; }")
 
 local eka = function() G.operaatiot.eka = true end
 local toka = function() G.operaatiot.toka = true end
@@ -28,26 +29,26 @@ operations:event(0x102)
 
 -- vaihtoehtoisesti sim:branchilla.
 -- Huom: tässä kaikki kolme ovat vaihtoehtoja toisilleen
-local branch_ops = branch {
-	choice(0x100, eka),
-	choice(0x101, toka),
-	choice(0x102, kolmas)
+local branch_ops = m2.branch {
+	m2.choice(0x100, eka),
+	m2.choice(0x101, toka),
+	m2.choice(0x102, kolmas)
 }
 
 --------------------------------------------------------------------------------
 
-on("grow", function()
+m2.on("grow", function()
 	G.operaatiot.eka = false
 	G.operaatiot.toka = false
 	G.operaatiot.kolmas = false
 end)
 
-on("operation", function(vuosi)
+m2.on("operation", function(vuosi)
 	operations(vuosi)
 	--branch_ops(vuosi)
 end)
 
-on("operation#1", function(vuosi)
+m2.on("operation#1", function(vuosi)
 	local op = {}
 
 	if G.operaatiot.eka then table.insert(op, "eka") end
