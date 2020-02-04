@@ -62,10 +62,13 @@ else
 	-- $m2 tap -t $test
 	local cli = require "cli"
 	return {
-		flags = {
-			t = cli.addopt("tests"),
-			r = cli.setopt("run")
-		},
-		main = main
+		cli_main = {
+			main = main,
+			usage = "[-t tests]... [-r run]...",
+			flags = {
+				cli.opt("-t", "tests", "multiple"),
+				cli.opt("-r", "run", "map")
+			}
+		}
 	}
 end

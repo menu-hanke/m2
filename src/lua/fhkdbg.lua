@@ -330,7 +330,8 @@ local function main(args)
 		g.models[name].exf = f
 	end
 
-	local solve = g:solve(args.vars)
+	local vars = aux.map(aux.split(args.vars), aux.trim)
+	local solve = g:solve(vars)
 	local given, values = aux.readcsv(args.input)
 
 	local vs = {}
@@ -346,7 +347,7 @@ local function main(args)
 		print("--------------------")
 
 		if ok then
-			print_report(report(g, args.vars))
+			print_report(report(g, vars))
 		else
 			-- TODO: print some detailed info
 			print("Solver failed!")
@@ -355,11 +356,14 @@ local function main(args)
 end
 
 return {
-	flags = {
-		c = cli.opt("config"),
-		i = cli.opt("input"),
-		f = function(ret, ai) ret.vars = aux.map(aux.split(ai()), aux.trim) end
+	cli_main = {
+		main = main,
+		usage = "[-c config] [-i input] [-f y1,y2,...,yN]",
+		flags = {
+			cli.opt("-c", "config"),
+			cli.opt("-i", "input"),
+			cli.opt("-f", "vars")
+		}
 	},
-	main = main,
 	hook = hook
 }

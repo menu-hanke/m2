@@ -196,12 +196,15 @@ local function main(args)
 end
 
 return {
-	flags = {
-		c = cli.opt("config"),
-		s = cli.addopt("scripts"),
-		i = cli.opt("input"),
-		p = cli.opt("coefs"),
-		C = cli.opt("calibrator")
-	},
-	main = main
+	cli_main = {
+		main = main,
+		usage = "[-c config] [-s scripts] [-i input] [-p coefs] [-C calibrator]",
+		flags = {
+			cli.opt("-c", "config"),
+			cli.opt("-s", "scripts", "multiple"),
+			cli.opt("-i", "input"),
+			cli.opt("-p", "coefs"),
+			cli.opt("-C", "calibrator")
+		}
+	}
 }

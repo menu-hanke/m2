@@ -30,11 +30,14 @@ local function main(args)
 end
 
 return {
-	flags = {
-		c = cli.opt("config"),
-		s = cli.addopt("scripts"),
-		i = cli.opt("input"),
-		I = cli.opt("instr")
-	},
-	main = main
+	cli_main = {
+		main = main,
+		usage = "[instructions] [input] [-c config] [-s scripts]...",
+		flags = {
+			cli.positional("instr"),
+			cli.opt("-i", "input"),
+			cli.opt("-c", "config"),
+			cli.opt("-s", "scripts", "multiple")
+		}
+	}
 }
