@@ -70,16 +70,17 @@ local function update_model_coef(self, x)
 	self.ptr[0] = x
 end
 
-local function set_updates(coefs, mapper)
+local function set_updates(coefs, mapper, cfg)
 	-- TODO sim coefs
 	
-	for modname,coefs in pairs(coefs.model) do
+	for modname,co in pairs(coefs.model) do
 		local coef_idx = {}
 		local mm = mapper.models[modname]
-		for idx,cname in ipairs(mm.src.coeffs) do
+		local fm = cfg.fhk_models[modname]
+		for idx,cname in ipairs(fm.coeffs) do
 			coef_idx[cname] = idx
 		end
-		for _,c in ipairs(coefs) do
+		for _,c in ipairs(co) do
 			c.ptr = mm.mapping_mod.coefs + (coef_idx[c.name]-1)
 			c.update = update_model_coef
 		end
@@ -158,15 +159,15 @@ end
 local function main(args)
 	if not args.coefs then error("No coefficient file, give with -p") end
 	if not args.calibrator then error("No calibrator script, give with -C") end
-
+	
+	-- TODO: optionally take this as a parameter for repro
 	math.randomseed(os.time())
 
 	local coefs = read_coefs(aux.readjson(args.coefs))
 	local cfg = conf.read_cmdline(args.config)
 	write_defaults(cfg.calib, coefs)
 	local sim, env = sim_env.from_conf(cfg)
-
-	set_updates(coefs, env.mapper)
+	set_updates(coefs, env.mapper, cfg)
 	local cs = collect_coefs(coefs)
 	local cmodels = collect_cmodels(coefs, env.mapper)
 	env:require_all(args.scripts or {})

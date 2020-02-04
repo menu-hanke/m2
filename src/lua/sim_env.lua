@@ -85,7 +85,12 @@ local function sandbox_require(env, module)
 	for _,ld in ipairs(package.loaders) do
 		local f = ld(module)
 		if type(f) == "function" then
-			setfenv(f, env)
+			-- don't break env for libraries
+			-- TODO: remove this check and instead write a custom loader that checks for
+			-- local files (like the package.path loader) and sets the env
+			if getfenv(f) == _G and debug.getinfo(f).what ~= "C" then
+				setfenv(f, env)
+			end
 			local m = f(module)
 			if m == nil then
 				m = true
