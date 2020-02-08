@@ -1,5 +1,4 @@
 local ffi = require "ffi"
-local fhk = require "fhk"
 local typing = require "typing"
 local C = ffi.C
 
@@ -48,30 +47,30 @@ function vset_mt.__index:define(name, f, tname)
 	self.handles[name] = self.virtuals:add(wrap_interrupt(f, tname))
 end
 
-function vset_mt.__index:is_visible(vis, v)
-	return (not self.vis) or self.vis:is_visible(vis, v)
+function vset_mt.__index:is_visible(solver, v)
+	return (not self.vis) or (not self.vis.is_visible) or self.vis:is_visible(solver)
 end
 
-function vset_mt.__index:is_constant(vis, v)
-	return self.vis and self.vis:is_constant(vis, v)
+function vset_mt.__index:is_constant(solver, v)
+	return self.vis and self.vis.is_constant and self.vis:is_constant(solver, v)
 end
 
-function vset_mt.__index:mark_mappings(mark)
+function vset_mt.__index:mark_mappings(_, mark)
 	for name,_ in pairs(self.handles) do
 		mark(name)
 	end
 end
 
-function vset_mt.__index:map_var(v, solver)
+function vset_mt.__index:map_var(solver, v)
 	return solver.mapper:interrupt(v.name, self.handles[v.name])
 end
 
-function vset_mt.__index:create_solver(sf)
-	if self.vis then
-		return self.vis:create_solver(sf)
+function vset_mt.__index:create_solver(solver)
+	if self.vis and self.vis.create_solver then
+		return self.vis:create_solver(solver)
 	end
 
-	return fhk.create_solver1(sf)
+	return solver:create_direct_solver()
 end
 
 return {

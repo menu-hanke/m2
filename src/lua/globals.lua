@@ -35,26 +35,18 @@ local function globals(sim)
 	}, globals_mt)
 end
 
-function globals_mt.__index:is_visible()
-	return true
-end
-
 function globals_mt.__index:is_constant()
 	return true
 end
 
-function globals_mt.__index:mark_mappings(mark)
+function globals_mt.__index:mark_mappings(_, mark)
 	for name,_ in pairs(self.ns) do
 		mark(name)
 	end
 end
 
-function globals_mt.__index:map_var(v, solver)
+function globals_mt.__index:map_var(solver, v)
 	return solver.mapper:data(v.name, self.ns[v.name])
-end
-
-function globals_mt.__index:create_solver(sf)
-	return fhk.create_solver1(sf)
 end
 
 --------------------------------------------------------------------------------

@@ -44,18 +44,39 @@ local with_graph = envmaker {
 	}
 }
 
+test_map_write = with_graph(function()
+	local solve_ab = m2.solve("a", "b"):given("x", "y")
+
+	return function()
+		solve_ab.vars.x = 1
+		solve_ab.vars.y = 2
+		solve_ab()
+		assert(solve_ab.vars.a == 1)
+		assert(solve_ab.vars.b == 2)
+	end
+end)
+
 test_remap = with_graph(function()
 	local ns1 = m2.ns.static { "x" }
 	local ns2 = m2.ns.static { "x" }
 
-	m2.solve("a"):from(ns1):create_solver()
-	m2.solve("a"):from(ns2):create_solver()
-	assert(fails(function() m2.solve("a"):with(ns1):from(ns2):create_solver() end))
+	m2.solve("a"):given(ns1):create_solver()
+	m2.solve("a"):given(ns2):create_solver()
+	assert(fails(function()
+		m2.solve("a")
+			:given(ns1)
+			:given(ns2)
+			:create_solver()
+	end))
 end)
 
 test_overwrite_given = with_graph(function()
 	local ns = m2.ns.static { "x" }
-	assert(fails(function() m2.solve("x"):from(ns):create_solver() end))
+	assert(fails(function()
+		m2.solve("x")
+			:given(ns)
+			:create_solver()
+	end))
 end)
 
 test_map_ns = with_graph(function()
@@ -64,31 +85,31 @@ test_map_ns = with_graph(function()
 	G1.x = 1234
 	G2.x = 5678
 
-	local solve_a1 = m2.solve("a"):from(ns1)
-	local solve_a2 = m2.solve("a"):from(ns2)
+	local solve_a1 = m2.solve("a"):given(ns1)
+	local solve_a2 = m2.solve("a"):given(ns2)
 
 	return function()
 		solve_a1()
 		solve_a2()
 
-		assert(solve_a1:res("a")[0] == 1234)
-		assert(solve_a2:res("a")[0] == 5678)
+		assert(solve_a1.vars.a == 1234)
+		assert(solve_a2.vars.a == 5678)
 	end
 end)
 
-test_map_always_visible = with_graph(function()
+test_map_always_given = with_graph(function()
 	local globals, G = m2.ns.static { "x" }
 	local locals, L = m2.ns.static { "y" }
 	G.x = 111
 	L.y = 222
 
 	m2.fhk.global(globals)
-	local solve_ab = m2.solve("a", "b"):from(locals)
+	local solve_ab = m2.solve("a", "b"):given(locals)
 
 	return function()
 		solve_ab()
-		assert(solve_ab:res("a")[0] == 111)
-		assert(solve_ab:res("b")[0] == 222)
+		assert(solve_ab.vars.a == 111)
+		assert(solve_ab.vars.b == 222)
 	end
 end)
 
@@ -103,12 +124,12 @@ test_map_vec = with_graph(function()
 	xs[1] = 2; ys[1] = 200
 	xs[2] = 3; ys[2] = 300
 
-	local solve_ab = m2.solve("a", "b"):from(V)
+	local solve_ab = m2.solve("a", "b"):over(V)
 
 	return function()
 		solve_ab(v)
-		local ra = solve_ab:res("a")
-		local rb = solve_ab:res("b")
+		local ra = solve_ab.vars.a
+		local rb = solve_ab.vars.b
 		assert(ra[0] == 1 and ra[1] == 2 and ra[2] == 3)
 		assert(rb[0] == 100 and rb[1] == 200 and rb[2] == 300)
 	end
@@ -122,27 +143,49 @@ test_map_vec_vec_visibility = with_graph(function()
 	v1:alloc(1)
 	v2:alloc(1)
 
-	assert(fails(function() m2.solve("b"):from(V1):create_solver() end))
+	assert(fails(function()
+		m2.solve("b")
+			:over(V1)
+			:create_solver()
+	end))
 end)
 
-test_map_vec_vec_with = with_graph(function()
+test_map_vec_vec = with_graph(function()
 	local V1 = m2.obj(bt.reals("x"))
 	local V2 = m2.obj(bt.reals("y"))
 
 	local v1, v2 = V1:vec(), V2:vec()
-	v1:alloc(1)
-	v2:alloc(1)
+	v1:alloc(2)
+	v2:alloc(2)
 
-	v1:newband("x")[0] = 123
-	v2:newband("y")[0] = 456
+	local x = v1:newband("x")
+	local y = v2:newband("y")
 
-	local solve_ab = m2.solve("a", "b"):with(V2):from(V1)
+	x[0] = 123; x[1] = 456
+	y[0] = 789; y[1] = 000
+
+	local solve_ab_nofollow = m2.solve("a", "b")
+		:given(V2)
+		:over(V1)
+	
+	local solve_ab_follow = m2.solve("a", "b")
+		:given(V2, {follow=true, bind=v2})
+		:over(V1)
 
 	return function()
-		solve_ab:bind(V2, v2, 0)
-		solve_ab(v1)
-		assert(solve_ab:res("a")[0] == 123)
-		assert(solve_ab:res("b")[0] == 456)
+		solve_ab_nofollow:bind(V2, v2, 0)
+		solve_ab_nofollow(v1)
+		
+		local a = solve_ab_nofollow.vars.a
+		local b = solve_ab_nofollow.vars.b
+		assert(a[0] == 123 and a[1] == 456)
+		assert(b[0] == 789 and b[1] == 789)
+
+		solve_ab_follow(v1)
+		a = solve_ab_follow.vars.a
+		b = solve_ab_follow.vars.b
+		assert(a[0] == 123 and a[1] == 456)
+		assert(b[0] == 789 and b[1] == 000)
 	end
 end)
 
@@ -156,12 +199,14 @@ test_map_vec_globals_visibility = with_graph(function()
 	local ns, G = m2.ns.static { "y" }
 	G.y = 456
 
-	local solve_ab = m2.solve("a", "b"):with(ns):from(V)
+	local solve_ab = m2.solve("a", "b")
+		:given(ns)
+		:over(V)
 
 	return function()
 		solve_ab(v)
-		assert(solve_ab:res("a")[0] == 123)
-		assert(solve_ab:res("b")[0] == 456)
+		assert(solve_ab.vars.a[0] == 123)
+		assert(solve_ab.vars.b[0] == 456)
 	end
 end)
 
@@ -174,21 +219,21 @@ test_solver_vec_alloc = with_graph(function()
 	v:alloc(N)
 	local x = v:newband("x")
 
-	local solve_a = m2.solve("a"):from(V)
+	local solve_a = m2.solve("a"):over(V)
 
 	return function()
 		for i=0, N-1 do x[i] = i end
 		solve_a(v, v:len())
-		local res1 = solve_a:res("a")
+		local res1 = solve_a.vars.a
 
 		for i=0, N-1 do x[i] = 2*i end
 		solve_a(v)
-		local res2 = solve_a:res("a")
+		local res2 = solve_a.vars.a
 
 		for i=0, N-1 do x[i] = 3*i end
 		local buf = ffi.new("vreal[?]", N)
 		solve_a(v, {buf})
-		local res3 = solve_a:res("a")
+		local res3 = solve_a.vars.a
 
 		assert(res3 == buf)
 		for i=0, N-1 do
@@ -203,8 +248,8 @@ test_solver_error = with_graph(function()
 	local ns, G = m2.ns.static { "x" }
 	G.x = -1234
 
-	local solve_unsat = m2.solve("x_unsat_cst"):from(ns)
-	local solve_crash = m2.solve("x_crash"):from(ns)
+	local solve_unsat = m2.solve("x_unsat_cst"):given(ns)
+	local solve_crash = m2.solve("x_crash"):given(ns)
 
 	return function()
 		assert(fails(solve_unsat))
@@ -217,12 +262,12 @@ test_create_solver1_result_gc = with_graph(function()
 	for i=1, 1000 do t[i] = ffi.new("float[?]", 1000) end
 
 	local ns, G = m2.ns.static { "x" }
-	local solve_a = m2.solve("a"):from(ns)
+	local solve_a = m2.solve("a"):given(ns)
 	G.x = 1234
 
 	return function()
 		solve_a()
-		assert(solve_a:res("a")[0] == 1234)
+		assert(solve_a.vars.a == 1234)
 
 		-- https://stackoverflow.com/questions/28320213/why-do-we-need-to-call-luas-collectgarbage-twice
 		collectgarbage()
@@ -232,7 +277,7 @@ test_create_solver1_result_gc = with_graph(function()
 		t = {}
 		for i=1, 1000 do t[i] = ffi.new("float[?]", 1000) end
 
-		assert(solve_a:res("a")[0] == 1234)
+		assert(solve_a.vars.a == 1234)
 	end
 end)
 
@@ -244,11 +289,11 @@ if ffi.C.HAVE_SOLVER_INTERRUPTS == 1 then
 			return 3.14
 		end)
 
-		local solve_a = m2.solve("a"):from(vs)
+		local solve_a = m2.solve("a"):given(vs)
 
 		return function()
 			solve_a()
-			assert(solve_a:res("a")[0] == 3.14)
+			assert(solve_a.vars.a == 3.14)
 		end
 	end)
 
@@ -268,11 +313,13 @@ if ffi.C.HAVE_SOLVER_INTERRUPTS == 1 then
 			return vec:band("x")[idx] + 10
 		end)
 
-		local solve_c = m2.solve("c"):with(vs):from(V)
+		local solve_c = m2.solve("c")
+			:given(vs)
+			:over(V)
 
 		return function()
 			solve_c(v)
-			local cs = solve_c:res("c")
+			local cs = solve_c.vars.c
 			assert(cs[0] == 11 and cs[1] == 12 and cs[2] == 13)
 		end
 	end)
@@ -283,19 +330,19 @@ if ffi.C.HAVE_SOLVER_INTERRUPTS == 1 then
 			return 123
 		end)
 
-		local solve_d = m2.solve("d"):from(vs1)
+		local solve_d = m2.solve("d"):given(vs1)
 
 		local vs2 = m2.virtuals()
 		vs2.virtual("y", function()
 			solve_d()
-			return solve_d:res("d")[0] * 2
+			return solve_d.vars.d * 2
 		end)
 
-		local solve_c = m2.solve("c"):from(vs2)
+		local solve_c = m2.solve("c"):given(vs2)
 
 		return function()
 			solve_c()
-			assert(solve_c:res("c")[0] == 123*2)
+			assert(solve_c.vars.c == 123*2)
 		end
 	end)
 

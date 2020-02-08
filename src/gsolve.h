@@ -35,6 +35,7 @@ void gs_intv(uint32_t handle, pvalue *p);
 
 #endif
 
+gs_res gs_solve(struct fhk_graph *G, size_t nv, struct fhk_var **ys);
 gs_res gs_solve_step(struct fhk_solver *solver, unsigned idx);
 gs_res gs_solve_vec(struct vec *vec, struct fhk_solver *solver, unsigned *i_bind);
 gs_res gs_solve_vec_z(struct vec *vec, struct fhk_solver *solver, gridpos *z_bind,

@@ -250,15 +250,11 @@ end
 
 -------------------- mapper callbacks --------------------
 
-function obj_mt.__index:is_visible(vis)
-	return vis == self
+function obj_mt.__index:is_constant(solver)
+	return solver.binds[self].idx_pointer ~= solver.idx_pointer
 end
 
-function obj_mt.__index:is_constant(vis)
-	return vis ~= self
-end
-
-function obj_mt.__index:mark_mappings(mark)
+function obj_mt.__index:mark_mappings(_, mark)
 	if not self.offsets then
 		self:map_offsets()
 	end
@@ -268,14 +264,15 @@ function obj_mt.__index:mark_mappings(mark)
 	end
 end
 
-function obj_mt.__index:map_var(v, solver)
+function obj_mt.__index:map_var(solver, v)
 	if not self.offsets then
 		self:map_offsets()
 	end
 
 	local off = self.offsets[v.name]
 	local binds = solver.binds[self]
-	return solver.mapper:vec(v.name, off.offset, off.stride, off.band, binds.idx, binds.v)
+	return solver.mapper:vec(v.name, off.offset, off.stride, off.band,
+		binds.idx_pointer, binds.v_pointer)
 end
 
 local function alloc_result(sim, solver, n)
@@ -294,18 +291,30 @@ local function bind_result(solver, bufs)
 	end
 end
 
-function obj_mt.__index:prepare(solver)
-	solver.binds[self] = {
-		v = solver.mapper.arena:new("struct vec *"),
-		idx = solver.mapper.arena:new("unsigned")
-	}
+function obj_mt.__index:prepare(solver, is_source)
+	local binds = solver.binds[self]
+	binds.v_pointer = solver.mapper.arena:new("struct vec *")
+
+	if binds.params and binds.params.follow then
+		binds.idx_pointer = solver.idx_pointer
+	else
+		binds.idx_pointer = solver.mapper.arena:new("unsigned")
+	end
+
+	if binds.params and binds.params.bind then
+		binds.v_pointer[0] = binds.params.bind:cvec()
+	end
+
+	if is_source then
+		solver.idx_pointer = binds.idx_pointer
+	end
 end
 
 function obj_mt.__index:create_solver(solver)
-	local v_bind = solver.binds[self].v
-	local idx_bind = solver.binds[self].idx
+	local v_bind = solver.binds[self].v_pointer
+	local idx_bind = solver.idx_pointer
 
-	local c_solver = solver.solver
+	local c_solver = solver:create_subgraph_solver()
 	local sim = self.sim
 
 	-- alloc:
@@ -323,15 +332,16 @@ function obj_mt.__index:create_solver(solver)
 
 		local cvec = vec:cvec()
 		v_bind[0] = cvec
+		-- TODO: this doesn't really need a vec parameter, just the length
 		return (C.gs_solve_vec(cvec, c_solver, idx_bind))
 	end
 end
 
 function obj_mt.__index:bind_solver(solver, vec, idx)
 	local binds = solver.binds[self]
-	binds.v[0] = vec:cvec()
+	binds.v_pointer[0] = vec:cvec()
 	if idx then
-		binds.idx[0] = idx
+		binds.idx_pointer[0] = idx
 	end
 end
 
@@ -340,7 +350,7 @@ function obj_mt.__index:virtualize(f)
 
 	return function(solver)
 		local binds = solver.binds[self]
-		return f(ffi.cast(vec_ctp, binds.v[0]), tonumber(binds.idx[0]))
+		return f(ffi.cast(vec_ctp, binds.v_pointer[0]), tonumber(binds.idx_pointer[0]))
 	end
 end
 

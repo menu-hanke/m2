@@ -1,6 +1,7 @@
 local model = require "model"
 local typing = require "typing"
 local alloc = require "alloc"
+local virtual = require "virtual"
 local aux = require "aux"
 local log = require("log").logger
 local ffi = require "ffi"
@@ -206,8 +207,8 @@ local function hook(G, fvars, fmodels, vars, models)
 		arena      = arena,
 		vars       = mvars,
 		models     = mmods,
-		virtuals   = require("virtual").virtuals(),
-		visible    = {},
+		virtuals   = virtual.virtuals(),
+		given      = {},
 		bind       = {
 			z      = bind_ns(function() return arena:new("gridpos") end)
 		}
@@ -233,18 +234,13 @@ function mapper_mt.__index:getvar(name)
 	return v
 end
 
-function mapper_mt.__index:own(name, owner)
-	local v = self:getvar(name)
-	
-	if v.owner then
-		error(string.format("Variable '%s' already has this owner -> %s", v.owner))
-	end
-
-	v.owner = owner
+function mapper_mt.__index:promote_ctype(name)
+	local ptype = typing.promote(self:getvar(name).type.desc)
+	return ffi.typeof(typing.desc_builtin[tonumber(ptype)].ctype)
 end
 
-function mapper_mt.__index:always_visible(x)
-	table.insert(self.visible, x)
+function mapper_mt.__index:always_given(x, p)
+	self.given[x] = p or true
 	return x
 end
 
@@ -419,41 +415,54 @@ local function markvs(vmask, nv, fvs, mark)
 	end
 end
 
-local function solver_make_res(names, vs)
-	local ret = {}
-	for i,name in pairs(names) do
-		local ptype = typing.promote(vs[name].type.desc)
-		ret[name] = {
-			idx = i-1,
-			ctype = typing.desc_builtin[tonumber(ptype)].ctype .. "*"
-		}
-	end
-	return ret
-end
+--------------------------------------------------------------------------------
+-- mappable callbacks:
+-- * mappable:prepare(solver)                (optional) called before any other mapper callback
+-- * mappable:is_visible(solver, v)          (optional) is the variable v visible (given)
+--                                           default: visible
+-- * mappable:is_constant(solver, v)         (optional) is the variable v constant
+--                                           default: not constant
+-- * mappable:create_solver(solver)          (optional) create function for solving over s
+--                                           if not given, one step of fhk_solver_step is used
+-- * mappable:bind_solver(solver, ...)       (optional) bind index when solving over something else
+-- * mappable:mark_mappings(solver, mark)    call mark for each mapped variable
+-- * mappable:map_var(solver, v)             return a mapping for the variable v
 
-local solver_func_mt = { __index = {} }
+local solver_mt = { __index = {} }
+local solver_varset_mt = { __index = {} }
 
 function mapper_mt.__index:solver(names)
 	return setmetatable({
 		mapper   = self,
 		names    = names,
-		visible  = {},
-		mappings = {},
+		--_over    = nil,
 		binds    = {}, -- not used by solver, for sources to put their binding info
-		res_info = solver_make_res(names, self.vars)
-	}, solver_func_mt)
+	}, solver_mt)
 end
 
-function solver_func_mt.__index:with(...)
-	for _,src in ipairs({...}) do
-		table.insert(self.visible, src)
+local function varset(names)
+	return setmetatable({ names = names }, solver_varset_mt)
+end
+
+-- two ways to use this:
+--   * solver:given(mappable [, params])
+--   * solver:given(y1, y2, ..., yN)
+function solver_mt.__index:given(...)
+	local args = {...}
+	local mapped, p
+	if type(args[1]) == "string" then
+		mapped = varset(args)
+	else
+		mapped = args[1]
+		p = args[2]
 	end
 
+	self.binds[mapped] = { params=p }
 	return self
 end
 
-function solver_func_mt.__index:from(src)
-	self:with(src)
+function solver_mt.__index:over(src)
+	self:given(src)
 	self.source = src
 	return self
 end
@@ -461,13 +470,14 @@ end
 if C.HAVE_SOLVER_INTERRUPTS == 1 then
 	local band, bnot = bit.band, bit.bnot
 
-	function solver_func_mt.__index:wrap_solver(f)
+	function solver_mt.__index:wrap_solver(f)
+		local init_v = self.init_v
 		local sub = self.subgraph
 		local gsctx = ffi.gc(C.gs_create_ctx(), C.gs_destroy_ctx)
 		local callbacks = self.mapper.virtuals.callbacks
 
 		return function(...)
-			C.fhk_clear(sub.G)
+			sub.G:init(init_v)
 			C.gs_enter(gsctx)
 
 			local r = f(...)
@@ -486,11 +496,12 @@ if C.HAVE_SOLVER_INTERRUPTS == 1 then
 		end
 	end
 else
-	function solver_func_mt.__index:wrap_solver(f)
+	function solver_mt.__index:wrap_solver(f)
 		local sub = self.subgraph
+		local init_v = self.init_v
 
 		return function(...)
-			C.fhk_clear(sub.G)
+			sub.G:init(init_v)
 			local r = f(...)
 			if r ~= C.FHK_OK then
 				sub:failed()
@@ -499,103 +510,188 @@ else
 	end
 end
 
-function solver_func_mt.__index:each_visible(f)
-	for _,vis in ipairs(self.mapper.visible) do
-		f(vis)
-	end
-
-	for _,vis in ipairs(self.visible) do
-		f(vis)
+function solver_mt.__index:merge_binds()
+	for mp,p in pairs(self.mapper.given) do
+		if not self.binds[mp] then
+			self.binds[mp] = {params=p}
+		end
 	end
 end
 
-function solver_func_mt.__index:create_mappings()
-	self:each_visible(function(vis)
-		vis:mark_mappings(function(name)
+function solver_mt.__index:prepare()
+	-- always prepare source first
+	if self.source and self.source.prepare then
+		self.source:prepare(self, true)
+	end
+
+	for mp,_ in pairs(self.binds) do
+		if mp ~= self.source and mp.prepare then
+			mp:prepare(self)
+		end
+	end
+end
+
+function solver_mt.__index:mark_mappings()
+	local mappings = {}
+
+	for mp,_ in pairs(self.binds) do
+		mp:mark_mappings(self, function(name)
 			if not self.mapper.vars[name] then
 				return
 			end
 
-			if self.mappings[name] and self.mappings[name] ~= vis then
+			if mappings[name] and mappings[name] ~= mp then
 				error(string.format("Mapping conflict! Variable '%s' is marked by %s and %s",
-				name, self.mappings[name], vis))
+				name, mappings[name], mp))
 			end
 
-			self.mappings[name] = vis
+			mappings[name] = mp
 		end)
-	end)
+	end
+
+	self.mappings = mappings
 end
 
-function solver_func_mt.__index:mark_visible(G, vis, vmask, mark)
-	mark = mark or 0xff
+function solver_mt.__index:mark_given(G, vmask)
+	local mark = ffi.new("fhk_vbmap", {given=1}).u8
+
 	for i=0, tonumber(G.n_var)-1 do
 		local v = self.mapper.vars[tonumber(G.vars[i].uidx)]
-		if self.mappings[v.name] and self.mappings[v.name]:is_visible(vis, v) then
+		local mp = self.mappings[v.name]
+		if mp and ((not mp.is_visible) or mp:is_visible(self, v)) then
 			vmask[i] = mark
 		end
 	end
-end
-
-function solver_func_mt.__index:mark_nonconstant(G, vis, vmask, mark)
-	mark = mark or 0xff
-	for i=0, tonumber(G.n_var)-1 do
-		local v = self.mapper.vars[tonumber(G.vars[i].uidx)]
-		if self.mappings[v.name] and not self.mappings[v.name]:is_constant(vis, v) then
-			vmask[i] = mark
-		end
-	end
-end
-
-function solver_func_mt.__index:create_visible_mask(mark)
-	mark = mark or 0xff
-	local G = self.mapper:G()
-	local vmask = G:newvmask()
-
-	self:each_visible(function(vis)
-		self:mark_visible(G, vis, vmask, mark)
-	end)
 
 	return vmask
 end
 
-function solver_func_mt.__index:mark_reset_nonconstant(G, reset_v)
-	self:each_visible(function(vis)
-		self:mark_nonconstant(G, vis, reset_v)
-	end)
-end
-
-function solver_func_mt.__index:prepare_binds()
-	-- Note: potential optimization? here is to not prepare it if it doesn't have any mapped vars
-	-- (ie. all vars were cut when solving the subgraph)
-	self:each_visible(function(vis)
-		if vis.prepare then
-			vis:prepare(self)
+function solver_mt.__index:mark_nonconstant(G, vmask)
+	for i=0, tonumber(G.n_var)-1 do
+		local v = self.mapper.vars[tonumber(G.vars[i].uidx)]
+		local mp = self.mappings[v.name]
+		if mp and ((not mp.is_constant) or (not mp:is_constant(self, v))) then
+			vmask[i] = 0xff
 		end
-	end)
+	end
 end
 
-function solver_func_mt.__index:map_subgraph()
+function solver_mt.__index:init_writeps(init_v)
+	local init_v = ffi.cast("fhk_vbmap *", self.init_v)
+	local vp = {}
+
+	for name,mp in pairs(self.mappings) do
+		-- XXX: this is a pretty ugly check, should be done differently
+		if getmetatable(mp) == solver_varset_mt then
+			vp[name] = self:typed_pointer(name)
+			local fv = self.subgraph.fvars[name]
+			init_v[fv.idx].has_value = 1
+		end
+	end
+
+	self._assign_vp = vp
+end
+
+function solver_mt.__index:map_subgraph()
 	local G = self.subgraph.G
 	C.gmap_hook_subgraph(self.mapper:G(), G)
 
 	for i=0, tonumber(G.n_var)-1 do
 		local v = self.mapper.vars[tonumber(G.vars[i].uidx)]
-		if self.mappings[v.name] then
-			local mp = self.mappings[v.name]:map_var(v, self)
-			C.gmap_bind(G, i, ffi.cast("struct gv_any *", mp))
+		local mp = self.mappings[v.name]
+		if mp and mp.map_var then
+			local mapping = mp:map_var(self, v)
+			if mapping then
+				C.gmap_bind(G, i, ffi.cast("struct gv_any *", mapping))
+			end
 		end
 	end
 end
 
-function solver_func_mt.__index:create_solver()
-	-- (1) make init mask for the full graph
-	self:create_mappings()
-	local init_v = self:create_visible_mask(ffi.new("fhk_vbmap", {given=1}).u8)
+function solver_mt.__index:typed_pointer(name)
+	-- luajit doesn't have a way to take a pointer to struct member
+	-- so we have to calculate the pointer
+	-- vp[name] = &fvars[name].value
+	local fv = ffi.cast("char *", self.subgraph.fvars[name])
+	local p = fv + ffi.offsetof("struct fhk_var", "value")
+	local ctype = self.mapper:promote_ctype(name)
+	return ffi.cast(ffi.typeof("$*", ctype), p)
+end
+
+function solver_mt.__index:create_direct_solver()
+	local vp = {}
+	for _,name in ipairs(self.names) do
+		vp[name] = self:typed_pointer(name)
+	end
+
+	self._res_vp = vp
+
+	local G = self.subgraph.G
+	local nv, ys = self.subgraph:collectvs(self.names)
+	return function()
+		return (C.gs_solve(G, nv, ys))
+	end
+end
+
+function solver_mt.__index:create_solver_func()
+	if self.source and self.source.create_solver then
+		return self.source:create_solver(self)
+	end
+
+	return self:create_direct_solver()
+end
+
+-- only needed for iterating solvers, eg. those that go over a vec
+function solver_mt.__index:create_subgraph_solver()
+	local solver = ffi.gc(ffi.new("struct fhk_solver"), C.fhk_solver_destroy)
+	solver:init(self.subgraph.G, #self.names)
+	self.subgraph:collectvs(self.names, solver.xs)
+	self:mark_nonconstant(self.subgraph.G, solver.reset_v)
+	solver:compute_reset_mask()
+
+	local vp = {}
+	for i,name in ipairs(self.names) do
+		local ctype = self.mapper:promote_ctype(name)
+		vp[name] = ffi.cast(ffi.typeof("$**", ctype), solver.res+(i-1))
+	end
+
+	self._res_vp = vp
+	return solver
+end
+
+function solver_mt.__index:make_vars()
+	local vp = self._res_vp
+	local ap = self._assign_vp
+
+	if not vp then
+		error("solver not created")
+	end
+
+	return setmetatable({}, {
+		__index = function(_, name)
+			return vp[name][0]
+		end,
+
+		__newindex = ap and function(_, name, value)
+			ap[name][0] = value
+		end
+	})
+end
+
+function solver_mt.__index:create_solver()
+	-- (1) merge binds from mapper and init binds
+	self:merge_binds()
+	self:prepare()
+	self:mark_mappings()
+
+	-- (2) make init mask for the full graph
+	local G = self.mapper:G()
+	local init_v = G:newvmask()
+	self:mark_given(G, init_v)
 	local nv, ys = self.mapper.G_subgraph:collectvs(self.names)
 	markvs(init_v, nv, ys, 0) -- unmark given for roots
 
-	-- (2) reduce on full graph, after this v/mmask contain subgraph selection
-	local G = self.mapper:G()
+	-- (3) reduce on full graph, after this v/mmask contain subgraph selection
 	local vmask = G:newvmask()
 	local mmask = G:newmmask()
 	G:init(init_v)
@@ -603,54 +699,41 @@ function solver_func_mt.__index:create_solver()
 		self.mapper.G_subgraph:failed()
 	end
 
-	-- (3) create subgraph
+	-- (4) create subgraph
 	local sub = self.mapper:subgraph(vmask, mmask)
 	self.subgraph = sub
 	local H = sub.G
-	local iv = H:newvmask()
-	C.fhk_transfer_mask(iv, init_v, vmask, G.n_var)
-	H:init(iv)
+	self.init_v = H:newvmask()
+	C.fhk_transfer_mask(self.init_v, init_v, vmask, G.n_var)
+	self:init_writeps()
 
-	-- H isn't shared by any other solver, so we never need iv/init_v again, given/target
-	-- flags can't change
-
-	-- (4) create solver on the reduced subgraph
-	local solver = ffi.gc(ffi.new("struct fhk_solver"), C.fhk_solver_destroy)
-	self.solver = solver
-	solver:init(H, nv)
-	sub:collectvs(self.names, solver.xs)
-	self:mark_reset_nonconstant(H, solver.reset_v)
-	solver:compute_reset_mask()
-
-	-- (5) wrap solver: the wrapper should
-	--   * reset the graph - only once before calling the solver. this assumes that the "world"
-	--     can't change inside the wrapped function (eg. between vector entries).
-	--     this enables the solver to only partially reset the graph, which allows fhk to cache
-	--     some values between calls to fhk_solve, so it won't needlessly recompute eg.
-	--     global values for every vector entry.
-	--   * call solver_func. this should solve the whole container (vector, grid, etc.)
-	--     this should NOT in any way modify any value fhk can read: globals, any containers
-	--     exposed to this solver, model coefficients, ...
-	--   * check the result, raise errors or handle virtuals if needed
-	self:prepare_binds()
-	local solver_func = self.source:create_solver(self)
+	-- (5) wrap solver function
 	self:map_subgraph()
+	local solver_func = self:create_solver_func()
 	self.solve = self:wrap_solver(solver_func)
+	self.vars = self:make_vars()
 
 	return self
 end
 
-function solver_func_mt.__index:res(name)
-	local info = self.res_info[name]
-	return (ffi.cast(info.ctype, self.solver.res[info.idx]))
-end
-
-function solver_func_mt.__index:bind(x, ...)
+function solver_mt.__index:bind(x, ...)
 	x:bind_solver(self, ...)
 end
 
-function solver_func_mt:__call(...)
+function solver_mt:__call(...)
 	return self.solve(...)
+end
+
+-- varset --
+
+function solver_varset_mt.__index:is_constant()
+	return true
+end
+
+function solver_varset_mt.__index:mark_mappings(_, mark)
+	for _,name in ipairs(self.names) do
+		mark(name)
+	end
 end
 
 ffi.metatype("struct fhk_solver", { __index = {
@@ -665,28 +748,11 @@ ffi.metatype("struct fhk_solver", { __index = {
 
 --------------------------------------------------------------------------------
 
--- XXX: does this belong here?
-local function create_solver1(sf)
-	local solver = sf.solver
-	local values = ffi.new("pvalue[?]", solver.nv)
-	sf._result_buf = values -- attach it to the solver to prevent it from being gc'd
-	
-	for i=0, tonumber(solver.nv)-1 do
-		solver:bind(i, values+i)
-	end
-
-	return function()
-		return (C.gs_solve_step(solver, 0))
-	end
-end
-
 local function inject(env)
 	local mapper = env.mapper
 
 	env.m2.fhk = {
-		bind    = function(x, ...) x:bind(mapper, ...) end,
-		virtual = function(name, x, f) return x:virtualize(mapper, name, f) end,
-		global  = function(vis, ...) return mapper:always_visible(vis), ... end,
+		global  = function(vis, ...) return mapper:always_given(vis), ... end,
 		solve   = function(...)
 			local s = mapper:solver({...})
 			env.sim:on("sim:compile", function() s:create_solver() end)
@@ -719,5 +785,4 @@ return {
 	create_models   = create_models,
 	hook            = hook,
 	inject          = inject,
-	create_solver1  = create_solver1
 }

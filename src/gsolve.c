@@ -67,12 +67,21 @@ struct gs_ctx {
 };
 
 struct co_solve_args {
-	struct fhk_solver *solver;
-	unsigned idx;
-	struct vec *vec;
-	unsigned *i_bind;
-	gridpos *z_bind;
-	int z_band;
+	union {
+		struct {
+			struct fhk_graph *G;
+			size_t nv;
+			struct fhk_var **ys;
+		};
+		struct {
+			struct fhk_solver *solver;
+			unsigned idx;
+			struct vec *vec;
+			unsigned *i_bind;
+			gridpos *z_bind;
+			int z_band;
+		};
+	};
 };
 
 static __thread aco_t *main_co = NULL;
@@ -149,6 +158,12 @@ static void co_exit(){
 	co->share_stack->align_validsz = 0;
 }
 
+static void co_solve(){
+	struct gs_ctx *ctx = aco_get_arg();
+	struct co_solve_args *arg = ctx->arg;
+	COEXIT(GS_RETURN | fhk_solve(arg->G, arg->nv, arg->ys));
+}
+
 static void co_solve_step(){
 	struct gs_ctx *ctx = aco_get_arg();
 	struct co_solve_args *arg = ctx->arg;
@@ -171,6 +186,14 @@ static void co_solve_vec_z(){
 
 // TODO: a small perf improvement could be to run the coro version only if the subgraph
 // contains any virtuals (this can be precomputed to gs_virt)
+
+gs_res gs_solve(struct fhk_graph *G, size_t nv, struct fhk_var **ys){
+#ifdef M2_SOLVER_INTERRUPTS
+	return COENTER(&co_solve, {.G = G, .nv = nv, .ys = ys});
+#else
+	return GS_RETURN | fhk_solve(G, nv, ys);
+#endif
+}
 
 gs_res gs_solve_step(struct fhk_solver *solver, unsigned idx){
 #ifdef M2_SOLVER_INTERRUPTS

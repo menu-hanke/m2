@@ -38,20 +38,17 @@ local function update_G()
 	plot.G, plot.Gma = ba:sum(), ba:mask(spe, Spe.manty):sum()
 end
 
-local solve_growstep = m2.solve("i_d", "sur"):from(Tree)
-local solve_ingrowth = m2.solve("fma", "fku", "fra", "fhi", "fle"):from(Plot)
+local solve_growstep = m2.solve("i_d", "sur"):over(Tree)
+local solve_ingrowth = m2.solve("fma", "fku", "fra", "fhi", "fle")
 
 local function grow_trees()
 	solve_growstep(trees)
-	local i_d = solve_growstep:res("i_d")
-	local sur = solve_growstep:res("sur")
-
 	local f = trees:bandv("f")
 	local d = trees:bandv("dbh")
 	local newf = trees:newband("f")
 	local newd = trees:newband("dbh")
-	f:mul(sur, newf)
-	d:add(i_d, newd)
+	f:mul(solve_growstep.vars.sur, newf)
+	d:add(solve_growstep.vars.i_d, newd)
 end
 
 local newspe = { Spe.manty, Spe.kuusi, Spe.rauduskoivu, Spe.hieskoivu, Spe.haapa }
@@ -60,11 +57,11 @@ local function ingrowth()
 	solve_ingrowth()
 
 	local newf = {
-		solve_ingrowth:res("fma")[0],
-		solve_ingrowth:res("fku")[0],
-		solve_ingrowth:res("fra")[0],
-		solve_ingrowth:res("fhi")[0],
-		solve_ingrowth:res("fle")[0]
+		solve_ingrowth.vars.fma,
+		solve_ingrowth.vars.fku,
+		solve_ingrowth.vars.fra,
+		solve_ingrowth.vars.fhi,
+		solve_ingrowth.vars.fle
 	}
 
 	local nnew = 0
