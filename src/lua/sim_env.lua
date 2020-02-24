@@ -56,6 +56,7 @@ end
 
 function simenv_mt.__index:inject_base()
 	require("sim").inject(self)
+	require("kernel").inject(self)
 	require("globals").inject(self)
 	require("vec").inject(self)
 	require("typing").inject(self)
@@ -126,7 +127,7 @@ function simenv_mt.__index:require(module, global)
 	local path, cpath = package.path, package.cpath
 	package.path = self.env.package.path
 	package.cpath = self.env.package.cpath
-	local ok, r = pcall(sandbox_require, self.env, module)
+	local ok, r = xpcall(sandbox_require, debug.traceback, self.env, module)
 	package.path = path
 	package.cpath = cpath
 
@@ -134,7 +135,7 @@ function simenv_mt.__index:require(module, global)
 		return r
 	end
 
-	error(r)
+	error(r, 2)
 end
 
 function simenv_mt.__index:require_all(modules)
