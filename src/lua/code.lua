@@ -1,3 +1,5 @@
+local log = require("log").logger
+
 local code_mt = { __index={} }
 
 local function new()
@@ -6,6 +8,10 @@ end
 
 function code_mt:__tostring()
 	return table.concat(self, "\n")
+end
+
+function code_mt:__add(other)
+	return setmetatable({tostring(self), tostring(other)}, code_mt)
 end
 
 function code_mt.__index:emit(s)
@@ -18,7 +24,9 @@ end
 
 function code_mt.__index:compile(env, name)
 	name = name or "=(code)"
-	return load(tostring(self), name, t, env)
+	local src = tostring(self)
+	log:debug("[code] %s\n%s", name, src)
+	return load(src, name, t, env)
 end
 
 return {
