@@ -14,13 +14,21 @@ local function globalns(sim)
 		ns[name] = ffi.cast(ctype .. "*", d)
 	end
 
+	local function check(name)
+		local r = ns[name]
+		if not r then
+			error(string.format("Name '%s' not defined", name))
+		end
+		return r
+	end
+
 	return setmetatable({}, {
 		__index = function(_, name)
-			return ns[name][0]
+			return check(name)[0]
 		end,
 
 		__newindex = function(_, name, value)
-			ns[name][0] = value
+			check(name)[0] = value
 		end
 	}), define, ns
 end
