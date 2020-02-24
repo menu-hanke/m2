@@ -1,5 +1,6 @@
 local typing = require "typing"
 local alloc = require "alloc"
+local kernel = require "kernel"
 local ffi = require "ffi"
 local C = ffi.C
 
@@ -261,9 +262,33 @@ local function typed(desc, data, n)
 	end
 end
 
+--------------------------------------------------------------------------------
+
+local function vec_loop(n)
+	n = n or 1
+
+	local vnames = {}
+	local vidx = {}
+
+	for i=1, n do
+		vnames[i] = "___v"..i
+		vidx[i] = vnames[i]..".data[___i]"
+	end
+
+	vnames = table.concat(vnames, ",")
+	vidx = table.concat(vidx, ",")
+
+	return {
+		signature = string.format("return function(%s, ___state)", vnames),
+		header    = "for ___i=0, #___v1-1 do",
+		init      = string.format("%s, ___state", vidx)
+	}
+end
+
 local function inject(env)
 	-- Note: maybe add a function to alloc from sim pool instead if malloc is too slow
 	env.m2.allocv = allocvec
+	env.m2.kernel.vec = function(n) return kernel.create(vec_loop(n)) end
 	-- allocbitmap?
 end
 

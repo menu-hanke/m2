@@ -227,4 +227,43 @@ test_vec_alloc = with_env(function()
 	end
 end)
 
+test_vmath_kernel_reduce = with_env(function()
+	local sum = m2.kernel.vec():reduce(function(a, b) return a+b end, 0)
+	local v = m2.allocv(3)
+	v.data[0] = 1; v.data[1] = 2; v.data[2] = 3
+
+	assert(sum(v) == 1+2+3)
+end)
+
+test_vmath_kernel_map = with_env(function()
+	local sqsum = m2.kernel.vec():map(function(x) return x^2 end):sum()
+	local v = m2.allocv(3)
+	v.data[0] = 1; v.data[1] = 2; v.data[2] = 3
+
+	assert(sqsum(v) == 1^2+2^2+3^2)
+end)
+
+test_vmath_kernel_multiple = with_env(function()
+	local dot = m2.kernel.vec(2):map(function(x, y) return x*y end):sum()
+	local x, y = m2.allocv(3), m2.allocv(3)
+	x.data[0] = 1; x.data[1] = 2; x.data[2] = 3
+	y.data[0] = 4; y.data[1] = 5; y.data[2] = 6
+
+	assert(dot(x, y) == 1*4+2*5+3*6)
+end)
+
+test_obj_kernel = with_env(function()
+	local V = m2.obj(bt.reals("a", "b"))
+	local v = V:vec()
+	v:alloc(3)
+	local a = v:newband("a")
+	local b = v:newband("b")
+	a[0] = 1; a[1] = 2; a[2] = 3
+	b[0] = 4; b[1] = 5; b[2] = 6
+
+	local dot = m2.kernel.bands("a", "b"):map(function(x, y) return x*y end):sum()
+	
+	assert(dot(v) == 1*4+2*5+3*6)
+end)
+
 -- TODO: scheduler tests go here

@@ -2,6 +2,7 @@ local ffi = require "ffi"
 local aux = require "aux"
 local typing = require "typing"
 local vmath = require "vmath"
+local kernel = require "kernel"
 local fhk = require "fhk"
 local C = ffi.C
 
@@ -12,6 +13,8 @@ local vec_mt = { __index = {} }
 function vec_mt.__index:len()
 	return self.vec.___nused
 end
+
+vec_mt.__len = vec_mt.__index.len
 
 function vec_mt.__index:alloc_len()
 	return self.vec.___nalloc
@@ -29,6 +32,7 @@ function vec_mt.__index:info()
 	return self.vec.___info
 end
 
+local typed = vmath.typed
 function vec_mt.__index:typedvec(name, data)
 	return vmath.typed(tonumber(self:info().desc[name]), data, self:len())
 end
@@ -72,6 +76,8 @@ local slice_mt = { __index = {} }
 function slice_mt.__index:len()
 	return self.to - self.from
 end
+
+slice_mt.__len = slice_mt.__index.len
 
 function slice_mt.__index:typedvec(name, data)
 	return vmath.typed(tonumber(self.vec:info().desc[name]), data, self:len())
@@ -358,8 +364,23 @@ end
 
 --------------------------------------------------------------------------------
 
+local function obj_loop(...)
+	local bands = {...}
+	local bandidx = {}
+	for i,v in ipairs(bands) do
+		bandidx[i] = string.format("___vec:band('%s')[___i]", v)
+	end
+
+	return {
+		signature = "return function(___vec, ___state)",
+		header    = "for ___i=0, ___vec:len()-1 do",
+		init      = string.format("%s, ___state", table.concat(bandidx, ", "))
+	}
+end
+
 local function inject(env)
 	env.m2.obj = aux.delegate(env.sim._sim, obj)
+	env.m2.kernel.bands = function(...) return kernel.create(obj_loop(...)) end
 end
 
 return {
