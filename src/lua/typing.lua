@@ -140,8 +140,9 @@ local tvalue = setmetatable({}, { __index = function(_, k)
 end})
 
 -- see type.h
+local bor = bit.bor
 local function promote(t)
-	return bit.bor(t, 3)
+	return bor(t, 3)
 end
 
 local function mask(bits)
@@ -152,7 +153,7 @@ local function mask(bits)
 			error(string.format("invalid bit: %d", v))
 		end
 
-		ret = bit.bor(ret, C.vbpack(v))
+		ret = bor(ret, C.vbpack(v))
 	end
 
 	return ret
