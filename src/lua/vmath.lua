@@ -4,28 +4,23 @@ local kernel = require "kernel"
 local ffi = require "ffi"
 local C = ffi.C
 
-local bitmap_types = {
-	b8  = "uint8_t",
-	b16 = "uint16_t",
-	b32 = "uint32_t",
-	b64 = "uint64_t"
-}
-
-ffi.cdef [[
-	struct Lvec {
+local Tvec = ffi.typeof [[
+	struct {
 		size_t n;
 		vreal *data;
-	};
+	}
+]]
 
-	struct Lvec_masked {
+local Tvec_masked = ffi.typeof [[
+	struct {
 		size_t n;
 		vreal *data;
 		vmask *mask;
 		vmask m;
-	};
+	}
 ]]
 
-for b,t in pairs(bitmap_types) do
+local function bitmap_type(ctype)
 	-- This struct is a hack to make luajit happy, the bm8 and uint*_t pointers always
 	-- point to the same data but the bm8 is used for C calls.
 	-- Absolutely don't access the bm8 pointer in lua code, this breaks strict aliasing.
@@ -33,17 +28,24 @@ for b,t in pairs(bitmap_types) do
 	-- call boundary.
 	-- Ideally we would only have a single pointer here but this is preferable to
 	-- spamming ffi.cast
-	ffi.cdef(string.format([[
-		struct Lbitmap_%s {
+	return ffi.typeof(string.format([[
+		struct {
 			size_t n;
 			size_t n8;
 			bm8 *bm8;
 			%s *data;
 		}
-	]], b, t))
+	]], ctype))
 end
 
-------------------------
+local Tbitmaps = {
+	[tonumber(ffi.C.T_B8)]  = bitmap_type("uint8_t"),
+	[tonumber(ffi.C.T_B16)] = bitmap_type("uint16_t"),
+	[tonumber(ffi.C.T_B32)] = bitmap_type("uint32_t"),
+	[tonumber(ffi.C.T_B64)] = bitmap_type("uint64_t")
+}
+
+--------------------------------------------------------------------------------
 
 local function vecstr(data, n)
 	local s = {}
@@ -83,8 +85,9 @@ end
 
 local function vsubc(d, x, c, n) C.vaddc(d, x, -c, n) end
 local function vsubv(d, x, y, n) C.vaddsv(d, x, -1, y, n) end
+local vreal_size = ffi.sizeof("vreal")
 
-ffi.metatype("struct Lvec", {
+ffi.metatype(Tvec, {
 	__index = {
 		set   = function(self, c) C.vsetc(self.data, c, self.n) end,
 		add   = vbinop(C.vaddc, C.vaddv),
@@ -106,30 +109,25 @@ ffi.metatype("struct Lvec", {
 			C.vsorti(dest, self.data, self.n)
 			return dest
 		end,
-		mask  = function(self, mask, m)
-			local ret = ffi.new("struct Lvec_masked")
-			ret.n = self.n
-			ret.data = self.data
-			ret.mask = mask
-			ret.m = m
-			return ret
-		end,
+		mask  = function(self, mask, m) return Tvec_masked(self.n, self.data, mask, m) end,
 		sum   = function(self) return (C.vsum(self.data, self.n)) end,
 		avgw  = function(self, w) return (C.vavgw(self.data, todata(w), self.n)) end,
-		psumi = function(self, dest, idx) return (C.vpsumi(todata(dest), self.data, idx, self.n)) end
+		psumi = function(self, dest, idx) return (C.vpsumi(todata(dest), self.data, idx, self.n)) end,
+		copy  = function(self, dest) ffi.copy(todata(dest), self.data, self.n*vreal_size) end
 	},
 
-	__tostring = function(self) return vecstr(self.data, self.n) end
+	__tostring = function(self) return vecstr(self.data, self.n) end,
+	__len = function(self) return tonumber(self.n) end
 })
 
-ffi.metatype("struct Lvec_masked", { __index = {
+ffi.metatype(Tvec_masked, { __index = {
 	sum   = function(self) return C.vsumm(self.data, self.mask, self.m, self.n) end,
 	psumi = function(self, dest, idx)
 		return (C.vpsumim(todata(dest), self.data, idx, self.mask, self.m, self.n))
 	end
 }})
 
-------------------------
+--------------------------------------------------------------------------------
 
 local function binarystr(d, n)
 	local bs = {}
@@ -210,30 +208,17 @@ local function bitmapmt(size, xmask, expand)
 			xor   = bitmapop(maskf(C.bm_xor64, xmask), C.bm_xor)
 		},
 		
-		__tostring = function(self) return bitmapstr(self.data, self.n, size) end
+		__tostring = function(self) return bitmapstr(self.data, self.n, size) end,
+		__len = function(self) return tonumber(self.n) end
 	}
 end
 
-ffi.metatype("struct Lbitmap_b8",  bitmapmt(1, C.bmask8,  C.vmexpand8))
-ffi.metatype("struct Lbitmap_b16", bitmapmt(2, C.bmask16, C.vmexpand16))
-ffi.metatype("struct Lbitmap_b32", bitmapmt(4, C.bmask32, C.vmexpand32))
-ffi.metatype("struct Lbitmap_b64", bitmapmt(8))
+ffi.metatype(Tbitmaps[tonumber(ffi.C.T_B8)],  bitmapmt(1, C.bmask8,  C.vmexpand8))
+ffi.metatype(Tbitmaps[tonumber(ffi.C.T_B16)], bitmapmt(2, C.bmask16, C.vmexpand16))
+ffi.metatype(Tbitmaps[tonumber(ffi.C.T_B32)], bitmapmt(4, C.bmask32, C.vmexpand32))
+ffi.metatype(Tbitmaps[tonumber(ffi.C.T_B64)], bitmapmt(8))
 
 ------------------------
-
-local bitmaps = {
-	[tonumber(ffi.C.T_B8)]  = "struct Lbitmap_b8",
-	[tonumber(ffi.C.T_B16)] = "struct Lbitmap_b16",
-	[tonumber(ffi.C.T_B32)] = "struct Lbitmap_b32",
-	[tonumber(ffi.C.T_B64)] = "struct Lbitmap_b64"
-}
-
-local function vec(data, n)
-	local ret = ffi.new("struct Lvec")
-	ret.data = data
-	ret.n = n
-	return ret
-end
 
 local function freevec(v)
 	C.free(v.data)
@@ -241,24 +226,25 @@ end
 
 local function allocvec(n)
 	local data = alloc.malloc_nogc(vreal_type, n, vptr_type)
-	return ffi.gc(vec(data, n), freevec)
+	return ffi.gc(Tvec(n, data), freevec)
 end
 
 local function bitmap(desc, data, n)
-	local t = bitmaps[desc]
-	local ret = ffi.new(t)
+	local ret = Tbitmaps[desc]()
 	ret.data = data
-	ret.bm8 = data
+	ret.bm8 = ffi.cast("bm8 *", data)
 	ret.n = n
 	ret:init()
 	return ret
 end
 
+local real_desc = typing.builtin_types.real.desc
+local promote = typing.promote
 local function typed(desc, data, n)
-	if typing.promote(desc) == ffi.C.T_B64 then
+	if desc == real_desc then
+		return Tvec(n, data)
+	elseif promote(desc) == C.T_B64 then
 		return bitmap(desc, data, n)
-	elseif desc == typing.builtin_types.real.desc then
-		return vec(data, n)
 	end
 end
 
@@ -293,10 +279,8 @@ local function inject(env)
 end
 
 return {
-	vec       = vec,
 	allocvec  = allocvec,
 	vecstr    = vecstr,
-	bitmap    = bitmap,
 	bitmapstr = bitmapstr,
 	typed     = typed,
 	todata    = todata,
