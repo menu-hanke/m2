@@ -107,6 +107,14 @@ vreal vsumm(vreal *x, vmask *m, vmask mask, size_t n){
 	return ret;
 }
 
+/* dot product
+ * sum(x*y) */
+vreal vdot(vreal *x, vreal *y, size_t n){
+	vreal ret = 0;
+	V(n, ret += x[i]*y[i]);
+	return ret;
+}
+
 /* weighted average
  * sum(x*w) / sum(w) */
 vreal vavgw(const vreal *restrict x, const vreal *restrict w, size_t n){

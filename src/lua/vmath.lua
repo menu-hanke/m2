@@ -111,6 +111,7 @@ ffi.metatype(Tvec, {
 		end,
 		mask  = function(self, mask, m) return Tvec_masked(self.n, self.data, mask, m) end,
 		sum   = function(self) return (C.vsum(self.data, self.n)) end,
+		dot   = function(self, y) return (C.vdot(self.data, todata(y), self.n)) end,
 		avgw  = function(self, w) return (C.vavgw(self.data, todata(w), self.n)) end,
 		psumi = function(self, dest, idx) return (C.vpsumi(todata(dest), self.data, idx, self.n)) end,
 		copy  = function(self, dest) ffi.copy(todata(dest), self.data, self.n*vreal_size) end
