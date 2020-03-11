@@ -5,6 +5,7 @@ local sandbox = {}
 local function init_sandbox(path, loaded)
 	sandbox.path = path
 	sandbox.loaded = loaded
+	sandbox.loaded.ffi = require("ffi")
 end
 
 local simenv_mt = { __index = {} }
