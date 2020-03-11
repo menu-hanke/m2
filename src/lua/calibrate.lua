@@ -59,7 +59,7 @@ local function collect_cmodels(coefs, mapper)
 
 	for modname,_ in pairs(coefs.model) do
 		-- TODO pick only optimized ones
-		table.insert(models, mapper.models[modname].mapping_mod)
+		table.insert(models, mapper.graph:mapping_m(modname).mod)
 	end
 
 	return models
@@ -75,13 +75,12 @@ local function set_updates(coefs, mapper, cfg)
 	
 	for modname,co in pairs(coefs.model) do
 		local coef_idx = {}
-		local mm = mapper.models[modname]
 		local fm = cfg.fhk_models[modname]
 		for idx,cname in ipairs(fm.coeffs) do
 			coef_idx[cname] = idx
 		end
 		for _,c in ipairs(co) do
-			c.ptr = mm.mapping_mod.coefs + (coef_idx[c.name]-1)
+			c.ptr = mapper.graph:mapping_m(modname).mod.coefs + (coef_idx[c.name]-1)
 			c.update = update_model_coef
 		end
 	end

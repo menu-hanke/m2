@@ -1,7 +1,8 @@
 local m2 = require "m2"
 local Spe = m2.masks.species
 
-local Plot, plot = m2.fhk.global(m2.ns())
+local Plot, plot = m2.ns()
+m2.fhk.config(Plot, {global=true})
 Plot.static { "ts", "mtyyppi", "atyyppi" }
 Plot.dynamic { "step", "G", "Gma" }
 

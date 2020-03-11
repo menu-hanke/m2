@@ -21,11 +21,11 @@ function vec_mt.__index:alloc_len()
 end
 
 function vec_mt.__index:cvec()
-	return ffi.cast("struct vec *", self.vec)
+	return (ffi.cast("struct vec *", self.vec))
 end
 
 function vec_mt.__index:cinfo()
-	return ffi.cast("struct vec_info *", self.vec.___info)
+	return (ffi.cast("struct vec_info *", self.vec.___info))
 end
 
 function vec_mt.__index:info()
@@ -34,7 +34,7 @@ end
 
 local typed = vmath.typed
 function vec_mt.__index:typedvec(name, data)
-	return vmath.typed(tonumber(self:info().desc[name]), data, self:len())
+	return (typed(tonumber(self:info().desc[name]), data, self:len()))
 end
 
 function vec_mt.__index:band(name)
@@ -42,7 +42,7 @@ function vec_mt.__index:band(name)
 end
 
 function vec_mt.__index:bandv(name)
-	return self:typedvec(name, self:band(name))
+	return (self:typedvec(name, self:band(name)))
 end
 
 function vec_mt.__index:newband(name)
@@ -223,104 +223,84 @@ function obj_mt.__index:slice(vec, from, to)
 end
 
 function obj_mt.__index:alloc(vec, n)
-	self:unrealize(vec)
 	local pos = vec:alloc(n)
 	return self:slice(vec, pos, pos+n)
 end
 
-local function map_field(offsets, band, stride, container, field, off)
+local function iter_field(offsets, band, stride, container, field, off)
 	local t = container.vars[field]
 
 	if t.vars then
 		for _,name in ipairs(t.fields) do
-			map_field(offsets, band, stride, t, name, off+typing.offsetof(t, name))
+			iter_field(offsets, band, stride, t, name, off+typing.offsetof(t, name))
 		end
 	else
-		offsets[field] = {
-			offset = off,
-			stride = stride,
-			band = band-1
-		}
+		coroutine.yield(field, off, stride, band-1)
 	end
 end
 
-function obj_mt.__index:map_offsets()
-	local offsets = {}
-
-	for band,field in ipairs(self.type.fields) do
-		map_field(offsets, band, ffi.sizeof(self.type.vars[field].ctype), self.type, field, 0)
-	end
-
-	self.offsets = offsets
+function obj_mt.__index:field_info()
+	return coroutine.wrap(function()
+		for band,field in ipairs(self.type.fields) do
+			iter_field(offsets, band, ffi.sizeof(self.type.vars[field].ctype), self.type, field, 0)
+		end
+	end)
 end
 
--------------------- mapper callbacks --------------------
+-------------------- fhk mapping --------------------
 
-function obj_mt.__index:is_constant(solver)
-	return solver.binds[self].idx_pointer ~= solver.idx_pointer
-end
+function obj_mt.__index:define_mappings(solver, define)
+	local udata = solver.udata[self]
 
-function obj_mt.__index:mark_mappings(_, mark)
-	if not self.offsets then
-		self:map_offsets()
+	udata.vp = solver.arena:new("struct vec *")
+
+	if udata.bind then
+		udata.vp[0] = udata.bind:cvec()
 	end
 
-	for field,_ in pairs(self.offsets) do
-		mark(field)
+	if self ~= solver.source and not udata.follow then
+		udata.idxp = solver.arena:new("unsigned")
+	end
+
+	for field, offset, stride, band in self:field_info() do
+		define(field, function()
+			local mapping = solver.arena:new("struct fhkM_vecV")
+			mapping.flags.resolve = C.FHKM_MAP_VEC
+			mapping.flags.offset = offset
+			mapping.flags.stride = stride
+			mapping.flags.band = band
+			mapping.vec = udata.vp
+			mapping.idx = udata.idxp or solver.udata.idxp
+			return mapping, mapping.idx ~= solver.udata.idxp
+		end)
 	end
 end
 
-function obj_mt.__index:map_var(solver, v)
-	if not self.offsets then
-		self:map_offsets()
-	end
-
-	local off = self.offsets[v.name]
-	local binds = solver.binds[self]
-	return solver.mapper:vec(v.name, off.offset, off.stride, off.band,
-		binds.idx_pointer, binds.v_pointer)
-end
-
-local function alloc_result(sim, solver, n)
+local function alloc_result(sim, solver, nv, n)
 	local res_size = n * ffi.sizeof("pvalue")
 
-	for i=0, tonumber(solver.nv)-1 do
+	for i=0, nv-1 do
 		local res = C.sim_alloc(sim, res_size, ffi.alignof("pvalue"), C.SIM_FRAME)
 		solver:bind(i, res)
 	end
 end
 
-local function bind_result(solver, bufs)
-	for i=0, tonumber(solver.nv)-1 do
+local function bind_result(solver, nv, bufs)
+	for i=0, nv-1 do
 		-- bufs is a lua array, so +1
 		solver:bind(i, ffi.cast("pvalue *", bufs[i+1]))
 	end
 end
 
-function obj_mt.__index:prepare(solver, is_source)
-	local binds = solver.binds[self]
-	binds.v_pointer = solver.mapper.arena:new("struct vec *")
+function obj_mt.__index:wrap_solver(solver)
+	local vp = solver.udata[self].vp
+	local iter = solver.arena:new("struct fhkM_iter_range")
+	C.fhkM_range_init(iter)
+	solver.udata.idxp = typing.memb_ptr("struct fhkM_iter_range", "idx", iter, "unsigned *")
 
-	if binds.params and binds.params.follow then
-		binds.idx_pointer = solver.idx_pointer
-	else
-		binds.idx_pointer = solver.mapper.arena:new("unsigned")
-	end
-
-	if binds.params and binds.params.bind then
-		binds.v_pointer[0] = binds.params.bind:cvec()
-	end
-
-	if is_source then
-		solver.idx_pointer = binds.idx_pointer
-	end
-end
-
-function obj_mt.__index:create_solver(solver)
-	local v_bind = solver.binds[self].v_pointer
-	local idx_bind = solver.idx_pointer
-
-	local c_solver = solver:create_subgraph_solver()
+	local solve = solver:create_iter(iter)
+	local c_solver = solver.solver
+	local nv = solver.nv
 	local sim = self.sim
 
 	-- alloc:
@@ -329,35 +309,32 @@ function obj_mt.__index:create_solver(solver)
 	-- * table        -> solve to given buffers
 	return function(vec, alloc)
 		if not alloc then
-			alloc_result(sim, c_solver, vec:alloc_len())
+			alloc_result(sim, c_solver, nv, vec:alloc_len())
 		elseif type(alloc) == "number" then
-			alloc_result(sim, c_solver, alloc)
+			alloc_result(sim, c_solver, nv, alloc)
 		else
-			bind_result(c_solver, alloc)
+			bind_result(c_solver, nv, alloc)
 		end
 
-		local cvec = vec:cvec()
-		v_bind[0] = cvec
-		-- TODO: this doesn't really need a vec parameter, just the length
-		return (C.gs_solve_vec(cvec, c_solver, idx_bind))
+		vp[0] = vec:cvec()
+		iter.len = vec:len()
+		return solve()
 	end
 end
 
 function obj_mt.__index:bind_solver(solver, vec, idx)
-	local binds = solver.binds[self]
-	binds.v_pointer[0] = vec:cvec()
+	local udata = solver.udata[self]
+	udata.vp[0] = vec:cvec()
 	if idx then
-		binds.idx_pointer[0] = idx
+		udata.idxp[0] = idx
 	end
 end
 
-function obj_mt.__index:virtualize(f)
-	local vec_ctp = self.vec_ctp
-
-	return function(solver)
-		local binds = solver.binds[self]
-		return f(ffi.cast(vec_ctp, binds.v_pointer[0]), tonumber(binds.idx_pointer[0]))
-	end
+function obj_mt.__index:solver_pos(solver)
+	local udata = solver.udata[self]
+	local vp = ffi.cast(self.vec_ctp, udata.vp[0])
+	local idx = tonumber(udata.idxp and udata.idxp[0] or solver.udata.idxp[0])
+	return vp, idx
 end
 
 -- TODO: zband solver

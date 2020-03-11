@@ -22,7 +22,7 @@ MODEL_LANG        ?= R SimoC Lua
 
 # Build coroutine support for fhk solver (requires libaco)?
 # This allows virtual variables to be written in Lua.
-SOLVER_INTERRUPTS ?= on
+USE_COROUTINES    ?= on
 
 # Where to find/install the frontend lua files?
 LUAPATH           ?= $(abspath lua)
@@ -47,7 +47,7 @@ LUA_EXPORTS   = lua_exports.h
 M2_LIBS       = $(LUAJIT_LIB)
 
 M2_O = main.o bitmap.o fhk_graph.o fhk_solve.o fhk_aux.o type.o arena.o sim.o grid.o vec.o\
-	   gmap.o gsolve.o vmath.o vgrid.o
+	   vmath.o vgrid.o graph_map.o graph_solve.o mappings.o
 
 M2_C = $(M2_O:.o=.c)
 
@@ -70,8 +70,8 @@ endif
 
 ################################################################################
 
-ifeq ($(SOLVER_INTERRUPTS),on)
-	CCDEF += -DM2_SOLVER_INTERRUPTS
+ifeq ($(USE_COROUTINES),on)
+	CCDEF += -DM2_USE_COROUTINES
 	CCEXTRA += $(LIBACO_CFLAGS)
 	M2_LIBS += $(LIBACO_LIB)
 endif

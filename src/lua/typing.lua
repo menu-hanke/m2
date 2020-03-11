@@ -139,10 +139,16 @@ local tvalue = setmetatable({}, { __index = function(_, k)
 	end
 end})
 
+-- returns (typ) &t.name
+-- (void* by default, i don't think there's any good way to recover the type of t.name)
+local function memb_ptr(ct, name, x, typ)
+	return ffi.cast(typ or "void *", ffi.cast("char *", x or 0) + ffi.offsetof(ct, name))
+end
+
 -- see type.h
 local bor = bit.bor
 local function promote(t)
-	return bor(t, 3)
+	return (bor(t, 3))
 end
 
 local function mask(bits)
@@ -177,6 +183,7 @@ return {
 	newenum       = newenum,
 	enumct        = enumct,
 	tvalue        = tvalue,
+	memb_ptr      = memb_ptr,
 	promote       = promote,
 	mask          = mask,
 	inject        = inject

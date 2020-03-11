@@ -1,6 +1,4 @@
 local ffi = require "ffi"
-local typing = require "typing"
-local fhk = require "fhk"
 local C = ffi.C
 
 local globals_mt = { __index={} }
@@ -11,7 +9,7 @@ local function globalns(sim)
 	local define = function(name, ctype, static)
 		local lifetime = (static and 0) or C.SIM_VSTACK
 		local d = C.sim_alloc(sim, ffi.sizeof(ctype), ffi.alignof(ctype), lifetime)
-		ns[name] = ffi.cast(ctype .. "*", d)
+		ns[name] = ffi.cast(ffi.typeof("$*", ctype), d)
 	end
 
 	local function check(name)
@@ -43,28 +41,27 @@ local function globals(sim)
 	}, globals_mt)
 end
 
-function globals_mt.__index:is_constant()
-	return true
-end
-
-function globals_mt.__index:mark_mappings(_, mark)
-	for name,_ in pairs(self.ns) do
-		mark(name)
+function globals_mt.__index:define_mappings(solver, define)
+	for name,ref in pairs(self.ns) do
+		define(name, function()
+			local mapping = solver.arena:new("struct fhkM_dataV")
+			mapping.flags.resolve = C.FHKM_MAP_DATA
+			mapping.ref = ref
+			return mapping, true
+		end)
 	end
-end
-
-function globals_mt.__index:map_var(solver, v)
-	return solver.mapper:data(v.name, self.ns[v.name])
 end
 
 --------------------------------------------------------------------------------
 
-local function nsdefine(m2, define, static)
+local function nsdefine(env, define, static)
+	local typeof = env.m2.fhk and env.m2.fhk.typeof
 	return function(names, ctype)
 		names = type(names) == "string" and {names} or names
-		ctype = type(ctype) == "string" and ctype or (ctype and ctype.ctype)
+		if type(ctype) == "table" then ctype = ctype.ctype end
+		if type(ctype) == "string" then ctype = ffi.typeof(ctype) end
 		for _,name in ipairs(names) do
-			define(name, ctype or m2.fhk.typeof(name).ctype, static)
+			define(name, ctype or ffi.typeof(typeof(name).ctype), static)
 		end
 	end
 end
@@ -72,8 +69,8 @@ end
 local function inject(env)
 	local make_ns = function()
 		local ret = globals(env.sim._sim)
-		ret.dynamic = nsdefine(env.m2, ret.define, false)
-		ret.static = nsdefine(env.m2, ret.define, true)
+		ret.dynamic = nsdefine(env, ret.define, false)
+		ret.static = nsdefine(env, ret.define, true)
 		return ret, ret.G
 	end
 
@@ -92,6 +89,5 @@ local function inject(env)
 end
 
 return {
-	inject         = inject,
-	create_solver1 = create_solver1
+	inject = inject
 }

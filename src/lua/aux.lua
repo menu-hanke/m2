@@ -57,6 +57,14 @@ local function delegate(owner, f)
 	end
 end
 
+local function keys(x)
+	local ret = {}
+	for k,_ in pairs(x) do
+		table.insert(ret, k)
+	end
+	return ret
+end
+
 local function countkeys(t)
 	local nk = 0
 	for _,_ in pairs(t) do
@@ -92,6 +100,7 @@ return {
 	readjson  = readjson,
 	readcsv   = readcsv,
 	delegate  = delegate,
+	keys      = keys,
 	countkeys = countkeys,
 	lazy      = lazy,
 	merge     = merge

@@ -103,7 +103,7 @@ test_map_always_given = with_graph(function()
 	G.x = 111
 	L.y = 222
 
-	m2.fhk.global(globals)
+	m2.fhk.config(globals, {global=true})
 	local solve_ab = m2.solve("a", "b"):given(locals)
 
 	return function()
@@ -281,7 +281,7 @@ test_create_solver1_result_gc = with_graph(function()
 	end
 end)
 
-if ffi.C.HAVE_SOLVER_INTERRUPTS == 1 then
+if ffi.C.fhkG_have_interrupts() then
 
 	test_map_virtual = with_graph(function()
 		local vs = m2.virtuals()
@@ -307,8 +307,9 @@ if ffi.C.HAVE_SOLVER_INTERRUPTS == 1 then
 		xs[1] = 2
 		xs[2] = 3
 
-		local vs = m2.virtuals(V)
-		vs.virtual("y", function(vec, idx)
+		local vs = m2.virtuals()
+		vs.virtual("y", function(solver)
+			local vec, idx = V:solver_pos(solver)
 			assert(vec == v)
 			return vec:band("x")[idx] + 10
 		end)

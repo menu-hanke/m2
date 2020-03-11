@@ -138,15 +138,6 @@ struct fhk_graph {
 	void *udata;
 };
 
-struct fhk_solver {
-	struct fhk_graph *G;
-	bm8 *reset_v;
-	bm8 *reset_m;
-	unsigned nv;
-	struct fhk_var **xs;
-	pvalue **res;
-};
-
 /* fhk_graph.c */
 void fhk_init(struct fhk_graph *G, bm8 *init_v);
 void fhk_graph_init(struct fhk_graph *G);
@@ -173,7 +164,3 @@ void fhk_copy_checks(arena *arena, struct fhk_model *m, size_t n_check, struct f
 void fhk_copy_params(arena *arena, struct fhk_model *m, size_t n_param, struct fhk_var **params);
 void fhk_copy_returns(arena *arena, struct fhk_model *m, size_t n_ret, struct fhk_var **returns);
 void fhk_compute_links(arena *arena, struct fhk_graph *G);
-void fhk_solver_init(struct fhk_solver *s, struct fhk_graph *G, unsigned nv);
-void fhk_solver_destroy(struct fhk_solver *s);
-void fhk_solver_bind(struct fhk_solver *s, unsigned vidx, pvalue *res);
-int fhk_solver_step(struct fhk_solver *s, unsigned idx);
