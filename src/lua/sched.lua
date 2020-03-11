@@ -202,7 +202,7 @@ function tagset_mt.__index:emit_tagfunc(code, tag, prev)
 		-- Note: if this starts causing trace aborts because of too long traces,
 		-- then this can be transformed into a loop. If there's not a huge number
 		-- then it will only spawn a few side traces and all is OK
-		local cont = prev and string.format("tag_%s(time)", prev.tag) or "sim:continuenew()"
+		local cont = prev and string.format("tag_%s(time)", prev.tag) or "sim:continue()"
 		code:emitf([[
 			C.sim_branch(_sim, nb, branches)
 			if C.sim_next_branch(_sim) then
@@ -219,10 +219,6 @@ function tagset_mt.__index:emit_tagfunc(code, tag, prev)
 					C.sim_exit(_sim)
 				end
 			]], e.evid, cont)
-		end
-
-		if not prev then
-			code:emit("sim:exitframe()")
 		end
 	end
 
