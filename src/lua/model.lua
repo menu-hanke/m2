@@ -196,5 +196,12 @@ end
 return {
 	def    = def,
 	config = config,
-	error  = function() return ffi.string(ffi.C.model_error()) end
+	error  = function()
+		local err = ffi.C.model_error()
+		if err ~= nil then
+			return ffi.string(err)
+		else
+			return "(nil)"
+		end
+	end
 }
