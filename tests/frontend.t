@@ -2,7 +2,7 @@
 local ffi = require "ffi"
 local sim = require "sim"
 local sim_env = require "sim_env"
-local bt = require "buildtype"
+local typing = require "typing"
 local fails = fails
 
 local function with_env(setup)
@@ -94,7 +94,11 @@ test_chain_arg = with_env(function()
 end)
 
 test_binary_numbers_branching = with_env(function()
-	local _, G = m2.ns.dynamic({"bit", "value"}, "uint32_t")
+	local _, G = m2.data.dynamic {
+		bit   = "uint32_t",
+		value = "uint32_t"
+	}
+
 	local seen = {}
 
 	local function notset() end
@@ -202,27 +206,74 @@ test_branch_continue_chain = with_env(function()
 	end
 end)
 
-test_vec_codegen = with_env(function()
-	local V = m2.obj(bt.builtins {
-		f32 = "real32",
-		f64 = "real64",
-		b8  = "bit8",
-		b16 = "bit16",
-		b32 = "bit32",
-		b64 = "bit64",
-		p   = "udata"
+test_typegen = function()
+	local t1 = typing.totype {
+		a = "float",               -- ctype name
+		b = "real",                -- pvalue alias
+		c = ffi.typeof("uint8_t"), -- cdata
+		{
+			d = "uint16_t",        -- nested
+			e = "uint32_t"         -- (this shouldn't cause a nested struct btw)
+		},
+		f = {                      -- but this should
+			a = "float",
+			b = "double"
+		}
+	}
+
+	assert(t1.vars.d and t1.vars.e)
+	assert(t1.vars.f.vars.a and t1.vars.f.vars.b)
+	assert(ffi.istype("uint8_t", t1.vars.c.ctype))
+
+	assert(ffi.sizeof(t1.ctype) == ffi.sizeof [[
+		struct {
+			float a;
+			double b;
+			uint8_t c;
+			uint16_t d;
+			uint32_t e;
+			struct {
+				float a;
+				double b;
+			} f;
+		}
+	]])
+
+	assert(ffi.sizeof(t1.ctype().f) == ffi.sizeof("struct { float a; double b; }"))
+
+	local t2 = typing.totype {
+		a = "float",
+		b = t1 -- also nest like this
+	}
+
+	assert(ffi.sizeof(t2.ctype) == ffi.sizeof(ffi.typeof([[
+		struct {
+			float a;
+			$ b;
+		}
+	]], t1.ctype)))
+
+	assert(ffi.istype(t1.ctype, t2.ctype().b))
+end
+
+test_soa_codegen = with_env(function()
+	local V = m2.soa.new(typing.totype {
+		f32 = "float",
+		f64 = "double",
+		b8  = "uint8_t",
+		b16 = "uint16_t",
+		b32 = "uint32_t",
+		b64 = "uint64_t",
+		p   = "void *"
 	})
 
-	local vec = V:vec()
-	vec:alloc(1)
-
-	local cvec = vec:cvec()
+	local vec = V()
+	local cvec = ffi.cast("struct vec *", vec)
 
 	-- is layout same as struct vec?
-	assert(vec:len() == cvec.n_used)
-	assert(vec:alloc_len() == cvec.n_alloc)
+	assert(#vec == cvec.n_used)
 
-	local cinfo = vec:cinfo()
+	local cinfo = cvec.info
 
 	-- verify it created the struct we described above
 	assert(cinfo.n_bands == 7)
@@ -247,19 +298,24 @@ test_vec_codegen = with_env(function()
 		assert(stride[s] > 0)
 		stride[s] = stride[s] - 1
 	end
+
+	for _,v in ipairs(stride) do
+		assert(v == 0)
+	end
 end)
 
-test_vec_alloc = with_env(function()
-	local V = m2.obj(bt.reals("a", "b"))
-	local v = V:vec()
-	v:newband("a")
-	v:newband("b")
+test_soa_alloc = with_env(function()
+	local V = m2.soa.new(typing.reals("a", "b"))
+	local v = V()
+
+	m2.soa.newband(v, "a")
+	m2.soa.newband(v, "b")
 
 	for i=1, 100 do
-		v:alloc(i)
-		local a = ffi.cast("uintptr_t", v:band("a"))
-		local b = ffi.cast("uintptr_t", v:band("b"))
-		assert((a < b and a+v:len() < b) or (a > b and a > b+v:len()))
+		m2.soa.alloc(v, i)
+		local a = ffi.cast("uintptr_t", v.a)
+		local b = ffi.cast("uintptr_t", v.b)
+		assert((a < b and a+#v < b) or (a > b and a > b+#v))
 	end
 end)
 
@@ -288,16 +344,16 @@ test_vmath_kernel_multiple = with_env(function()
 	assert(dot(x, y) == 1*4+2*5+3*6)
 end)
 
-test_obj_kernel = with_env(function()
-	local V = m2.obj(bt.reals("a", "b"))
-	local v = V:vec()
-	v:alloc(3)
-	local a = v:newband("a")
-	local b = v:newband("b")
+test_soa_kernel = with_env(function()
+	local V = m2.soa.new(typing.reals("a", "b"))
+	local v = V()
+	m2.soa.alloc(v, 3)
+	local a = m2.soa.newband(v, "a")
+	local b = m2.soa.newband(v, "b")
 	a[0] = 1; a[1] = 2; a[2] = 3
 	b[0] = 4; b[1] = 5; b[2] = 6
 
-	local dot = m2.kernel.bands("a", "b"):map(function(x, y) return x*y end):sum()
+	local dot = m2.kernel.soa("a", "b"):map(function(x, y) return x*y end):sum()
 	
 	assert(dot(v) == 1*4+2*5+3*6)
 end)

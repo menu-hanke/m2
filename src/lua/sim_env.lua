@@ -1,4 +1,5 @@
 local aux = require "aux"
+local conf = require "conf"
 
 local sandbox = {}
 
@@ -34,13 +35,44 @@ local function from_conf(cfg)
 	env:inject_env()
 	env:inject_base()
 	env:inject_fhk(mapper)
-	env:inject_types(cfg)
+	env:inject_masks(cfg)
 
 	for _,modname in pairs(cfg.modules) do
 		env:require(modname)
 	end
 
 	return sim, env
+end
+
+-- this is mostly for debugging, it creates a sim without any config (ie. no fhk/types available)
+local function plain()
+	local sim = require("sim").create()
+	local env = create(sim)
+
+	env:inject_env()
+	env:inject_base()
+
+	return sim, env
+end
+
+local function exists(fname)
+	local fp = io.open(fname)
+	if fp then
+		io.close(fp)
+		return true
+	end
+end
+
+local function from_cmdline(cfname)
+	if cfname then
+		return from_conf(conf.read(cfname))
+	end
+
+	if exists("Melasim.lua") then
+		return from_conf(conf.read("Melasim.lua"))
+	end
+
+	return plain()
 end
 
 function simenv_mt.__index:inject_env()
@@ -60,8 +92,8 @@ end
 function simenv_mt.__index:inject_base()
 	require("sim").inject(self)
 	require("kernel").inject(self)
-	require("globals").inject(self)
-	require("vec").inject(self)
+	require("data").inject(self)
+	require("soa").inject(self)
 	require("typing").inject(self)
 	require("sched").inject(self)
 	require("vmath").inject(self)
@@ -72,14 +104,8 @@ function simenv_mt.__index:inject_fhk(mapper)
 	require("fhk").inject(self)
 end
 
-function simenv_mt.__index:inject_types(cfg)
-	local masks = {}
-	for name,e in pairs(cfg.enums) do
-		masks[name] = e.values
-	end
-
-	self.m2.masks = masks
-	self.m2.types = cfg.types
+function simenv_mt.__index:inject_masks(cfg)
+	self.m2.masks = cfg.class
 end
 
 local function sandbox_require(env, module)
@@ -162,5 +188,6 @@ end
 return {
 	init_sandbox = init_sandbox,
 	create       = create,
-	from_conf    = from_conf
+	from_conf    = from_conf,
+	from_cmdline = from_cmdline
 }

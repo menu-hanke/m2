@@ -2,8 +2,8 @@
 local ffi = require "ffi"
 local sim = require "sim"
 local sim_env = require "sim_env"
+local typing = require "typing"
 local bg = require "buildgraph"
-local bt = require "buildtype"
 local v, m, any, none, ival = bg.v, bg.m, bg.any, bg.none, bg.ival
 local fails = fails
 
@@ -57,8 +57,8 @@ test_map_write = with_graph(function()
 end)
 
 test_remap = with_graph(function()
-	local ns1 = m2.ns.static { "x" }
-	local ns2 = m2.ns.static { "x" }
+	local ns1 = m2.data.static(m2.fhk.typeof { "x" })
+	local ns2 = m2.data.static(m2.fhk.typeof { "x" })
 
 	m2.solve("a"):given(ns1):create_solver()
 	m2.solve("a"):given(ns2):create_solver()
@@ -71,7 +71,7 @@ test_remap = with_graph(function()
 end)
 
 test_overwrite_given = with_graph(function()
-	local ns = m2.ns.static { "x" }
+	local ns = m2.data.static(m2.fhk.typeof { "x" })
 	assert(fails(function()
 		m2.solve("x")
 			:given(ns)
@@ -80,8 +80,8 @@ test_overwrite_given = with_graph(function()
 end)
 
 test_map_ns = with_graph(function()
-	local ns1, G1 = m2.ns.static { "x" }
-	local ns2, G2 = m2.ns.static { "x" }
+	local ns1, G1 = m2.data.static(m2.fhk.typeof { "x" })
+	local ns2, G2 = m2.data.static(m2.fhk.typeof { "x" })
 	G1.x = 1234
 	G2.x = 5678
 
@@ -98,8 +98,8 @@ test_map_ns = with_graph(function()
 end)
 
 test_map_always_given = with_graph(function()
-	local globals, G = m2.ns.static { "x" }
-	local locals, L = m2.ns.static { "y" }
+	local globals, G = m2.data.static(m2.fhk.typeof { "x" })
+	local locals, L = m2.data.static(m2.fhk.typeof { "y" })
 	G.x = 111
 	L.y = 222
 
@@ -114,11 +114,11 @@ test_map_always_given = with_graph(function()
 end)
 
 test_map_vec = with_graph(function()
-	local V = m2.obj(bt.reals("x", "y", "z"))
-	local v = V:vec()
-	v:alloc(3)
-	local xs = v:newband("x")
-	local ys = v:newband("y")
+	local V = m2.soa.new(typing.reals("x", "y", "z"))
+	local v = V()
+	m2.soa.alloc(v, 3)
+	local xs = m2.soa.newband(v, "x")
+	local ys = m2.soa.newband(v, "y")
 
 	xs[0] = 1; ys[0] = 100
 	xs[1] = 2; ys[1] = 200
@@ -136,12 +136,12 @@ test_map_vec = with_graph(function()
 end)
 
 test_map_vec_vec_visibility = with_graph(function()
-	local V1 = m2.obj(bt.reals("x"))
-	local V2 = m2.obj(bt.reals("y"))
+	local V1 = m2.soa.new(typing.reals("x"))
+	local V2 = m2.soa.new(typing.reals("y"))
 
-	local v1, v2 = V1:vec(), V2:vec()
-	v1:alloc(1)
-	v2:alloc(1)
+	local v1, v2 = V1(), V2()
+	m2.soa.alloc(v1, 1)
+	m2.soa.alloc(v2, 1)
 
 	assert(fails(function()
 		m2.solve("b")
@@ -151,15 +151,15 @@ test_map_vec_vec_visibility = with_graph(function()
 end)
 
 test_map_vec_vec = with_graph(function()
-	local V1 = m2.obj(bt.reals("x"))
-	local V2 = m2.obj(bt.reals("y"))
+	local V1 = m2.soa.new(typing.reals("x"))
+	local V2 = m2.soa.new(typing.reals("y"))
 
-	local v1, v2 = V1:vec(), V2:vec()
-	v1:alloc(2)
-	v2:alloc(2)
+	local v1, v2 = V1(), V2()
+	m2.soa.alloc(v1, 2)
+	m2.soa.alloc(v2, 2)
 
-	local x = v1:newband("x")
-	local y = v2:newband("y")
+	local x = m2.soa.newband(v1, "x")
+	local y = m2.soa.newband(v2, "y")
 
 	x[0] = 123; x[1] = 456
 	y[0] = 789; y[1] = 000
@@ -190,13 +190,13 @@ test_map_vec_vec = with_graph(function()
 end)
 
 test_map_vec_globals_visibility = with_graph(function()
-	local V = m2.obj(bt.reals("x"))
+	local V = m2.soa.new(typing.reals("x"))
 
-	local v = V:vec()
-	v:alloc(1)
-	v:newband("x")[0] = 123
+	local v = V()
+	m2.soa.alloc(v, 1)
+	m2.soa.newband(v, "x")[0] = 123
 
-	local ns, G = m2.ns.static { "y" }
+	local ns, G = m2.data.static(typing.reals("y"))
 	G.y = 456
 
 	local solve_ab = m2.solve("a", "b")
@@ -211,19 +211,19 @@ test_map_vec_globals_visibility = with_graph(function()
 end)
 
 test_solver_vec_alloc = with_graph(function()
-	local V = m2.obj(bt.reals("x"))
-	local v = V:vec()
+	local V = m2.soa.new(typing.reals("x"))
+	local v = V()
 
 	-- big alloc because we want to detect possible allocation problems
 	local N = 1234
-	v:alloc(N)
-	local x = v:newband("x")
+	m2.soa.alloc(v, N)
+	local x = m2.soa.newband(v, "x")
 
 	local solve_a = m2.solve("a"):over(V)
 
 	return function()
 		for i=0, N-1 do x[i] = i end
-		solve_a(v, v:len())
+		solve_a(v, #v)
 		local res1 = solve_a.vars.a
 
 		for i=0, N-1 do x[i] = 2*i end
@@ -245,7 +245,7 @@ test_solver_vec_alloc = with_graph(function()
 end)
 
 test_solver_error = with_graph(function()
-	local ns, G = m2.ns.static { "x" }
+	local ns, G = m2.data.static(typing.reals("x"))
 	G.x = -1234
 
 	local solve_unsat = m2.solve("x_unsat_cst"):given(ns)
@@ -261,7 +261,7 @@ test_create_solver1_result_gc = with_graph(function()
 	local t = {}
 	for i=1, 1000 do t[i] = ffi.new("float[?]", 1000) end
 
-	local ns, G = m2.ns.static { "x" }
+	local ns, G = m2.data.static(typing.reals("x"))
 	local solve_a = m2.solve("a"):given(ns)
 	G.x = 1234
 
@@ -298,11 +298,11 @@ if ffi.C.fhkG_have_interrupts() then
 	end)
 
 	test_map_virtual_vec = with_graph(function()
-		local V = m2.obj(bt.reals("x"))
+		local V = m2.soa.new(typing.reals("x"))
 
-		local v = V:vec()
-		v:alloc(3)
-		local xs = v:newband("x")
+		local v = V()
+		m2.soa.alloc(v, 3)
+		local xs = m2.soa.newband(v, "x")
 		xs[0] = 1
 		xs[1] = 2
 		xs[2] = 3
@@ -311,7 +311,7 @@ if ffi.C.fhkG_have_interrupts() then
 		vs.virtual("y", function(solver)
 			local vec, idx = V:solver_pos(solver)
 			assert(vec == v)
-			return vec:band("x")[idx] + 10
+			return vec.x[idx] + 10
 		end)
 
 		local solve_c = m2.solve("c")

@@ -8,9 +8,9 @@ local function have(sym)
 end
 
 local ct = {
-	r = typing.builtin_types.real64.desc,
-	b = typing.builtin_types.bit64.desc,
-	u = typing.builtin_types.udata.desc
+	r = typing.pvalues.real.desc,
+	b = typing.pvalues.mask.desc,
+	u = typing.pvalues.udata.desc
 }
 
 local function settypes(dest, s)

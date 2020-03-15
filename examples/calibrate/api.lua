@@ -1,4 +1,4 @@
-define.enum.species {
+define.class.species {
 	manty       = 1,
 	kuusi       = 2,
 	rauduskoivu = 3,
@@ -10,7 +10,7 @@ define.enum.species {
 define.vars {
 	---------- puu ----------
 	f       = "real",
-	spe     = "species",
+	spe     = "mask" * class("species"),
 	dbh     = "real" * unit("cm"),
 	ba      = "real" * unit("m^2"),
 	ba_L    = "real" * unit("m^2"),
@@ -25,8 +25,8 @@ define.vars {
 	ts      = "real" * unit("degC"),
 	G       = "real" * unit("m^2"),
 	Gma     = "real" * unit("m^2"),
-	mtyyppi = "bit64",
-	atyyppi = "bit64",
+	mtyyppi = "mask",
+	atyyppi = "mask",
 	--
 	fma     = "real",
 	fku     = "real",
@@ -36,16 +36,4 @@ define.vars {
 
 	---------- globaalit ----------
 	step    = "real" * unit("yr")
-}
-
-define.type.tree {
-	"f",
-	"spe",
-	"dbh",
-	"ba",
-	"ba_L",
-	"ba_L",
-	"ba_Lma",
-	"ba_Lku",
-	"ba_Lko"
 }

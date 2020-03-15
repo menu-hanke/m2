@@ -41,9 +41,10 @@ function vset_mt.__index:define_mappings(solver, define)
 	local const = solver.udata[self].const
 
 	for name,handle in pairs(self.handles) do
-		define(name, function()
+		define(name, function(desc)
 			local mapping = solver.arena:new("struct fhkG_vintV")
 			mapping.flags.resolve = C.FHKG_MAP_INTERRUPT
+			mapping.flags.type = desc
 			mapping.flags.handle = handle
 			return mapping, const
 		end)

@@ -105,8 +105,8 @@ local function create_models(vars, models, calib)
 		conf:reset()
 		local atypes = conf:newatypes(#m.params)
 		local rtypes = conf:newrtypes(#m.returns)
-		for i,n in ipairs(m.params) do atypes[i-1] = typing.promote(vars[n].type.desc) end
-		for i,n in ipairs(m.returns) do rtypes[i-1] = typing.promote(vars[n].type.desc) end
+		for i,n in ipairs(m.params) do atypes[i-1] = vars[n].ptype.desc end
+		for i,n in ipairs(m.returns) do rtypes[i-1] = vars[n].ptype.desc end
 		conf.n_coef = #m.coeffs
 		conf.calibrated = calib[name] ~= nil
 
@@ -243,7 +243,7 @@ function mgraph_mt.__index:collect(names)
 end
 
 function mgraph_mt.__index:value_ptr(name)
-	local cp = ffi.typeof("$ *", self.mapper:ptypeof(name))
+	local cp = ffi.typeof("$ *", self.mapper:typeof(name).ctype)
 	return ffi.cast(cp, typing.memb_ptr("struct fhk_var", "value", self.fvars[name]))
 end
 
@@ -296,7 +296,7 @@ local mapper_mt = { __index = {} }
 local function hook(G, fvars, fmodels, xvars)
 	local vars = {}
 	for name,fv in pairs(fvars) do
-		vars[name] = { name = name, type = xvars[name].type }
+		vars[name] = { name = name, ptype = xvars[name].ptype }
 		vars[tonumber(fv.uidx)] = vars[name]
 	end
 
@@ -338,19 +338,23 @@ function mapper_mt.__index:mapped(name)
 end
 
 function mapper_mt.__index:typeof(name)
-	return self.vars[name].type
+	return self.vars[name].ptype
 end
 
-function mapper_mt.__index:ptypeof(name)
-	local ptype = typing.promote(self:typeof(name).desc)
-	return ffi.typeof(typing.desc_builtin[tonumber(ptype)].ctype)
+function mapper_mt.__index:typesof(vars)
+	local ret = {}
+	for _,name in ipairs(vars) do
+		ret[name] = self:typeof(name)
+	end
+	return ret
 end
 
 function mapper_mt.__index:bind_names()
 	for name,_ in pairs(self.graph.fvars) do
 		local mapping = self.arena:new("struct fhkG_mappingV")
 		mapping.flags.resolve = C.FHKG_MAP_COMPUTED
-		mapping.flags.type = self:typeof(name).desc
+		-- this mapping shouldn't be used to read anything so make the type invalid
+		mapping.flags.type = 0xff
 		mapping.name = name
 		self.graph:bind_v(name, mapping)
 	end
@@ -490,7 +494,7 @@ function solver_mt.__index:create_vars(graph)
 	if self.solver:is_iter() then
 		local binds = self.solver:binds()
 		for i,name in ipairs(self.names) do
-			vp[name] = ffi.cast(ffi.typeof("$**", self.mapper:ptypeof(name)), binds+(i-1))
+			vp[name] = ffi.cast(ffi.typeof("$**", self.mapper:typeof(name).ctype), binds+(i-1))
 		end
 	else
 		for _,name in ipairs(self.names) do
@@ -514,11 +518,8 @@ function solver_mt.__index:bind_mappings(maps, graph)
 
 	for name,map in pairs(maps) do
 		if graph.fvars[name] then
-			local m, c = map()
-			-- fill in name&type so the caller doesn't have to, since these will come from
-			-- the mapper
+			local m, s, c = map(self.mapper:typeof(name).desc)
 			m.name = name
-			m.flags.type = self.mapper:typeof(name).desc
 			graph:bind_v(name, m)
 			if c then table.insert(const, name) end
 		end
@@ -597,7 +598,13 @@ local function inject(env)
 	local mapper = env.mapper
 
 	env.m2.fhk = {
-		typeof  = aux.delegate(mapper, mapper.typeof),
+		typeof  = function(x)
+			if type(x) == "string" then
+				return mapper:typeof(x)
+			else
+				return mapper:typesof(x)
+			end
+		end,
 		config  = function(x, conf)
 			if conf.global then mapper.given[x] = conf.global == true and {} or conf.global end
 			-- TODO: name mangling config goes here
@@ -616,9 +623,7 @@ local function inject(env)
 	env.m2.virtuals = function(vis)
 		local vset = mapper.virtuals:vset(vis)
 		vset.virtual = function(name, f)
-			local ptype = typing.promote(mapper:typeof(name).desc)
-			local tname = typing.desc_builtin[tonumber(ptype)].tname
-			return vset:define(name, f, tname)
+			return vset:define(name, f, mapper:typeof(name).name)
 		end
 		return vset
 	end

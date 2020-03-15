@@ -1,4 +1,3 @@
-local typing = require "typing"
 local env = setmetatable({ define={} }, {__index=_G})
 
 local function read_json(fname)
@@ -90,65 +89,29 @@ local function totable(x)
 end
 
 --------------------------------------------------------------------------------
--- types
+-- classifications
 --------------------------------------------------------------------------------
 
-local types = {}
+local class = {}
 
-local function gettype(name, kind, create)
-	if types[name] then
-		if types[name].kind == kind then
-			return types[name]
-		end
-
-		error(string.format("Redefinition of type '%s' of different kind (%s -> %s)",
-			name, types[name].kind, kind))
+env.define.class = namespace(function(name, def)
+	local cls = class[name]
+	if not cls then
+		cls = {}
+		class[name] = cls
 	end
-
-	types[name] = create(name, kind)
-	return types[name]
-end
-
-local function newenum(name) return {name=name, kind="enum", def={}} end
-local function newstruct(name) return {name=name, kind="struct", def={}, lazy={}} end
-local function getenum(name) return gettype(name, "enum", newenum) end
-local function getstruct(name) return gettype(name, "struct", newstruct) end
-
-env.define.enum = namespace(function(name, def)
-	local e = getenum(name)
 
 	for k,v in pairs(def) do
 		v = tonumber(v)
 
-		if e.def[k] and e.def[k] ~= v then
+		if cls[k] and cls[k] ~= v then
 			error(string.format("Redefinition of enum '%s' value '%s' (%d -> %d)",
-				name, k, e.def[k], v))
+				name, k, cls[k], v))
 		end
 
-		e.def[k] = v
+		cls[k] = v
 	end
 end)
-
-env.define.type = namespace(function(name, def)
-	local t = getstruct(name)
-
-	for k,v in pairs(def) do
-		if type(k) == "number" then
-			t.lazy[v] = true
-		else
-			if t.def[k] and t.def[k] ~= v then
-				error(string.format(
-					"Redefinition of struct '%s' member '%s' with conflicting type (%s -> %s)",
-					name, k, t.def[k], v
-				))
-			end
-
-			t.def[k] = v
-		end
-	end
-end)
-
-env.C = typing.ctype
 
 --------------------------------------------------------------------------------
 -- fhk
@@ -232,8 +195,9 @@ local function vdef(d)
 	return setmetatable(d, vdef_mt)
 end
 
-env.unit = function(unit) return vdef({unit=unit}) end
-env.doc  = function(doc)  return vdef({doc=doc}) end
+env.unit  = function(unit)  return vdef({unit=unit}) end
+env.class = function(class) return vdef({class=class}) end
+env.doc   = function(doc)   return vdef({doc=doc}) end
 
 local function paste(dest, tab)
 	for k,v in pairs(tab) do
@@ -314,7 +278,7 @@ end
 return env, {
 	calib   = calib,
 	modules = modules,
-	types   = types,
+	class   = class,
 	models  = models,
 	vars    = vars
 }

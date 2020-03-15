@@ -130,7 +130,7 @@ test_accept_constraint = valuetest(
 {
 	m("halpa", 1)  % "x"^any{1,2,3} * {k=1, c=1}   + "x" - "a",
 	m("kallis", 2)                  * {k=100, c=1} + "x" - "a",
-	v("x", 2)^"bit64"
+	v("x", 2)^"mask"
 },
 {
 	a = 1

@@ -4,7 +4,7 @@ local fhkdbg = require "fhkdbg"
 local typing = require "typing"
 
 local function vsetdefault(vars, name)
-	vars[name] = vars[name] or { type = typing.builtin_types.real }
+	vars[name] = vars[name] or { ptype = typing.pvalues.real }
 end
 
 local function collect(def)
@@ -14,7 +14,7 @@ local function collect(def)
 		if x.kind == "model" then
 			models[x.name] = x
 		else
-			x.type = x.type and typing.builtin_types[x.type] or typing.builtin_types.real
+			x.ptype = typing.pvalues[x.type or "real"]
 			vars[x.name] = x
 			if x.value then
 				values[x.name] = x.value

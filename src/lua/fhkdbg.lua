@@ -47,7 +47,7 @@ local function hook(G, fvars, fmodels, vars, models, exf, virtuals)
 		gvars[name] = {
 			name    = name,
 			fv      = fvars[name],
-			type    = var.type,
+			ptype   = var.ptype,
 			virtual = virtuals and virtual[name]
 		}
 	end
@@ -86,7 +86,7 @@ end
 
 function dgraph_mt.__index:virtual(name, f)
 	local v = self.vars[name]
-	local desc = v.type.desc
+	local desc = v.ptype.desc
 
 	v.virtual = function(value)
 		value[0] = C.vimportd(f(), desc)
@@ -96,8 +96,8 @@ end
 function dgraph_mt.__index:exf(name, f)
 	local m = self.models[name]
 	local atypes, rtypes = {}, {}
-	for i,p in ipairs(m.params) do atypes[i] = self.vars[p].type.desc end
-	for i,r in ipairs(m.returns) do rtypes[i] = self.vars[r].type.desc end
+	for i,p in ipairs(m.params) do atypes[i] = self.vars[p].ptype.desc end
+	for i,r in ipairs(m.returns) do rtypes[i] = self.vars[r].ptype.desc end
 
 	m.exf = function(ret, args)
 		local a = {}
@@ -129,7 +129,7 @@ function dgraph_mt.__index:value(name)
 		return
 	end
 
-	return tonumber(C.vexportd(v.fv.value, v.type.desc))
+	return tonumber(C.vexportd(v.fv.value, v.ptype.desc))
 end
 
 function dgraph_mt.__index:collect_values(names)
@@ -146,7 +146,7 @@ function dgraph_mt.__index:given_values(given)
 		local bitmap = self.G.v_bitmaps[fv.idx]
 		bitmap.given = 1
 		bitmap.has_value = 1
-		fv.value = C.vimportd(val, self.vars[name].type.desc)
+		fv.value = C.vimportd(val, self.vars[name].ptype.desc)
 	end
 end
 
@@ -203,7 +203,7 @@ function dgraph_mt.__index:reduce(names)
 		hvars[name] = {
 			name    = name,
 			fv      = fv,
-			type    = v.type,
+			ptype   = v.ptype,
 			virtual = v.virtual
 		}
 	end

@@ -88,16 +88,12 @@ end
 
 local costf = {
 	[2] = function(state)
-		local n = trees:len()
-		local dbh = trees:bandv("dbh")
-		local ind = dbh:sorti()
-		local dcs = assign_dclass(dbh.data, ind, n)
-
-		local ba = trees:band("ba")
-		local f = trees:band("f")
-		local ba_dc = dclass_sum_sim(dcs, ba, n)
+		local n = #trees
+		local ind = m2.vmath.sorti(trees.dbh, n)
+		local dcs = assign_dclass(trees.dbh, ind, n)
+		local ba_dc = dclass_sum_sim(dcs, trees.ba, n)
 		local mba_dc = state.meas_ba_dc
-		local f_dc = dclass_sum_sim(dcs, f, n)
+		local f_dc = dclass_sum_sim(dcs, trees.f, n)
 		local mf_dc = state.meas_f_dc
 
 		local ret = 0
