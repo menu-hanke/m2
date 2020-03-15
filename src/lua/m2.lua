@@ -30,11 +30,6 @@ local function main(args)
 	local aux = require "aux"
 	local cli = require "cli"
 
-	local start, cmd = 2, "simulate"
-	if args[2] and args[2]:sub(1, 1) ~= "-" then
-		start, cmd = 3, args[2]
-	end
-
 	local flags = {
 		cli.flag("-v", "verbose"),
 		cli.flag("-q", "quiet"),
@@ -48,8 +43,9 @@ local function main(args)
 		end
 	}
 
+	local cmd = args[2]
 	local sub = require(cmd).cli_main
-	local opt = cli.parse(append(flags, sub.flags or {}), args, start)
+	local opt = cli.parse(append(flags, sub.flags or {}), args, 3)
 
 	if opt.help then
 		if cmd == args[2] then
