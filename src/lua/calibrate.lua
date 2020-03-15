@@ -1,6 +1,6 @@
 local ffi = require "ffi"
 local cli = require "cli"
-local aux = require "aux"
+local misc = require "misc"
 local conf = require "conf"
 local sim_env = require "sim_env"
 local nmopt = require "neldermead"
@@ -162,7 +162,7 @@ local function main(args)
 	-- TODO: optionally take this as a parameter for repro
 	math.randomseed(os.time())
 
-	local coefs = read_coefs(aux.readjson(args.coefs))
+	local coefs = read_coefs(misc.readjson(args.coefs))
 	local cfg = conf.read_cmdline(args.config)
 	write_defaults(cfg.calib, coefs)
 	local sim, env = sim_env.from_conf(cfg)

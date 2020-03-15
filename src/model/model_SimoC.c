@@ -36,14 +36,14 @@ model *mod_SimoC_create(struct mod_SimoC_def *def){
 
 	void *fp = dlsym(handle, def->func);
 	if(!fp){
-		maux_errf("dlsym failed: %s", dlerror());
+		mlib_errf("dlsym failed: %s", dlerror());
 		return NULL;
 	}
 
 	struct model_SimoC *m = malloc(sizeof *m);
 	m->fp = fp;
 
-	maux_initmodel(&m->model,
+	mlib_initmodel(&m->model,
 			&MOD_SIMOC,
 			def->n_arg, def->atypes,
 			def->n_ret, def->rtypes,
@@ -51,7 +51,7 @@ model *mod_SimoC_create(struct mod_SimoC_def *def){
 	);
 
 	if(init_simo_cif(m)){
-		maux_destroymodel(&m->model);
+		mlib_destroymodel(&m->model);
 		free(m);
 		return NULL;
 	}
@@ -72,7 +72,7 @@ static int mod_SimoC_call(struct model_SimoC *m, pvalue *ret, pvalue *argv){
 	double allowedRiskLevel = 0;
 	double rectFactor = 1;
 
-	maux_exportd(&m->model, argv);
+	mlib_exportd(&m->model, argv);
 
 	for(size_t i=0;i<nparg;i++)
 		ffiarg[i] = &argv[i];
@@ -87,22 +87,22 @@ static int mod_SimoC_call(struct model_SimoC *m, pvalue *ret, pvalue *argv){
 	ffi_call(&m->cif, m->fp, &status, ffiarg);
 
 	if(status != SIMO_STATUS_OK){
-		maux_errf("simo error: %s", err);
+		mlib_errf("simo error: %s", err);
 		return MODEL_CALL_RUNTIME_ERROR;
 	}
 
 	if(nres != 1){
-		maux_errf("simo model returned %d results, expected 1", nres);
+		mlib_errf("simo model returned %d results, expected 1", nres);
 		return MODEL_CALL_INVALID_RETURN;
 	}
 
-	maux_importd(&m->model, argv);
+	mlib_importd(&m->model, argv);
 
 	return MODEL_CALL_OK;
 }
 
 static void mod_SimoC_destroy(struct model_SimoC *m){
-	maux_destroymodel(&m->model);
+	mlib_destroymodel(&m->model);
 	free(m->ffiatypes);
 	free(m);
 }
@@ -135,7 +135,7 @@ static int init_simo_cif(struct model_SimoC *m){
 
 	ffi_status s = ffi_prep_cif(&m->cif, FFI_DEFAULT_ABI, narg, &ffi_type_sint, m->ffiatypes);
 	if(s != FFI_OK){
-		maux_errf("ffi_prep_cif failed: %d", s);
+		mlib_errf("ffi_prep_cif failed: %d", s);
 		return 1;
 	}
 
@@ -143,17 +143,17 @@ static int init_simo_cif(struct model_SimoC *m){
 }
 
 static void *load_simo_lib(const char *filename){
-	void *handle = maux_get_file_data(filename);
+	void *handle = mlib_get_file_data(filename);
 
 	if(!handle){
 		dv("opening simo library: %s\n", filename);
 		void *handle = dlopen(filename, RTLD_LAZY | RTLD_LOCAL);
 		if(!handle){
-			maux_errf("dlopen failed: %s", dlerror());
+			mlib_errf("dlopen failed: %s", dlerror());
 			return NULL;
 		}
 
-		maux_set_file_data(filename, handle);
+		mlib_set_file_data(filename, handle);
 	}
 
 	return handle;

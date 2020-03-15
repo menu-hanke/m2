@@ -1,5 +1,4 @@
 local ffi = require "ffi"
-local aux = require "aux"
 local typing = require "typing"
 local kernel = require "kernel"
 local C = ffi.C

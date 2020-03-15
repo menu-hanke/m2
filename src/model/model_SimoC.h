@@ -1,6 +1,6 @@
 #pragma once
 
-#include "aux.h"
+#include "mlib.h"
 
 struct mod_SimoC_def {
 	MODEL_INIT_DEF;

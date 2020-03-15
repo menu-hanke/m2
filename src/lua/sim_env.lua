@@ -1,4 +1,4 @@
-local aux = require "aux"
+local misc = require "misc"
 local conf = require "conf"
 
 local sandbox = {}
@@ -83,10 +83,10 @@ function simenv_mt.__index:inject_env()
 	-- Note that scripts may still break each other or the simulator, eg. by modifying built-ins
 	-- like string or math
 	
-	self.env.package = aux.merge({}, package)
-	self.env.package.loaded = aux.merge({m2=self.m2}, sandbox.loaded)
+	self.env.package = misc.merge({}, package)
+	self.env.package.loaded = misc.merge({m2=self.m2}, sandbox.loaded)
 	self.env.package.path = sandbox.path
-	self.env.require = aux.delegate(self, self.require)
+	self.env.require = misc.delegate(self, self.require)
 end
 
 function simenv_mt.__index:inject_base()

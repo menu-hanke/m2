@@ -16,21 +16,21 @@ graph_solve.o: graph_solve.c fhk.h bitmap.h def.h arena.h type.h grid.h \
  sim.h graph.h model/model.h
 mappings.o: mappings.c graph.h fhk.h bitmap.h def.h arena.h type.h grid.h \
  sim.h model/model.h mappings.h vec.h
-model/aux.o: model/aux.c model/model.h model/../type.h model/../grid.h \
+model/mlib.o: model/mlib.c model/model.h model/../type.h model/../grid.h \
  model/../bitmap.h model/../def.h model/../sim.h model/../list.h
 model/model_Const.o: model/model_Const.c model/model_Const.h model/model.h \
  model/../type.h model/../grid.h model/../bitmap.h model/../def.h \
  model/../sim.h
-model/model_Lua.o: model/model_Lua.c model/model_Lua.h model/aux.h \
+model/model_Lua.o: model/model_Lua.c model/model_Lua.h model/mlib.h \
  model/model.h model/../type.h model/../grid.h model/../bitmap.h \
  model/../def.h model/../sim.h
-model/model_R.o: model/model_R.c model/model_R.h model/aux.h model/model.h \
+model/model_R.o: model/model_R.c model/model_R.h model/mlib.h model/model.h \
  model/../type.h model/../grid.h model/../bitmap.h model/../def.h \
  model/../sim.h
-model/model_SimoC.o: model/model_SimoC.c model/model_SimoC.h model/aux.h \
+model/model_SimoC.o: model/model_SimoC.c model/model_SimoC.h model/mlib.h \
  model/model.h model/../type.h model/../grid.h model/../bitmap.h \
  model/../def.h model/../sim.h
 lua/m2_cdef.lua: lua_exports.h sim.h vec.h grid.h bitmap.h def.h \
  mappings.h graph.h fhk.h arena.h type.h model/model.h vgrid.h vmath.h \
- model/all.h model/model_Const.h model/model_R.h model/aux.h \
+ model/all.h model/model_Const.h model/model_R.h model/mlib.h \
  model/model_SimoC.h model/model_Lua.h

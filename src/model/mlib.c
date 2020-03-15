@@ -19,12 +19,12 @@ static const char *last_error = NULL;
 
 static struct file_udata *find_loaded(const char *file);
 
-void *maux_get_file_data(const char *file){
+void *mlib_get_file_data(const char *file){
 	struct file_udata *f = find_loaded(file);
 	return f ? f->udata : NULL;
 }
 
-void maux_set_file_data(const char *file, void *udata){
+void mlib_set_file_data(const char *file, void *udata){
 	if(!VECS(loaded_files))
 		VEC_INIT(loaded_files, 10);
 
@@ -40,7 +40,7 @@ void maux_set_file_data(const char *file, void *udata){
 	f->udata = udata;
 }
 
-void maux_initmodel(
+void mlib_initmodel(
 	struct model *m, const struct model_func *func,
 	unsigned n_arg, type *atypes,
 	unsigned n_ret, type *rtypes,
@@ -65,24 +65,24 @@ void maux_initmodel(
 	}
 }
 
-void maux_destroymodel(struct model *m){
+void mlib_destroymodel(struct model *m){
 	free(m->atypes);
 	free(m->rtypes);
 	if(m->coefs)
 		free(m->coefs);
 }
 
-void maux_exportd(struct model *m, pvalue *argv){
+void mlib_exportd(struct model *m, pvalue *argv){
 	for(unsigned i=0;i<m->n_arg;i++)
 		argv[i].f64 = vexportd(argv[i], m->atypes[i]);
 }
 
-void maux_importd(struct model *m, pvalue *retv){
+void mlib_importd(struct model *m, pvalue *retv){
 	for(unsigned i=0;i<m->n_ret;i++)
 		retv[i] = vimportd(retv[i].f64, m->rtypes[i]);
 }
 
-void maux_errf(const char *fmt, ...){
+void mlib_errf(const char *fmt, ...){
 	if(last_error)
 		free((void *)last_error);
 

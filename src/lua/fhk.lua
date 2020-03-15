@@ -2,7 +2,7 @@ local model = require "model"
 local typing = require "typing"
 local alloc = require "alloc"
 local virtual = require "virtual"
-local aux = require "aux"
+local misc = require "misc"
 local log = require("log").logger
 local ffi = require "ffi"
 local C = ffi.C
@@ -21,7 +21,7 @@ local function copy_cst(check, cst)
 end
 
 local function create_checks(checks, fvars)
-	local nc = aux.countkeys(checks)
+	local nc = misc.countkeys(checks)
 
 	if nc == 0 then
 		return 0, nil
@@ -88,7 +88,7 @@ end
 
 local function build_graph(vars, models)
 	local arena = alloc.arena_nogc()
-	local G = ffi.gc(C.fhk_alloc_graph(arena, aux.countkeys(vars), aux.countkeys(models)),
+	local G = ffi.gc(C.fhk_alloc_graph(arena, misc.countkeys(vars), misc.countkeys(models)),
 		function() C.arena_destroy(arena) end)
 	local fv, fm = assign_ptrs(G, vars, models)
 	build_models(G, arena, fv, fm, models)
@@ -412,14 +412,14 @@ end
 
 function solver_mt.__index:merge_udata()
 	for mp,p in pairs(self.mapper.given) do
-		self.udata[mp] = aux.merge(self.udata[mp] or {}, p)
+		self.udata[mp] = misc.merge(self.udata[mp] or {}, p)
 	end
 end
 
 function solver_mt.__index:define_mappings()
 	local maps = {}
 
-	for _,m in ipairs(aux.keys(self.udata)) do
+	for _,m in ipairs(misc.keys(self.udata)) do
 		m:define_mappings(self, function(name, map)
 			-- TODO: name mangle here
 			if self.mapper:mapped(name) then
@@ -441,7 +441,7 @@ function solver_mt.__index:create_init_mask_G(maps)
 	local init_v = graph.G:newvmask()
 
 	-- mark as given all defined mappings
-	graph:mark(init_v, aux.keys(maps), ffi.new("fhk_vbmap", {given=1}).u8)
+	graph:mark(init_v, misc.keys(maps), ffi.new("fhk_vbmap", {given=1}).u8)
 
 	-- variables mapped directly to graph will always have value
 	graph:mark(init_v, self.direct, ffi.new("fhk_vbmap", {given=1, has_value=1}).u8)

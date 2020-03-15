@@ -1,4 +1,4 @@
-local aux = require "aux"
+local misc = require "misc"
 local cli = require "cli"
 local sim_env = require "sim_env"
 local log = require("log").logger
@@ -14,7 +14,7 @@ local function main(args)
 		instr = sim:compile_instr(instr)
 
 		if args.input then
-			local data = aux.readjson(args.input)
+			local data = misc.readjson(args.input)
 			sim:savepoint()
 			for i,v in ipairs(data) do
 				log:verbose("[%s] %d/%d", args.input, i, #data)

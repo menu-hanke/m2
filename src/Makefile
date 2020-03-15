@@ -51,7 +51,7 @@ M2_O = main.o bitmap.o fhk_graph.o fhk_solve.o fhk_aux.o type.o arena.o sim.o gr
 
 M2_C = $(M2_O:.o=.c)
 
-MODEL_O = model/aux.o model/model_Const.o
+MODEL_O = model/mlib.o model/model_Const.o
 MODEL_C = $(MODEL_O:.o=.c)
 
 ifneq (,$(findstring Lua,$(MODEL_LANG)))

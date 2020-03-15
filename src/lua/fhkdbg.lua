@@ -2,7 +2,7 @@ local cli = require "cli"
 local conf = require "conf"
 local fhk = require "fhk"
 local typing = require "typing"
-local aux = require "aux"
+local misc = require "misc"
 local ffi = require "ffi"
 local C = ffi.C
 
@@ -330,9 +330,9 @@ local function main(args)
 		g.models[name].exf = f
 	end
 
-	local vars = aux.map(aux.split(args.vars), aux.trim)
+	local vars = misc.map(misc.split(args.vars), misc.trim)
 	local solve = g:solve(vars)
-	local given, values = aux.readcsv(args.input)
+	local given, values = misc.readcsv(args.input)
 
 	local vs = {}
 

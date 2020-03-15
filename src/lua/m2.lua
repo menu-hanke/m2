@@ -27,7 +27,7 @@ local function bootstrap(path)
 end
 
 local function main(args)
-	local aux = require "aux"
+	local misc = require "misc"
 	local cli = require "cli"
 
 	local flags = {
@@ -37,7 +37,7 @@ local function main(args)
 		function(a) -- -j<module>=<args>
 			local module, args = a:match("-j(%w+)=?(.*)")
 			if module then
-				require("jit."..module).start(unpack(aux.split(args or "")))
+				require("jit."..module).start(unpack(misc.split(args or "")))
 				return true
 			end
 		end

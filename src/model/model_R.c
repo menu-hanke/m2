@@ -55,7 +55,7 @@ model *mod_R_create(struct mod_R_def *def){
 		return NULL;
 
 	struct model_R *m = malloc(sizeof *m);
-	maux_initmodel(&m->model,
+	mlib_initmodel(&m->model,
 			&MOD_R,
 			def->n_arg, def->atypes,
 			def->n_ret, def->rtypes,
@@ -72,7 +72,7 @@ model *mod_R_create(struct mod_R_def *def){
 }
 
 static int mod_R_call(struct model_R *m, pvalue *ret, pvalue *argv){
-	maux_exportd(&m->model, argv);
+	mlib_exportd(&m->model, argv);
 
 	SEXP s = CDR(m->call);
 	for(unsigned i=0;i<m->model.n_arg;i++,argv++,s=CDR(s))
@@ -88,13 +88,13 @@ static int mod_R_call(struct model_R *m, pvalue *ret, pvalue *argv){
 	}
 
 	if(TYPEOF(r) != REALSXP || (unsigned)LENGTH(r) != m->model.n_ret){
-		maux_errf("Invalid return (type: %d length: %d) expected (type: %d length: %d)",
+		mlib_errf("Invalid return (type: %d length: %d) expected (type: %d length: %d)",
 				TYPEOF(r), LENGTH(r), REALSXP, m->model.n_arg);
 		return MODEL_CALL_INVALID_RETURN;
 	}
 
 	memcpy(ret, REAL(r), m->model.n_ret * sizeof(*ret));
-	maux_importd(&m->model, ret);
+	mlib_importd(&m->model, ret);
 
 	return MODEL_CALL_OK;
 }
@@ -117,7 +117,7 @@ static void mod_R_calibrate(struct model_R *m){
 }
 
 static void mod_R_destroy(struct model_R *m){
-	maux_destroymodel(&m->model);
+	mlib_destroymodel(&m->model);
 	remove_call(m->call);
 	free(m);
 }
@@ -156,7 +156,7 @@ static void init_R_embedded(){
 }
 
 static int source(const char *fname){
-	if(maux_get_file_data(fname))
+	if(mlib_get_file_data(fname))
 		return 0;
 
 	dv("R: sourcing %s\n", fname);
@@ -166,7 +166,7 @@ static int source(const char *fname){
 		return ret;
 	}
 
-	maux_set_file_data(fname, (void *)1);
+	mlib_set_file_data(fname, (void *)1);
 	return 0;
 }
 
@@ -182,7 +182,7 @@ static int sourcef(const char *fname){
 }
 
 static void rerror(){
-	maux_errf("R error: %s", R_curErrorBuf());
+	mlib_errf("R error: %s", R_curErrorBuf());
 }
 
 static SEXP eval(SEXP call, int *err){

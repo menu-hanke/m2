@@ -1,6 +1,6 @@
 #pragma once
 
-#include "aux.h"
+#include "mlib.h"
 
 enum mod_Lua_calib_mode {
 	MOD_LUA_EXPAND,

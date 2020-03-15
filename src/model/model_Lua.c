@@ -39,7 +39,7 @@ model *mod_Lua_create(struct mod_Lua_def *def){
 		return NULL;
 
 	struct model_Lua *m = malloc(sizeof *m);
-	maux_initmodel(&m->model,
+	mlib_initmodel(&m->model,
 			&MOD_LUA,
 			def->n_arg, def->atypes,
 			def->n_ret, def->rtypes,
@@ -56,7 +56,7 @@ model *mod_Lua_create(struct mod_Lua_def *def){
 }
 
 static int mod_Lua_call(struct model_Lua *m, pvalue *ret, pvalue *argv){
-	maux_exportd(&m->model, argv);
+	mlib_exportd(&m->model, argv);
 
 	GETREG(MADDR(m));
 	// stack: f
@@ -91,14 +91,14 @@ static int mod_Lua_call(struct model_Lua *m, pvalue *ret, pvalue *argv){
 
 		if(!isnum){
 			int t = lua_type(L, idx);
-			maux_errf("Invalid return type of return value %d, got %s, expected number",
+			mlib_errf("Invalid return type of return value %d, got %s, expected number",
 					-idx, lua_typename(L, t));
 			r = MODEL_CALL_INVALID_RETURN;
 			goto out;
 		}
 	}
 
-	maux_importd(&m->model, ret);
+	mlib_importd(&m->model, ret);
 
 out:
 	lua_pop(L, m->model.n_ret);
@@ -151,7 +151,7 @@ static int require_func(const char *module, const char *func){
 	// stack: module
 
 	if(!lua_istable(L, -1)){
-		maux_errf("Expected table (module: '%s')", module);
+		mlib_errf("Expected table (module: '%s')", module);
 		lua_pop(L, 1);
 		return -1;
 	}
@@ -160,7 +160,7 @@ static int require_func(const char *module, const char *func){
 	// stack: module func
 
 	if(lua_isnil(L, -1)){
-		maux_errf("Function '%s' not in module '%s'", func, module);
+		mlib_errf("Function '%s' not in module '%s'", func, module);
 		lua_pop(L, 2);
 		return -1;
 	}
@@ -175,7 +175,7 @@ static int pcall(int narg, int nres){
 	int r = lua_pcall(L, narg, nres, 0);
 
 	if(r){
-		maux_errf("Lua error (%d): %s", r, lua_tostring(L, -1));
+		mlib_errf("Lua error (%d): %s", r, lua_tostring(L, -1));
 		lua_pop(L, 1);
 	}
 

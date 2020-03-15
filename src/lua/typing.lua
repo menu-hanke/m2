@@ -1,4 +1,4 @@
-local aux = require "aux"
+local misc = require "misc"
 local ffi = require "ffi"
 local C = ffi.C
 
@@ -86,7 +86,7 @@ end
 -- * ctype  - readonly luajit ctype for this type
 
 local typedef_f = {}
-local typedef_mt = { __index = aux.lazy(typedef_f) }
+local typedef_mt = { __index = misc.lazy(typedef_f) }
 local frozen_mt = {}
 
 local function ctype(ct)
@@ -233,7 +233,7 @@ local function reals(...)
 end
 
 local function inject(env)
-	aux.merge(env.m2, {
+	misc.merge(env.m2, {
 		import_enum = C.vbpack,
 		import_bool = function(v) return v and 1 or 0 end,
 		export_enum = C.vbunpack,
