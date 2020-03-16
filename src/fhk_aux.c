@@ -1,5 +1,5 @@
 #include "fhk.h"
-#include "arena.h"
+#include "mem.h"
 #include "bitmap.h"
 #include "type.h"
 

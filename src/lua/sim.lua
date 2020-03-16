@@ -341,7 +341,13 @@ end
 local sim_mt = { __index = {} }
 
 local function create_sim()
-	local _sim = ffi.gc(C.sim_create(), C.sim_destroy)
+	local _sim = C.sim_create()
+
+	if _sim == ffi.NULL then
+		error("sim: failed to allocate virtual memory")
+	end
+
+	ffi.gc(_sim, C.sim_destroy)
 
 	return setmetatable({
 		chains = {},
@@ -361,7 +367,7 @@ local function inject(env)
 	env.m2.choice = choice
 	-- shortcuts
 	env.m2.on = misc.delegate(sim, sim.on)
-	env.m2.branch = misc.delegate(sim, sim.branch)
+	env.m2.branch = misc.delegate(sim, sim.branch_choices)
 	env.m2.event = misc.delegate(sim, sim.event)
 end
 
@@ -424,43 +430,57 @@ function sim_mt.__index:continue()
 	self.stack:continue()
 end
 
+function sim_mt.__index:branch_choices(choices)
+	self:branch(#choices > 1 and C.SIM_MULTIPLE or 0)
+
+	for i=1, #choices do
+		if self:take_branch(choices[i].id) then
+			choices[i].func()
+			self:continue()
+			self:exit()
+		end
+	end
+end
+
+--------------------------------------------------------------------------------
+
+local errors = {
+	[tonumber(C.SIM_EFRAME)]  = "Invalid frame",
+	[tonumber(C.SIM_ESAVE)]   = "Invalid save state",
+	[tonumber(C.SIM_EALLOC)]  = "Failed to allocate memory",
+	[tonumber(C.SIM_EBRANCH)] = "Invalid branch point"
+}
+
+local function check(r)
+	if r > 0 then
+		error(errors[r] or string.format("sim error: %d", r))
+	end
+end
+
 function sim_mt.__index:enter()
-	C.sim_enter(self._sim)
+	check(C.sim_enter(self._sim))
 end
 
 function sim_mt.__index:savepoint()
-	C.sim_savepoint(self._sim)
+	check(C.sim_savepoint(self._sim))
 end
 
 function sim_mt.__index:restore()
-	C.sim_restore(self._sim)
+	check(C.sim_restore(self._sim))
 end
 
 function sim_mt.__index:exit()
-	C.sim_exit(self._sim)
+	check(C.sim_exit(self._sim))
 end
 
-function sim_mt.__index:branch(choices)
-	local nb = #choices
-	local branches = ffi.new("sim_branchid[?]", nb)
+function sim_mt.__index:branch(hint)
+	check(C.sim_branch(self._sim, hint))
+end
 
-	for i=1, nb do
-		branches[i-1] = choices[i].id
-	end
-
-	return function(x)
-		C.sim_branch(self._sim, nb, branches)
-
-		-- Note: this loop may cause trace aborts / unnecessary side traces.
-		-- if/when this causes performance problems replace it with code generation.
-		for i=1, nb do
-			if C.sim_next_branch(self._sim) then
-				choices[i].func(x)
-				self:continue()
-				C.sim_exit(self._sim)
-			end
-		end
-	end
+function sim_mt.__index:take_branch(id)
+	local r = C.sim_take_branch(self._sim, id)
+	check(r)
+	return r ~= C.SIM_SKIP
 end
 
 --------------------------------------------------------------------------------

@@ -17,7 +17,7 @@ struct vgrid *simLV_vgrid_create(sim *sim, size_t order, struct vec_info *info, 
 
 	struct vgrid *vg = sim_alloc(sim, sizeof(*vg), alignof(*vg), lifetime);
 	size_t sz = grid_data_size(order, sizeof(struct vec *));
-	void *data = sim_vstack_alloc(sim, sz, sizeof(struct vec *));
+	void *data = sim_alloc(sim, sz, sizeof(struct vec *), SIM_VSTACK);
 	memset(vg->grid.data, 0, sz);
 	grid_init(&vg->grid, order, sizeof(struct vec *), data);
 	vg->z_band = z_band;

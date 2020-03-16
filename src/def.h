@@ -19,12 +19,8 @@
 
 #endif // ifdef DEBUG
 
-#define LIKELY(x)   __builtin_expect((x), 1)
-#define UNLIKELY(x) __builtin_expect((x), 0)
-
-#define M2_EXIT_OK                0
-#define M2_EXIT_MODEL_LOAD_FAILED 100
-#define M2_EXIT_MODEL_CALL_FAILED 101
+#define LIKELY(x)   __builtin_expect(!!(x), 1)
+#define UNLIKELY(x) __builtin_expect(!!(x), 0)
 
 #ifndef M2_VECTOR_SIZE
 
@@ -32,6 +28,7 @@
  * (or just set it when running make.)
  * Setting the largest possible isn't always a good idea */
 #define M2_VECTOR_SIZE 16
+#define M2_SIMD_ALIGN  M2_VECTOR_SIZE
 
 #endif // ifndef M2_VECTOR_SIZE
 
@@ -48,13 +45,6 @@
 
 // round n to next multiple of m where m=2^k
 #define ALIGN(n, m) (((n) + (m) - 1) & ~((m) - 1))
-
-#define ASSUME_ALIGNED(x, m)\
-	do {\
-		assert((x) == ALIGN((x), (m)));\
-		if((x) != ALIGN((x), (m)))\
-			__builtin_unreachable();\
-	} while(0)
 
 // vector size for n bytes
 #define VS(n) ALIGN((n), M2_VECTOR_SIZE)
@@ -76,38 +66,7 @@
 #define SIM_MAX_DEPTH 16
 #endif
 
-// size for the initial chunk for the sims memory arena
-// (these are allocated per stack level)
-#ifndef SIM_ARENA_SIZE
-#define SIM_ARENA_SIZE 8096
-#endif
-
-// max size for save stack
-#ifndef SIM_VSTACK_SIZE
-#define SIM_VSTACK_SIZE (1 << 20)
-#endif
-
-// size for initial chunk of static arena
-// this should be a few times bigger than SIM_SAVE_STACK_SIZE since the save stack
-// and each frame's copy of the save stack is allocated on the static arena
-// (Note: 2^20 = around 1 Mb)
-#ifndef SIM_STATIC_ARENA_SIZE
-#define SIM_STATIC_ARENA_SIZE (1 << 20)
-#endif
-
-// max number of vars in an object
-// Note: this must be a multiple of 8*M2_VECTOR_SIZE!
-#ifndef SIM_MAX_VAR
-#define SIM_MAX_VAR (8*M2_VECTOR_SIZE)
-#endif
-
-// initial temp stack chunk size
-#ifndef SIM_TMP_ARENA_SIZE
-#define SIM_TMP_ARENA_SIZE 8096
-#endif
-
-// init vector size for object vectors
-// Note: this must be a multiple of M2_VECTOR_SIZE!
-#ifndef SIM_INIT_VEC_SIZE
-#define SIM_INIT_VEC_SIZE 32
+// virtual memory to allocate per sim region
+#ifndef SIM_REGION_SIZE
+#define SIM_REGION_SIZE 0x10000000ULL
 #endif

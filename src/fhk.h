@@ -1,7 +1,7 @@
 #pragma once
 
 #include "bitmap.h"
-#include "arena.h"
+#include "mem.h"
 #include "type.h"
 
 #include <stdint.h>

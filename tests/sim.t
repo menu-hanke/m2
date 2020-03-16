@@ -18,16 +18,15 @@ end
 
 test_single_branch = with_sim(function(sim)
 	local fid = C.sim_frame_id(sim)
-	local b = ffi.new("sim_branchid[1]", 0)
-	C.sim_branch(sim, 1, b)
-	assert(C.sim_next_branch(sim))
+	C.sim_branch(sim, 0)
+	assert(C.sim_take_branch(sim, 0) == C.SIM_OK)
 	assert(C.sim_frame_id(sim) ~= fid)
 	C.sim_exit(sim)
 	assert(C.sim_frame_id(sim) == fid)
 end)
 
 test_savepoint = with_sim(function(sim)
-	local vsnum = new(sim, "double", C.SIM_MUTABLE + C.SIM_FRAME)
+	local vsnum = new(sim, "double", C.SIM_VSTACK)
 
 	vsnum[0] = 1
 
@@ -49,15 +48,13 @@ test_savepoint = with_sim(function(sim)
 end)
 
 test_branch_save = with_sim(function(sim)
-	local vsnum = new(sim, "double", C.SIM_MUTABLE + C.SIM_FRAME)
+	local vsnum = new(sim, "double", C.SIM_VSTACK)
 
 	vsnum[0] = 1
 
-	local branches = ffi.new("sim_branchid[3]", {1, 2, 3})
-	C.sim_branch(sim, 3, branches)
-
+	C.sim_branch(sim, C.SIM_MULTIPLE);
 	for i=1, 3 do
-		assert(C.sim_next_branch(sim))
+		assert(C.sim_take_branch(sim, i) == C.SIM_OK)
 		assert(vsnum[0] == 1)
 		vsnum[0] = 100+i
 		C.sim_exit(sim)

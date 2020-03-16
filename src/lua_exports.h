@@ -6,6 +6,6 @@
 #include "fhk.h"
 #include "graph.h"
 #include "type.h"
-#include "arena.h"
+#include "mem.h"
 #include "vmath.h"
 #include "model/all.h"

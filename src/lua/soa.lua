@@ -77,7 +77,8 @@ end
 
 local function initmeta(sim, typ, metact)
 	local metap = ffi.typeof("$*", metact)
-	local meta = ffi.cast(metap, C.sim_static_alloc(sim, ffi.sizeof(metact), ffi.alignof(metact)))
+	local meta = ffi.cast(metap, C.sim_alloc(sim, ffi.sizeof(metact), ffi.alignof(metact),
+		C.SIM_STATIC))
 	meta.___nbands = #typ.fields
 
 	for _,name in ipairs(typ.fields) do

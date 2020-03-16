@@ -118,7 +118,7 @@ size_t fhk_subgraph_size(struct fhk_graph *G, bm8 *vmask, bm8 *mmask){
 
 void fhk_copy_subgraph(void *dest, struct fhk_graph *G, bm8 *vmask, bm8 *mmask){
 	// this is basically a ghetto arena.
-	// the reason arena.h isn't used here is because I want fhk to be usable standalone,
+	// the reason mem.h isn't used here is because I want fhk to be usable standalone,
 	// so (apart from fhk_aux) I don't want to require an arena to use it.
 	// (arguably this function could be a part of fhk_aux, but subgraphs are really useful,
 	// and it would be really unfortunate if parts of the subgraph ended on different chunks

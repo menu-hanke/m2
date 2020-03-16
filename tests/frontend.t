@@ -104,7 +104,7 @@ test_binary_numbers_branching = with_env(function()
 	local function notset() end
 	local function set() G.value = G.value + G.bit end
 
-	local br = m2.branch {
+	local choices = {
 		m2.choice(0x1, notset),
 		m2.choice(0x2, set)
 	}
@@ -112,12 +112,12 @@ test_binary_numbers_branching = with_env(function()
 	m2.on("^firstbit", function()
 		G.bit = 1
 		G.value = 0
-		br()
+		m2.branch(choices)
 	end)
 
 	m2.on("^nextbit", function()
 		G.bit = G.bit * 2
-		br()
+		m2.branch(choices)
 	end)
 
 	m2.on("leaf", function()
@@ -141,16 +141,16 @@ test_binary_numbers_branching = with_env(function()
 end)
 
 test_fail_nobranch = with_env(function()
-	local br = m2.branch {
+	local choice = {
 		m2.choice(1, function() end)
 	}
 
 	m2.on("^branch", function()
-		br()
+		m2.branch(choice)
 	end)
 
 	m2.on("nobranch", function()
-		assert(fails(br))
+		assert(fails(function() m2.branch(choice) end))
 	end)
 
 	local instr = m2.record()
@@ -161,10 +161,6 @@ test_fail_nobranch = with_env(function()
 end)
 
 test_instr_checkpoint = with_env(function()
-	local br = m2.branch {
-		m2.choice(1, function() end)
-	}
-
 	local flag = false
 	m2.on("^branch", function() end)
 	m2.on("leaf", function() flag = true end)
@@ -184,14 +180,14 @@ test_branch_continue_chain = with_env(function()
 		return function() x = v end
 	end
 
-	local br = m2.branch {
+	local choices = {
 		m2.choice(0x1, set(1)),
 		m2.choice(0x2, set(2)),
 		m2.choice(0x3, set(3))
 	}
 
 	m2.on("^event", function()
-		br()
+		m2.branch(choices)
 	end)
 
 	m2.on("event#1", function()
