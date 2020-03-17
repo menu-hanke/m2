@@ -1,3 +1,4 @@
+local misc = require "misc"
 local env = setmetatable({ define={} }, {__index=_G})
 
 local function read_json(fname)
@@ -199,24 +200,17 @@ env.unit  = function(unit)  return vdef({unit=unit}) end
 env.class = function(class) return vdef({class=class}) end
 env.doc   = function(doc)   return vdef({doc=doc}) end
 
-local function paste(dest, tab)
-	for k,v in pairs(tab) do
-		dest[k] = v
-	end
-	return dest
-end
-
 function vdef_mt.__mul(left, right)
 	if type(right) == "table" then
 		left, right = right, left
 	end
 
-	local ret = paste({}, left)
+	local ret = misc.merge({}, left)
 
 	if type(right) == "string" then
 		ret.type = right
 	else
-		paste(ret, right)
+		misc.merge(ret, right)
 	end
 
 	return vdef(ret)
@@ -229,29 +223,37 @@ local function defvar(name, def)
 	if type(def) == "string" then
 		d.type = def
 	else
-		paste(d, def)
+		misc.merge(d, def)
 	end
 
 	_vars[name] = d
 end
 
+local function normalize_defs(defs)
+	local ret = {}
+
+	for k,v in pairs(defs) do
+		if type(k) == "number" then
+			ret[v] = "real"
+		else
+			ret[k] = v
+		end
+	end
+
+	return ret
+end
+
 env.define.var = namespace(defvar)
 
-env.define.vars = function(vd, defs)
-	if not defs then return env.define.vars(nil, vd) end
+env.define.vars = namespace(function(prefix, defs)
+	for k,v in pairs(normalize_defs(defs)) do
+		defvar(prefix .. "#" .. k, v)
+	end
+end)
 
-	if vd then
-		for _,name in ipairs(defs) do
-			defvar(name, vd)
-		end
-	else
-		for k,v in pairs(defs) do
-			if type(k) == "number" then
-				defvar(v, "real")
-			else
-				defvar(k, v)
-			end
-		end
+getmetatable(env.define.vars).__call = function(_, defs)
+	for k,v in pairs(normalize_defs(defs)) do
+		defvar(k, v)
 	end
 end
 

@@ -134,32 +134,32 @@ local function band_offsets(typ, band)
 	end)
 end
 
-function soa_mt.__index:define_mappings(solver, define)
-	local udata = solver.udata[self]
+function soa_mt.__index:define_mappings(def, map)
+	local udata = def.udata[self]
 
-	udata.vp = solver.arena:new("struct vec *")
+	udata.vp = def.arena:new("struct vec *")
 
 	if udata.bind then
 		udata.vp[0] = ffi.cast(vec_ctp, udata.bind)
 	end
 
-	if self ~= solver.source and not udata.follow then
-		udata.idxp = solver.arena:new("unsigned")
+	if self ~= def.source and not udata.follow then
+		udata.idxp = def.arena:new("unsigned")
 	end
 
 	for band, name in ipairs(self.type.fields) do
 		local stride = ffi.sizeof(self.type.vars[name].ctype)
 		for field, offset, size in band_offsets(self.type, band) do
-			define(field, function(desc)
-				local mapping = solver.arena:new("struct fhkM_vecV")
+			map(field, function(desc)
+				local mapping = def.arena:new("struct fhkM_vecV")
 				mapping.flags.resolve = C.FHKM_MAP_VEC
 				mapping.flags.type = typing.demote(desc, size)
 				mapping.flags.offset = offset
 				mapping.flags.stride = stride
 				mapping.flags.band = band-1
 				mapping.vec = udata.vp
-				mapping.idx = udata.idxp or solver.udata.idxp
-				return mapping, mapping.idx ~= solver.udata.idxp
+				mapping.idx = udata.idxp or def.udata.idxp
+				return mapping, mapping.idx ~= def.udata.idxp
 			end)
 		end
 	end
@@ -181,15 +181,15 @@ local function bind_result(solver, nv, bufs)
 	end
 end
 
-function soa_mt.__index:wrap_solver(solver)
-	local vp = solver.udata[self].vp
-	local iter = solver.arena:new("struct fhkM_iter_range")
+function soa_mt.__index:wrap_solver(def)
+	local vp = def.udata[self].vp
+	local iter = def.arena:new("struct fhkM_iter_range")
 	C.fhkM_range_init(iter)
-	solver.udata.idxp = typing.memb_ptr("struct fhkM_iter_range", "idx", iter, "unsigned *")
+	def.udata.idxp = typing.memb_ptr("struct fhkM_iter_range", "idx", iter, "unsigned *")
 
-	local solve = solver:create_iter(iter)
-	local c_solver = solver.solver
-	local nv = solver.nv
+	local solve = def:create_iter(iter)
+	local c_solver = def.solver
+	local nv = def.nv
 	local sim = self.sim
 
 	-- alloc:
@@ -211,18 +211,18 @@ function soa_mt.__index:wrap_solver(solver)
 	end
 end
 
-function soa_mt.__index:bind_solver(solver, vec, idx)
-	local udata = solver.udata[self]
+function soa_mt.__index:bind_solver(udata, vec, idx)
+	udata = udata[self]
 	udata.vp[0] = ffi.cast(vec_ctp, vec)
 	if idx then
 		udata.idxp[0] = idx
 	end
 end
 
-function soa_mt.__index:solver_pos(solver)
-	local udata = solver.udata[self]
-	local vp = ffi.cast(self.vec_ctp, udata.vp[0])
-	local idx = tonumber(udata.idxp and udata.idxp[0] or solver.udata.idxp[0])
+function soa_mt.__index:solver_pos(udata)
+	local sudata = udata[self]
+	local vp = ffi.cast(self.vec_ctp, sudata.vp[0])
+	local idx = tonumber(sudata.idxp and sudata.idxp[0] or udata.idxp[0])
 	return vp, idx
 end
 

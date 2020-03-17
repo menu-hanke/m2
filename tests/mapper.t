@@ -32,7 +32,7 @@ local with_graph = envmaker {
 		m("idxy2ab")                           + {"x", "y"} - {"a", "b"},
 		m("idy2c")                             + "y"        - "c",
 		m("idx2d_pos") %"x"^ival{0, math.huge} + "x"        - "x_unsat_cst",
-		m("crash")                             + "x"        - "x_crash"
+		m("crash")                             + "x"        - "x_crash",
 	},
 	impl = {
 		idx2a     = {lang="Lua", opt="models::id"},
@@ -44,15 +44,24 @@ local with_graph = envmaker {
 	}
 }
 
+local with_prefix_graph = envmaker {
+	graph = {
+		m("x->a") + "pf#x" - "pf#a"
+	},
+	impl = {
+		["x->a"] = {lang="Lua", opt="models::id"}
+	}
+}
+
 test_map_write = with_graph(function()
 	local solve_ab = m2.solve("a", "b"):given("x", "y")
 
 	return function()
-		solve_ab.vars.x = 1
-		solve_ab.vars.y = 2
+		solve_ab.x = 1
+		solve_ab.y = 2
 		solve_ab()
-		assert(solve_ab.vars.a == 1)
-		assert(solve_ab.vars.b == 2)
+		assert(solve_ab.a == 1)
+		assert(solve_ab.b == 2)
 	end
 end)
 
@@ -92,8 +101,8 @@ test_map_ns = with_graph(function()
 		solve_a1()
 		solve_a2()
 
-		assert(solve_a1.vars.a == 1234)
-		assert(solve_a2.vars.a == 5678)
+		assert(solve_a1.a == 1234)
+		assert(solve_a2.a == 5678)
 	end
 end)
 
@@ -108,8 +117,22 @@ test_map_always_given = with_graph(function()
 
 	return function()
 		solve_ab()
-		assert(solve_ab.vars.a == 111)
-		assert(solve_ab.vars.b == 222)
+		assert(solve_ab.a == 111)
+		assert(solve_ab.b == 222)
+	end
+end)
+
+test_map_prefix = with_prefix_graph(function()
+	local prefix = m2.fhk.prefix("pf")
+	local ns, G = m2.data.static(m2.fhk.typeof(prefix { "x" }))
+	m2.fhk.config(ns, {rename=prefix})
+
+	local solve_a = m2.solve(prefix{"a"}):given(ns)
+
+	return function()
+		G.x = 5
+		solve_a()
+		assert(solve_a.a == 5)
 	end
 end)
 
@@ -128,8 +151,8 @@ test_map_vec = with_graph(function()
 
 	return function()
 		solve_ab(v)
-		local ra = solve_ab.vars.a
-		local rb = solve_ab.vars.b
+		local ra = solve_ab.a
+		local rb = solve_ab.b
 		assert(ra[0] == 1 and ra[1] == 2 and ra[2] == 3)
 		assert(rb[0] == 100 and rb[1] == 200 and rb[2] == 300)
 	end
@@ -173,17 +196,17 @@ test_map_vec_vec = with_graph(function()
 		:over(V1)
 
 	return function()
-		solve_ab_nofollow:bind(V2, v2, 0)
+		m2.fhk.bind(solve_ab_nofollow, V2, v2, 0)
 		solve_ab_nofollow(v1)
 		
-		local a = solve_ab_nofollow.vars.a
-		local b = solve_ab_nofollow.vars.b
+		local a = solve_ab_nofollow.a
+		local b = solve_ab_nofollow.b
 		assert(a[0] == 123 and a[1] == 456)
 		assert(b[0] == 789 and b[1] == 789)
 
 		solve_ab_follow(v1)
-		a = solve_ab_follow.vars.a
-		b = solve_ab_follow.vars.b
+		a = solve_ab_follow.a
+		b = solve_ab_follow.b
 		assert(a[0] == 123 and a[1] == 456)
 		assert(b[0] == 789 and b[1] == 000)
 	end
@@ -205,8 +228,8 @@ test_map_vec_globals_visibility = with_graph(function()
 
 	return function()
 		solve_ab(v)
-		assert(solve_ab.vars.a[0] == 123)
-		assert(solve_ab.vars.b[0] == 456)
+		assert(solve_ab.a[0] == 123)
+		assert(solve_ab.b[0] == 456)
 	end
 end)
 
@@ -224,16 +247,16 @@ test_solver_vec_alloc = with_graph(function()
 	return function()
 		for i=0, N-1 do x[i] = i end
 		solve_a(v, #v)
-		local res1 = solve_a.vars.a
+		local res1 = solve_a.a
 
 		for i=0, N-1 do x[i] = 2*i end
 		solve_a(v)
-		local res2 = solve_a.vars.a
+		local res2 = solve_a.a
 
 		for i=0, N-1 do x[i] = 3*i end
 		local buf = ffi.new("vreal[?]", N)
 		solve_a(v, {buf})
-		local res3 = solve_a.vars.a
+		local res3 = solve_a.a
 
 		assert(res3 == buf)
 		for i=0, N-1 do
@@ -267,7 +290,7 @@ test_create_solver1_result_gc = with_graph(function()
 
 	return function()
 		solve_a()
-		assert(solve_a.vars.a == 1234)
+		assert(solve_a.a == 1234)
 
 		-- https://stackoverflow.com/questions/28320213/why-do-we-need-to-call-luas-collectgarbage-twice
 		collectgarbage()
@@ -277,7 +300,7 @@ test_create_solver1_result_gc = with_graph(function()
 		t = {}
 		for i=1, 1000 do t[i] = ffi.new("float[?]", 1000) end
 
-		assert(solve_a.vars.a == 1234)
+		assert(solve_a.a == 1234)
 	end
 end)
 
@@ -293,7 +316,7 @@ if ffi.C.fhkG_have_interrupts() then
 
 		return function()
 			solve_a()
-			assert(solve_a.vars.a == 3.14)
+			assert(solve_a.a == 3.14)
 		end
 	end)
 
@@ -320,7 +343,7 @@ if ffi.C.fhkG_have_interrupts() then
 
 		return function()
 			solve_c(v)
-			local cs = solve_c.vars.c
+			local cs = solve_c.c
 			assert(cs[0] == 11 and cs[1] == 12 and cs[2] == 13)
 		end
 	end)
@@ -336,14 +359,14 @@ if ffi.C.fhkG_have_interrupts() then
 		local vs2 = m2.virtuals()
 		vs2.virtual("y", function()
 			solve_d()
-			return solve_d.vars.d * 2
+			return solve_d.d * 2
 		end)
 
 		local solve_c = m2.solve("c"):given(vs2)
 
 		return function()
 			solve_c()
-			assert(solve_c.vars.c == 123*2)
+			assert(solve_c.c == 123*2)
 		end
 	end)
 

@@ -25,11 +25,11 @@ function virtuals_mt.__index:vset(vis)
 end
 
 local function wrap_interrupt(func, tname)
-	return function(solver)
-		local r = func(solver)
+	return function(solver, u)
+		local r = func(u)
 		local iv = ffi.new("pvalue")
 		iv[tname] = r
-		return tonumber(C.fhkG_solver_resumeV(solver.solver, iv))
+		return tonumber(C.fhkG_solver_resumeV(solver, iv))
 	end
 end
 
@@ -37,12 +37,12 @@ function vset_mt.__index:define(name, f, tname)
 	self.handles[name] = self.virtuals:add(wrap_interrupt(f, tname))
 end
 
-function vset_mt.__index:define_mappings(solver, define)
-	local const = solver.udata[self].const
+function vset_mt.__index:define_mappings(def, map)
+	local const = def.udata[self].const
 
 	for name,handle in pairs(self.handles) do
-		define(name, function(desc)
-			local mapping = solver.arena:new("struct fhkG_vintV")
+		map(name, function(desc)
+			local mapping = def.arena:new("struct fhkG_vintV")
 			mapping.flags.resolve = C.FHKG_MAP_INTERRUPT
 			mapping.flags.type = desc
 			mapping.flags.handle = handle

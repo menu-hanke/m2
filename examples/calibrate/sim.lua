@@ -50,8 +50,8 @@ local function grow_trees()
 	solve_growstep(trees)
 	local newf, f = soa.newband(trees, "f")
 	local newd, d = soa.newband(trees, "dbh")
-	vmath.mul(f, solve_growstep.vars.sur, #trees, newf)
-	vmath.add(d, solve_growstep.vars.i_d, #trees, newd)
+	vmath.mul(f, solve_growstep.sur, #trees, newf)
+	vmath.add(d, solve_growstep.i_d, #trees, newd)
 end
 
 local newspe = { Spe.manty, Spe.kuusi, Spe.rauduskoivu, Spe.hieskoivu, Spe.haapa }
@@ -60,11 +60,11 @@ local function ingrowth()
 	solve_ingrowth()
 
 	local newf = {
-		solve_ingrowth.vars.fma,
-		solve_ingrowth.vars.fku,
-		solve_ingrowth.vars.fra,
-		solve_ingrowth.vars.fhi,
-		solve_ingrowth.vars.fle
+		solve_ingrowth.fma,
+		solve_ingrowth.fku,
+		solve_ingrowth.fra,
+		solve_ingrowth.fhi,
+		solve_ingrowth.fle
 	}
 
 	local nnew = 0

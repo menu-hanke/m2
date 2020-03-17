@@ -319,10 +319,7 @@ local function hook(G, fvars, fmodels, xvars)
 	local mapper = setmetatable({
 		vars     = vars,
 		models   = models,
-		arena    = alloc.arena(),
-		virtuals = virtual.virtuals(),
-		given    = {}
-		-- renamers
+		arena    = alloc.arena()
 	}, mapper_mt)
 
 	C.fhkG_hook(G, C.FHKG_HOOK_DEBUG_ONLY)
@@ -339,14 +336,6 @@ end
 
 function mapper_mt.__index:typeof(name)
 	return self.vars[name].ptype
-end
-
-function mapper_mt.__index:typesof(vars)
-	local ret = {}
-	for _,name in ipairs(vars) do
-		ret[name] = self:typeof(name)
-	end
-	return ret
 end
 
 function mapper_mt.__index:bind_names()
@@ -375,53 +364,79 @@ end
 
 --------------------------------------------------------------------------------
 
-local solver_mt = { __index = {} }
+-- transform a table like:
+--     {
+--         { "a", "b" },
+--         "c",
+--         d = "e"
+--     }
+-- to:
+--     names = {"a", "b", "c", "e"}
+--     aliases = { e = "d" }
+--
+-- from the solver's point of view the roles of "name" and "alias" are reversed, ie.
+-- the name in the graph is the real name, and the name used by the caller is the alias,
+-- hence e->"d" in the alias table
+local function normalize_names(names, aliases, x)
+	for k,v in pairs(x) do
+		if type(v) == "table" then
+			normalize_names(names, aliases, v)
+		else
+			if type(k) == "string" then
+				if aliases[k] and aliases[k] ~= v then
+					error("Inconsistent naming: '%s' maps to '%s' and '%s'", k, aliases[k], v)
+				end
 
-function mapper_mt.__index:solver(names)
-	return setmetatable({
-		mapper = self,
-		arena  = self.arena, -- create a new arena if solver needs to be destroyed before mapper?
-		names  = names,
-		direct = {},
-		udata  = {}
-	}, solver_mt)
-end
+				aliases[v] = k
+			end
 
--- two ways to use this:
---   * solver:given(y1, y2, ..., yN)
---   * solver:given(mappable [, params])
-function solver_mt.__index:given(...)
-	local args = {...}
-
-	if type(args[1]) == "string" then
-		for _,a in ipairs(args) do
-			table.insert(self.direct, a)
+			table.insert(names, v)
 		end
-	else
-		self.udata[args[1]] = args[2] or {}
-	end
-
-	return self
-end
-
-function solver_mt.__index:over(src)
-	self:given(src)
-	self.source = src
-	return self
-end
-
-function solver_mt.__index:merge_udata()
-	for mp,p in pairs(self.mapper.given) do
-		self.udata[mp] = misc.merge(self.udata[mp] or {}, p)
 	end
 end
 
-function solver_mt.__index:define_mappings()
+local solverdef_mt = { __index = {} }
+
+local function solverdef(mapper, targets, callbacks)
+	local names, aliases = {}, {}
+	normalize_names(names, aliases, targets)
+
+	return setmetatable({
+		mapper    = mapper,
+		arena     = mapper.arena,
+		names     = names,
+		aliases   = aliases,
+		callbacks = callbacks,
+		direct    = {},
+		udata     = {}
+	}, solverdef_mt)
+end
+
+function solverdef_mt.__index:given_names(direct)
+	normalize_names(self.direct, self.aliases, direct)
+end
+
+function solverdef_mt.__index:given_mappable(mappable, udata)
+	self.udata[mappable] = udata or {}
+end
+
+function solverdef_mt.__index:merge_udata(udata)
+	for mp,p in pairs(udata) do
+		if self.udata[mp] or p.global then
+			self.udata[mp] = misc.merge(self.udata[mp] or {}, p)
+		end
+	end
+end
+
+function solverdef_mt.__index:define_mappings()
 	local maps = {}
 
-	for _,m in ipairs(misc.keys(self.udata)) do
+	for m,u in pairs(self.udata) do
 		m:define_mappings(self, function(name, map)
-			-- TODO: name mangle here
+			if u.rename then
+				name = u.rename(name)
+			end
+
 			if self.mapper:mapped(name) then
 				if maps[name] and maps[name] ~= m then
 					error(string.format("Mapping conflict! Variable '%s' is mapped by %s and %s",
@@ -436,7 +451,7 @@ function solver_mt.__index:define_mappings()
 	return maps
 end
 
-function solver_mt.__index:create_init_mask_G(maps)
+function solverdef_mt.__index:create_init_mask_G(maps)
 	local graph = self.mapper.graph
 	local init_v = graph.G:newvmask()
 
@@ -452,19 +467,19 @@ function solver_mt.__index:create_init_mask_G(maps)
 	return init_v
 end
 
-function solver_mt.__index:create_direct()
+function solverdef_mt.__index:create_direct()
 	self.solver = C.fhkG_solver_create(self.G, self.nv, self.ys, self.init_v)
 	return self.solver
 end
 
-function solver_mt.__index:create_iter(iter)
+function solverdef_mt.__index:create_iter(iter)
 	-- bitmaps will be calculated later
 	self.solver = C.fhkG_solver_create_iter(self.G, self.nv, self.ys, self.init_v,
 		ffi.cast("struct fhkG_map_iter *", iter), nil, nil)
 	return self.solver
 end
 
-function solver_mt.__index:wrap_solver()
+function solverdef_mt.__index:wrap_solver()
 	local solve
 
 	if self.source and self.source.wrap_solver then
@@ -474,46 +489,50 @@ function solver_mt.__index:wrap_solver()
 	end
 
 	local band, bnot = bit.band, bit.bnot
-	local callbacks = self.mapper.virtuals.callbacks
-	return function(...)
+	local callbacks = self.callbacks
+	local udata = self.udata
+	local solver = self.solver
+	local G = self.G
+
+	return function(_, ...)
 		local r = solve(...)
 
 		while r ~= C.FHK_OK do
 			if band(r, C.FHKG_INTERRUPT_V) ~= 0 then
 				local virt = callbacks[tonumber(band(r, C.FHKG_HANDLE_MASK))]
-				r = virt(self)
+				r = virt(solver, udata)
 			else
-				solver_failed_m(self.G.last_error)
+				solver_failed_m(G.last_error)
 			end
 		end
 	end
 end
 
-function solver_mt.__index:create_vars(graph)
+function solverdef_mt.__index:create_vars(graph)
 	local vp = {}
 	if self.solver:is_iter() then
 		local binds = self.solver:binds()
 		for i,name in ipairs(self.names) do
-			vp[name] = ffi.cast(ffi.typeof("$**", self.mapper:typeof(name).ctype), binds+(i-1))
+			local alias = self.aliases[name] or name
+			vp[alias] = ffi.cast(ffi.typeof("$**", self.mapper:typeof(name).ctype), binds+(i-1))
 		end
 	else
 		for _,name in ipairs(self.names) do
-			vp[name] = graph:value_ptr(name)
+			local alias = self.aliases[name] or name
+			vp[alias] = graph:value_ptr(name)
 		end
 	end
 
 	local dp = {}
 	for _,name in ipairs(self.direct) do
+		local alias = self.aliases[name] or name
 		dp[name] = graph:value_ptr(name)
 	end
 
-	return setmetatable({}, {
-		__index = function(_, name) return vp[name][0] end,
-		__newindex = function(_, name, value) dp[name][0] = value end
-	})
+	return vp, dp
 end
 
-function solver_mt.__index:bind_mappings(maps, graph)
+function solverdef_mt.__index:bind_mappings(maps, graph)
 	local const = {}
 
 	for name,map in pairs(maps) do
@@ -528,7 +547,7 @@ function solver_mt.__index:bind_mappings(maps, graph)
 	return const
 end
 
-function solver_mt.__index:create_bitmaps(graph, const)
+function solverdef_mt.__index:create_bitmaps(graph, const)
 	local reset_v = graph.G:newvmask()
 	local reset_m = graph.G:newmmask()
 	graph:mark(reset_v, const, 0xff)
@@ -538,8 +557,7 @@ function solver_mt.__index:create_bitmaps(graph, const)
 	return reset_v, reset_m
 end
 
-function solver_mt.__index:create_solver()
-	self:merge_udata()
+function solverdef_mt.__index:create_solver_mt()
 	local maps = self:define_mappings()
 	local init_v = self:create_init_mask_G(maps)
 	local vmask, mmask = self.mapper.graph:reduce(self.names, init_v)
@@ -551,30 +569,71 @@ function solver_mt.__index:create_solver()
 	self.ys = ys
 	self.init_v = self.G:newvmask()
 	C.fhk_transfer_mask(self.init_v, init_v, vmask, self.mapper.graph.G.n_var)
-	self.solver_func = self:wrap_solver()
 
-	if not self.solver then
-		error("wrap_solver() didn't create solver")
-	end
+	local mt = {}
+	mt.udata = self.udata -- this will still be needed
+	mt.__call = self:wrap_solver()
 
-	self.vars = self:create_vars(graph)
+	-- anchor to prevent gc
+	mt.G___ = self.G
+	mt.init_v___ = self.init_v
+	mt.solver___ = self.solver or error("wrap_solver() didn't create solver")
+
+	local vp, dp = self:create_vars(graph)
+	mt.__index = function(_, name) return vp[name][0] end
+	mt.__newindex = function(_, name, value) dp[name][0] = value end
+
 	local const = self:bind_mappings(maps, graph)
-
 	if self.solver:is_iter() then
 		local reset_v, reset_m = self:create_bitmaps(graph, const)
-		-- make sure they're not gced
-		self.___reset_v = reset_v
-		self.___reset_m = reset_m
+		-- anchor to prevent gc
+		mt.reset_v___ = reset_v
+		mt.reset_m___ = reset_m
 		C.fhkG_solver_set_reset(self.solver, reset_v, reset_m)
 	end
+
+	return mt
 end
 
-function solver_mt.__index:bind(x, ...)
-	x:bind_solver(self, ...)
+--------------------
+
+local solver_mt = { __index = {} }
+
+function mapper_mt.__index:solver(names, callbacks)
+	return setmetatable({
+		def = solverdef(self, names, callbacks)
+	}, solver_mt)
 end
 
-function solver_mt:__call(...)
-	self.solver_func(...)
+-- two ways to use this:
+--   * solver:given(y1, y2, ..., yN)
+--   * solver:given(mappable [, params])
+--   
+-- XXX: which way is used is detected by checking if it has a define_mappings field,
+-- which will fail if you want to alias a variable called define_mappings!
+-- this should probably use a metatable-based check or something
+function solver_mt.__index:given(...)
+	local args = {...}
+
+	if type(args[1]) == "table" and args[1].define_mappings then
+		self.def:given_mappable(args[1], args[2])
+	else
+		self.def:given_names(args)
+	end
+
+	return self
+end
+
+function solver_mt.__index:over(src)
+	self.def:given_mappable(src)
+	self.def.source = src
+	return self
+end
+
+function solver_mt.__index:create_solver()
+	local mt = self.def:create_solver_mt()
+	setmetatable(self, mt)
+	self.def = nil
 end
 
 ffi.metatype("struct fhkG_solver", {
@@ -594,34 +653,76 @@ ffi.metatype("struct fhkG_solver", {
 
 --------------------------------------------------------------------------------
 
+local function mangler(f)
+	return function(x)
+		if type(x) == "table" then
+			local ret = {}
+			for _,v in ipairs(x) do
+				ret[v] = f(v)
+			end
+			return ret
+		else
+			return f(x)
+		end
+	end
+end
+
+local function prefix(p)
+	return mangler(function(x) return string.format("%s#%s", p, x) end)
+end
+
+--------------------------------------------------------------------------------
+
+local function typeof(mapper, x)
+	if type(x) == "string" then
+		return x
+	end
+
+	local ret = {}
+
+	-- integer keys: {"name1", "name2", ..., "nameN"} -> {name1=type1, ... nameN=typeN}
+	-- string keys:  {name1="rename1", ..., nameN="renameN"} -> {name1=typeof("rename1"), ...}
+	-- mixing them also works as expected
+	for k,v in pairs(x) do
+		k = type(k) == "number" and v or k
+		ret[k] = mapper:typeof(v)
+	end
+
+	return ret
+end
+
+local function getudata(solver)
+	return getmetatable(solver).udata
+end
+
 local function inject(env)
 	local mapper = env.mapper
+	local udata = {}
+	local virtuals = virtual.virtuals()
 
 	env.m2.fhk = {
-		typeof  = function(x)
-			if type(x) == "string" then
-				return mapper:typeof(x)
-			else
-				return mapper:typesof(x)
-			end
-		end,
+		typeof  = misc.delegate(mapper, typeof),
 		config  = function(x, conf)
-			if conf.global then mapper.given[x] = conf.global == true and {} or conf.global end
-			-- TODO: name mangling config goes here
+			udata[x] = misc.merge(udata[x] or {}, conf)
 			return x
 		end,
 		solve   = function(...)
-			local s = mapper:solver({...})
-			env.sim:on("sim:compile", function() s:create_solver() end)
+			local s = mapper:solver({...}, virtuals.callbacks)
+			env.sim:on("sim:compile", function()
+				s.def:merge_udata(udata)
+				s:create_solver()
+			end)
 			return s
-		end
+		end,
+		prefix  = prefix,
+		bind    = function(solver, x, ...) x:bind_solver(getudata(solver), ...) end
 	}
 
 	-- shortcut
 	env.m2.solve = env.m2.fhk.solve
 
 	env.m2.virtuals = function(vis)
-		local vset = mapper.virtuals:vset(vis)
+		local vset = virtuals:vset(vis)
 		vset.virtual = function(name, f)
 			return vset:define(name, f, mapper:typeof(name).name)
 		end
@@ -633,5 +734,6 @@ return {
 	build_graph     = build_graph,
 	create_models   = create_models,
 	hook            = hook,
+	getudata        = getudata,
 	inject          = inject,
 }
