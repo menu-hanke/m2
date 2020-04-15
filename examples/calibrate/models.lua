@@ -95,7 +95,9 @@ local function gro_kuusi(step, mtyyppi, d, G, ba, ba_L, ba_Lku, ts,
 		+ c_baL * (ba_L + ba/2)/math.log(d + 1)
 		+ c_baLku * (ba_Lku + ba/2)/math.log(d + 1)
 		+ c_logts * math.log(ts)
-		+ c_omt * omt
+		--+ c_omt * omt
+		-- see Simulator.f
+		+ c_logts * omt
 		+ c_vt * vt
 		+ c_ct * ct
 	))
@@ -291,7 +293,7 @@ local function ingrowth_koivu(step, ts, G, Gma, mtyyppi, atyyppi,
 	if atyyppi > 1 then
 		return fko, 0
 	else
-		return 0.6*fko, 0.4*fko
+		return 0.4*fko, 0.6*fko
 	end
 end
 

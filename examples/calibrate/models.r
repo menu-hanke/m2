@@ -74,7 +74,8 @@ gro_kuusi <- lerp5(growf(function(omt, vt, ct, d, G, ba, ba_L, ba_Lku, ts,
 		+ c_baL * (ba_L + ba/2)/log(d + 1)
 		+ c_baLku * (ba_Lku + ba/2)/log(d + 1)
 		+ c_logts * log(ts)
-		+ c_omt * omt
+		#+ c_omt * omt
+		+ c_logts * omt
 		+ c_vt * vt
 		+ c_ct * ct
 	)
@@ -204,7 +205,7 @@ ingrowth_koivu <- lerp5(function(ts, G, Gma, mtyyppi, atyyppi,
 	if(atyyppi > 1)
 		c(fko, 0)
 	else
-		c(0.6*fko, 0.4*fko)
+		c(0.4*fko, 0.6*fko)
 })
 
 ingrowth_leppa <- lerp5(function(ts, G, mtyyppi,
