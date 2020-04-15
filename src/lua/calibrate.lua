@@ -1,209 +1,189 @@
 local ffi = require "ffi"
 local cli = require "cli"
 local misc = require "misc"
-local conf = require "conf"
 local sim_env = require "sim_env"
-local nmopt = require "neldermead"
+local neldermead = require "neldermead"
+local log = require("log").logger
 
-local function readc(cname, cdef)
-	if type(cdef) ~= "table" then
-		cdef = { value=cdef }
-	end
+local calibrator_mt = { __index={} }
 
-	cdef.name = cname
-	
-	return cdef
+local function calibrator(env, opt)
+	local calibrator = setmetatable({
+		env        = env,
+		parameters = {},
+		models     = {}
+	}, calibrator_mt)
+
+	env.sim:on("fhk:plan#-1", function(plan)
+		local _calibrate = plan.calibrate
+		local hook = calibrator:calibrate_hook(plan, opt)
+		plan.calibrate = function(name) return hook(name) or _calibrate(name) end
+	end)
+
+	return calibrator
 end
 
-local function read_coefs(data)
-	local sim_coefs = {}
-	local model_coefs = {}
+function calibrator_mt.__index:calibrate_hook(plan, opt)
+	return function(name)
+		return opt[name] and function(model)
+			local def = self:defmodel(name, model)
+			for i,pname in ipairs(plan.modeldef[name].coeffs) do
+				local o = opt[name][pname] or
+					error(string.format("%s#%s: missing optimization settings", name, pname))
 
-	if data.simulator then
-		for cname,cdef in pairs(data.simulator) do
-			table.insert(sim_coefs, readc(cname, cdef))
+				local ptr = model.coefs+(i-1)
+				ptr[0] = o.value or error(string.format("%s#%s: missing default value", name, pname))
+
+				if o.optimize then
+					def(pname, ptr, o)
+				end
+			end
+
+			model:calibrate()
 		end
 	end
+end
 
-	if data.models then
-		for name,coefs in pairs(data.models) do
-			model_coefs[name] = {}
-			for cname,cdef in pairs(coefs) do
-				table.insert(model_coefs[name], readc(cname, cdef))
+function calibrator_mt.__index:defmodel(mname, model)
+	return function(name, ptr, opt)
+		self.models[mname] = self.models[mname] or model
+		table.insert(self.parameters, {model=mname, name=name, ptr=ptr, opt=opt})
+		log:verbose("%s # %s -> %p -- %f [%f, %f]", mname, name, ptr, opt.value, opt.min, opt.max)
+	end
+end
+
+function calibrator_mt.__index:penaltyf(k)
+	local nparam = #self.parameters
+	local min = ffi.new("double[?]", nparam)
+	local max = ffi.new("double[?]", nparam)
+	k = k or 10000
+
+	for i,p in ipairs(self.parameters) do
+		min[i-1] = p.opt.min or -math.huge
+		max[i-1] = p.opt.max or math.huge
+	end
+
+	return function(xs)
+		local p = 0
+		for i=0, nparam-1 do
+			if xs.data[i] < min[i] or xs.data[i] > max[i] then
+				p = p + k
 			end
 		end
-	end
-
-	return {
-		sim   = sim_coefs,
-		model = model_coefs
-	}
-end
-
-local function write_defaults(calib, coefs)
-	for modname,coefs in pairs(coefs.model) do
-		if not calib[modname] then
-			calib[modname] = {}
-		end
-
-		local cal = calib[modname]
-
-		for _,c in ipairs(coefs) do
-			cal[c.name] = c.value
-		end
+		return p
 	end
 end
 
-local function collect_cmodels(coefs, mapper)
+function calibrator_mt.__index:wrap_costf(costf, penaltyf)
 	local models = {}
-
-	for modname,_ in pairs(coefs.model) do
-		-- TODO pick only optimized ones
-		table.insert(models, mapper.graph:mapping_m(modname).mod)
+	for _,m in pairs(self.models) do
+		table.insert(models, m)
 	end
 
-	return models
-end
+	local nparam = #self.parameters
+	local params = ffi.new("double *[?]", nparam)
+	for i,p in ipairs(self.parameters) do
+		params[i-1] = p.ptr
+	end
 
-local function update_model_coef(self, x)
-	--print(self.name, self.ptr[0], "->", x)
-	self.ptr[0] = x
-end
+	if penaltyf == false then
+		penaltyf = function() return 0 end
+	elseif not penaltyf then
+		penaltyf = self:penaltyf()
+	end
 
-local function set_updates(coefs, mapper, cfg)
-	-- TODO sim coefs
-	
-	for modname,co in pairs(coefs.model) do
-		local coef_idx = {}
-		local fm = cfg.fhk_models[modname]
-		for idx,cname in ipairs(fm.coeffs) do
-			coef_idx[cname] = idx
+	return function(xs)
+		for i=0, nparam-1 do
+			params[i][0] = xs.data[i]
 		end
-		for _,c in ipairs(co) do
-			c.ptr = mapper.graph:mapping_m(modname).mod.coefs + (coef_idx[c.name]-1)
-			c.update = update_model_coef
+
+		for i=1, #models do
+			models[i]:calibrate()
 		end
+
+		return costf() + penaltyf(xs)
 	end
 end
 
-local function collect_coefs(coefs)
-	local ret = {}
-	-- TODO sim coefs
-	
-	for _,cs in pairs(coefs.model) do
-		for _,c in ipairs(cs) do
-			if c.optimize then
-				table.insert(ret, c)
-			end
+function calibrator_mt.__index:newpopf(v)
+	return function(xs)
+		for i,p in ipairs(self.parameters) do
+			xs.data[i-1] = v(p.opt)
 		end
 	end
-
-	return ret
 end
 
-local function recalibrate(coefs, cmodels, x)
-	for i,c in ipairs(coefs) do
-		c:update(x.data[i-1])
-	end
-
-	for _,m in ipairs(cmodels) do
-		m:calibrate()
-	end
-
-	-- TODO calibrate sim coefs
+local function linear_param(p)
+	return p.min + math.random() * (p.max - p.min)
 end
 
-local function penalty(cs, x)
-	-- XXX
-	local ret = 0
-	for i,c in ipairs(cs) do
-		local v = x.data[i-1]
-		if v < c.min or v > c.max then
-			ret = ret + 10000
-		end
-	end
-	return ret
+function calibrator_mt.__index:optimizer(config)
+	local costf = self:wrap_costf(config.costf, config.penaltyf)
+	local optimizer = config.optimizer or
+		neldermead.optimizer(costf, #self.parameters, config.optimizer_config or {})
+	optimizer:newpop(self:newpopf(config.newparam or linear_param))
+	return optimizer
 end
 
-local function randpop(coefs, x)
-	for i,c in ipairs(coefs) do
-		x.data[i-1] = c.min + math.random() * (c.max - c.min)
-	end
-end
+function calibrator_mt.__index:dump(xs)
+	local solution = {}
 
-local function solved(coefs, x)
-	for i,c in ipairs(coefs) do
-		c.solution = tonumber(x.data[i-1])
-	end
-end
-
-local function write_solution(coefs)
-	-- TODO sim
-	
-	local cal = {}
-
-	for name,cs in pairs(coefs.model) do
-		cal[name] = {}
-		for _,c in ipairs(cs) do
-			--print(c.name, c.value, c.solution)
-			cal[name][c.name] = c.solution
-		end
+	for name,_ in pairs(self.models) do
+		solution[name] = {}
 	end
 
-	local encode = require "json.encode"
-	print(encode(cal))
+	for i,p in ipairs(self.parameters) do
+		solution[p.model][p.name] = tonumber(xs.data[i-1])
+	end
+
+	return solution
 end
 
+function calibrator_mt.__index:optimize(config)
+	local optimizer = self:optimizer(config)
+	optimizer()
+	return self:dump(optimizer.solution)
+end
+
+--------------------------------------------------------------------------------
 
 local function main(args)
-	if not args.coefs then error("No coefficient file, give with -p") end
-	if not args.calibrator then error("No calibrator script, give with -C") end
+	local env = sim_env.from_cmdline(args.config)
+	local coef =  misc.readjson(args.coef or error("No coefficient file"))
+			or error(string.format("%s: failed to read coefficients", args.coef))
+	local costf = env:run_file(args.calibrator or error("No calibrator file"))
+		or error(string.format("%s: script didn't return a cost function", args.calibrator))
+
+	local calibrator = calibrator(env, coef)
 	
-	-- TODO: optionally take this as a parameter for repro
-	math.randomseed(os.time())
-
-	local coefs = read_coefs(misc.readjson(args.coefs))
-	local cfg = conf.read_cmdline(args.config)
-	write_defaults(cfg.calib, coefs)
-	local sim, env = sim_env.from_conf(cfg)
-	set_updates(coefs, env.mapper, cfg)
-	local cs = collect_coefs(coefs)
-	local cmodels = collect_cmodels(coefs, env.mapper)
-	env:require_all(args.scripts or {})
-
-	env.m2.calibrate = {
-		args = args,
-		env  = env
-	}
-
-	local costf = env:run_file(args.calibrator)
-
+	local sim = env.sim
 	sim:compile()
-	sim:savepoint()
-
-	local F = function(x)
-		recalibrate(cs, cmodels, x)
-		return costf() + penalty(cs, x)
+	
+	if args.input then
+		sim:event("calibrate:setup", misc.readjson(args.input))
 	end
 
-	local optimize = nmopt.optimizer(F, #cs, {max_iter=2000})
-	optimize:newpop(function(x) randpop(cs, x) end)
-	optimize()
+	local solution = calibrator:optimize {
+		costf = costf,
+		optimizer_config = { max_iter = tonumber(args.m) or 2000 }
+	}
 
-	solved(cs, optimize.solution)
-	write_solution(coefs)
+	local encode = require "json.encode"
+	print(encode(solution))
 end
 
 return {
 	cli_main = {
 		main = main,
-		usage = "[-c config] [-s scripts] [-i input] [-p coefs] [-C calibrator]",
+		usage = "calibrator coefs [-c config] [-i input] [-m maxiter]",
 		flags = {
+			cli.positional("calibrator"),
+			cli.positional("coef"),
 			cli.opt("-c", "config"),
-			cli.opt("-s", "scripts", "multiple"),
 			cli.opt("-i", "input"),
-			cli.opt("-p", "coefs"),
-			cli.opt("-C", "calibrator")
+			cli.opt("-m", "m"),
 		}
-	}
+	},
+
+	calibrator = calibrator
 }

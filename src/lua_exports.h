@@ -1,7 +1,6 @@
 #include "sim.h"
 #include "vec.h"
 #include "grid.h"
-#include "mappings.h"
 #include "vgrid.h"
 #include "fhk.h"
 #include "graph.h"

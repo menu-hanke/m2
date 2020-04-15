@@ -4,9 +4,10 @@ local sim_env = require "sim_env"
 local log = require("log").logger
 
 local function main(args)
-	local sim, env = sim_env.from_cmdline(args.config)
+	local env = sim_env.from_cmdline(args.config)
 	env:require_all(args.scripts or {})
 
+	local sim = env.sim
 	sim:compile()
 
 	if args.instr then
@@ -19,7 +20,7 @@ local function main(args)
 			for i,v in ipairs(data) do
 				log:verbose("[%s] %d/%d", args.input, i, #data)
 				sim:enter()
-				env:setup(v)
+				sim:event("sim:setup", v)
 				sim:simulate(instr)
 				sim:exit()
 				sim:restore()

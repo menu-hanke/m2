@@ -11,16 +11,13 @@ local function new(sim, typ, func, life)
 	return setmetatable({ type = typ, ptr = p }, data_mt), ffi.cast(ffi.typeof("$ *", typ.ctype), p)
 end
 
-function data_mt.__index:define_mappings(def, map)
-	local base = ffi.cast("char *", self.ptr)
-	for name, offset, size in typing.offsets(self.type) do
-		map(name, function(desc)
-			local mapping = def.arena:new("struct fhkM_dataV")
-			mapping.flags.resolve = C.FHKM_MAP_DATA
-			mapping.flags.type = typing.demote(desc, size)
-			mapping.ref = base + offset
-			return mapping, true
-		end)
+function data_mt.__index:fhk_map(name)
+	local typ = self.type.vars[name]
+	return typ and function(solver, mapper, var)
+		return C.fhkM_pack_ptrV(
+			mapper:infer_desc(var, typ),
+			typing.memb_ptr(self.type.ctype, name, self.ptr)
+		), true
 	end
 end
 

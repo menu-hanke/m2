@@ -116,7 +116,7 @@ struct fhk_graph;
 
 typedef int (*fhk_model_exec)(struct fhk_graph *G, void *udata, pvalue *ret, pvalue *args);
 typedef int (*fhk_var_resolve)(struct fhk_graph *G, void *udata, pvalue *value);
-typedef const char *(*fhk_desc)(void *udata);
+typedef const char *(*fhk_desc)(struct fhk_graph *G, void *x);
 
 struct fhk_graph {
 	fhk_model_exec exec_model;

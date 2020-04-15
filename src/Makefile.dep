@@ -7,15 +7,13 @@ type.o: type.c type.h grid.h bitmap.h def.h sim.h
 mem.o: mem.c mem.h def.h
 sim.o: sim.c def.h mem.h sim.h
 grid.o: grid.c grid.h bitmap.h def.h sim.h
-vec.o: vec.c vec.h sim.h def.h
+vec.o: vec.c vec.h sim.h mem.h def.h
 vmath.o: vmath.c vmath.h def.h
 vgrid.o: vgrid.c vgrid.h vec.h sim.h grid.h bitmap.h def.h
 graph_map.o: graph_map.c fhk.h bitmap.h def.h mem.h type.h grid.h sim.h \
- graph.h model/model.h mappings.h vec.h
+ graph.h model/model.h vec.h
 graph_solve.o: graph_solve.c fhk.h bitmap.h def.h mem.h type.h grid.h \
  sim.h graph.h model/model.h
-mappings.o: mappings.c graph.h fhk.h bitmap.h def.h mem.h type.h grid.h \
- sim.h model/model.h mappings.h vec.h
 model/mlib.o: model/mlib.c model/model.h model/../type.h model/../grid.h \
  model/../bitmap.h model/../def.h model/../sim.h model/../list.h
 model/model_Const.o: model/model_Const.c model/model_Const.h model/model.h \
@@ -30,7 +28,7 @@ model/model_R.o: model/model_R.c model/model_R.h model/mlib.h model/model.h \
 model/model_SimoC.o: model/model_SimoC.c model/model_SimoC.h model/mlib.h \
  model/model.h model/../type.h model/../grid.h model/../bitmap.h \
  model/../def.h model/../sim.h
-lua/m2_cdef.lua: lua_exports.h sim.h vec.h grid.h bitmap.h def.h \
- mappings.h graph.h fhk.h mem.h type.h model/model.h vgrid.h vmath.h \
- model/all.h model/model_Const.h model/model_R.h model/mlib.h \
- model/model_SimoC.h model/model_Lua.h
+lua/m2_cdef.lua: lua_exports.h sim.h vec.h grid.h bitmap.h def.h vgrid.h \
+ fhk.h mem.h type.h graph.h model/model.h vmath.h model/all.h \
+ model/model_Const.h model/model_R.h model/mlib.h model/model_SimoC.h \
+ model/model_Lua.h

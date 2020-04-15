@@ -1,4 +1,5 @@
 local m2 = require "m2"
+local trees = require("sim").trees
 local sim = m2.sim
 
 local dclass = {
@@ -97,56 +98,54 @@ local costf = {
 		local mf_dc = state.meas_f_dc
 
 		local ret = 0
+		--print("-----")
 		for i=1, #dclass do
 			ret = ret + w_G * math.abs(ba_dc[i] - mba_dc[i])^ex_G
 			ret = ret + w_N * math.abs(f_dc[i] - mf_dc[i])^ex_N
+			--print(i, ba_dc[i], f_dc[i])
 		end
 
 		return (5/state.step) * ret
 	end
 }
 
-m2.on("measure", function(state)
-	state.cost = costf[use_costf](state)
-end)
+--------------------------------------------------------------------------------
 
-local decode = require "json.decode"
-local infile = io.open(m2.calibrate.args.input)
-local data = decode(infile:read("*a"))
-infile:close()
+local plots
+m2.on("calibrate:setup", function(data)
+	plots = data 
 
-m2.on("sim:compile", function()
-	for i,v in ipairs(data) do
-		v.index = i
+	for _,v in ipairs(plots) do
 		precalc_dist(v)
-
-		local instr = m2.record()
-		local t_left = v.step
-		while t_left > 0 do
-			local step = math.min(t_left, 5)
-			instr.grow(step)
-			t_left = t_left - step
-		end
-		instr.measure(v)
-		v.instr = sim:compile_instr(instr)
 	end
+
+	sim:savepoint()
 end)
+
+-- don't pregenerate instructions since each instruction generates a new root trace
+-- instead just run the time loop here
+local function simulate(plot)
+	sim:event("sim:setup", plot)
+
+	local t_left = plot.step
+	while t_left > 0.01 do
+		local step = math.min(t_left, 5)
+		sim:event("grow", step)
+		t_left = t_left - step
+	end
+
+	return costf[use_costf](plot)
+end
 
 return function()
-	for i,v in ipairs(data) do
+	local cost = 0
+
+	for _,v in ipairs(plots) do
 		sim:restore()
 		sim:enter()
-		sim:event("sim:setup", v) -- XXX
-		sim:simulate(v.instr)
+		cost = cost + simulate(v)
 		sim:exit()
 	end
 
-	local ret = 0
-	for i,v in ipairs(data) do
-		ret = ret + v.cost
-	end
-
-	--print("cost: ", ret)
-
-	return ret
+	return cost
 end

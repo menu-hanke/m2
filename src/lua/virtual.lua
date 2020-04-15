@@ -1,4 +1,5 @@
 local ffi = require "ffi"
+local typing = require "typing"
 local C = ffi.C
 
 local virtuals_mt = { __index = {} }
@@ -16,38 +17,35 @@ function virtuals_mt.__index:add(func)
 	return handle
 end
 
-function virtuals_mt.__index:vset(vis)
+function virtuals_mt.__index:vset()
 	return setmetatable({
 		virtuals = self,
-		vis      = vis,
-		handles  = {}
+		handles  = {},
+		types    = {},
+		const    = {}
 	}, vset_mt)
 end
 
-local function wrap_interrupt(func, tname)
-	return function(solver, u)
-		local r = func(u)
-		local iv = ffi.new("pvalue")
-		iv[tname] = r
-		return tonumber(C.fhkG_solver_resumeV(solver, iv))
+local function wrap(func, tname)
+	return function(solver)
+		return ffi.new("pvalue", {[tname]=func(solver)})
 	end
 end
 
-function vset_mt.__index:define(name, f, tname)
-	self.handles[name] = self.virtuals:add(wrap_interrupt(f, tname))
+function vset_mt.__index:virtual(name, f, typ, const)
+	typ = typing.pvalues[typ] or typing.tvalues[typ] or typ
+	self.handles[name] = self.virtuals:add(wrap(f,
+		typ.name or error(string.format("Not a pvalue: %s", typ))))
+	self.types[name] = typ
+	if const then self.const[name] = true end
 end
 
-function vset_mt.__index:define_mappings(def, map)
-	local const = def.udata[self].const
-
-	for name,handle in pairs(self.handles) do
-		map(name, function(desc)
-			local mapping = def.arena:new("struct fhkG_vintV")
-			mapping.flags.resolve = C.FHKG_MAP_INTERRUPT
-			mapping.flags.type = desc
-			mapping.flags.handle = handle
-			return mapping, const
-		end)
+function vset_mt.__index:fhk_map(name)
+	return self.handles[name] and function(solver)
+		return C.fhkM_pack_intV(
+			self.types[name].desc,
+			self.handles[name]
+		), self.const[name]
 	end
 end
 

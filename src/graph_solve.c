@@ -178,6 +178,10 @@ fhkG_solver_res fhkG_solver_resumeV(struct fhkG_solver *S, pvalue iv){
 #endif
 }
 
+struct fhk_graph *fhkG_solver_graph(fhkG_solver *S){
+	return S->G;
+}
+
 bool fhkG_solver_is_iter(struct fhkG_solver *S){
 	return !!S->iter;
 }

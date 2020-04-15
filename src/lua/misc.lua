@@ -30,7 +30,7 @@ local function readcsv(fname)
 	local data = {}
 
 	for l in f:lines() do
-		local d = map(split(l), tonumber)
+		local d = map(split(l), trim)
 		if #d ~= #header then
 			error(string.format("Invalid line: %s (expected %d values but have %d)",
 				l, #d, #header))
@@ -46,6 +46,7 @@ end
 local function readjson(fname)
 	local decode = require "json.decode"
 	local fp = io.open(fname)
+	if not fp then return nil end
 	local ret = decode(fp:read("*a"))
 	fp:close()
 	return ret

@@ -58,6 +58,19 @@ local function tvalue_from_desc(desc)
 	error(string.format("No tvalue matching desc 0x%x", desc))
 end
 
+local function is_integer(ctype)
+	-- there's probably a better way to do this or maybe not
+	-- the tostring method is probably implementation defined so I don't want to rely on it
+	return ffi.istype("uint8_t", ctype)
+		or ffi.istype("uint16_t", ctype)
+		or ffi.istype("uint32_t", ctype)
+		or ffi.istype("uint64_t", ctype)
+		or ffi.istype("int8_t", ctype)
+		or ffi.istype("int16_t", ctype)
+		or ffi.istype("int32_t", ctype)
+		or ffi.istype("int64_t", ctype)
+end
+
 -- see type.h (this is the TYPE_PROMOTE macro)
 local function promote(t)
 	return bit.bor(t, 3)
@@ -165,7 +178,7 @@ local function yield_offsets(t, off)
 		if vi.vars then
 			yield_offsets(vi, offset)
 		else
-			coroutine.yield(f, offset, ffi.sizeof(vi.ctype))
+			coroutine.yield(f, offset, vi)
 		end
 	end
 end
@@ -238,12 +251,15 @@ local function inject(env)
 		import_bool = function(v) return v and 1 or 0 end,
 		export_enum = C.vbunpack,
 		export_bool = function(v) return v ~= 0 end,
-		type        = totype
+		type        = totype,
+		class       = class,
 	})
 end
 
 return {
 	tvalues       = tvalues,
+	tvalue_from_desc = tvalue_from_desc,
+	is_integer    = is_integer,
 	pvalues       = pvalues,
 	promote       = promote,
 	demote        = demote,

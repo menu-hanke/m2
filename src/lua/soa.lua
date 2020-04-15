@@ -1,5 +1,6 @@
 local ffi = require "ffi"
 local typing = require "typing"
+local fhk = require "fhk"
 local kernel = require "kernel"
 local C = ffi.C
 
@@ -129,39 +130,70 @@ local function band_offsets(typ, band)
 		if f.vars then
 			typing.yield_offsets(field, 0)
 		else
-			coroutine.yield(f, 0, ffi.sizeof(typ.vars[f].ctype))
+			coroutine.yield(f, 0, typ.vars[f])
 		end
 	end)
 end
 
-function soa_mt.__index:define_mappings(def, map)
-	local udata = def.udata[self]
+local function mapper(soa)
+	local info = {}
 
-	udata.vp = def.arena:new("struct vec *")
-
-	if udata.bind then
-		udata.vp[0] = ffi.cast(vec_ctp, udata.bind)
-	end
-
-	if self ~= def.source and not udata.follow then
-		udata.idxp = def.arena:new("unsigned")
-	end
-
-	for band, name in ipairs(self.type.fields) do
-		local stride = ffi.sizeof(self.type.vars[name].ctype)
-		for field, offset, size in band_offsets(self.type, band) do
-			map(field, function(desc)
-				local mapping = def.arena:new("struct fhkM_vecV")
-				mapping.flags.resolve = C.FHKM_MAP_VEC
-				mapping.flags.type = typing.demote(desc, size)
-				mapping.flags.offset = offset
-				mapping.flags.stride = stride
-				mapping.flags.band = band-1
-				mapping.vec = udata.vp
-				mapping.idx = udata.idxp or def.udata.idxp
-				return mapping, mapping.idx ~= def.udata.idxp
-			end)
+	local typ = soa.type
+	for band, name in ipairs(typ.fields) do
+		local stride = ffi.sizeof(typ.vars[name].ctype)
+		for field, offset, tp in band_offsets(typ, band) do
+			info[field] = {
+				band   = band-1,
+				offset = offset,
+				stride = stride,
+				type   = tp
+			}
 		end
+	end
+
+	return function(name, how)
+		local i = info[name]
+
+		how = how or "follow"
+		return i and function(solver, mapper, var)
+			local arena = solver:arena()
+			local udata = fhk.udata(solver)
+
+			if udata[soa] and udata[soa].how ~= how then
+				error(string.format("mapping conflict: can't map same structure as '%s' and '%s'",
+					udata[soa].how, how))
+			end
+
+			if not udata[soa] then
+				udata[soa] = {
+					vp   = arena:new(vec_ctp),
+					idxp = how == "static" and arena:new("unsigned"),
+					how  = how
+				}
+			end
+
+			local vv = arena:new("struct fhkM_vecV")
+			vv.offset = i.offset
+			vv.stride = i.stride
+			vv.band = i.band
+			vv.vec = udata[soa].vp
+			vv.idx = udata[soa].idxp or udata.idxp
+			return C.fhkM_pack_vecV(mapper:infer_desc(var, i.type), vv), how == "static"
+		end
+	end
+end
+
+function soa_mt.__index:fhk_map(...)
+	if not self._mapper then
+		self._mapper = mapper(self)
+	end
+
+	return self._mapper(...)
+end
+
+function soa_mt.__index:fhk_mapper(how)
+	return function(name)
+		return self:fhk_map(name, how)
 	end
 end
 
@@ -181,15 +213,20 @@ local function bind_result(solver, nv, bufs)
 	end
 end
 
-function soa_mt.__index:wrap_solver(def)
-	local vp = def.udata[self].vp
-	local iter = def.arena:new("struct fhkM_iter_range")
+function soa_mt.__index:fhk_over(solver)
+	local arena = solver:arena()
+	local iter = arena:new("struct fhkM_iter_range")
 	C.fhkM_range_init(iter)
-	def.udata.idxp = typing.memb_ptr("struct fhkM_iter_range", "idx", iter, "unsigned *")
+	local vp = arena:new(vec_ctp)
 
-	local solve = def:create_iter(iter)
-	local c_solver = def.solver
-	local nv = def.nv
+	local udata = fhk.udata(solver)
+	udata.vp = vp
+	udata.idxp = typing.memb_ptr("struct fhkM_iter_range", "idx", iter, "unsigned *")
+	udata.how = "follow"
+	udata[self] = udata
+
+	local c_solver = solver:create(iter)
+	local nv = #solver.names
 	local sim = self.sim
 
 	-- alloc:
@@ -207,26 +244,22 @@ function soa_mt.__index:wrap_solver(def)
 
 		vp[0] = ffi.cast(vec_ctp, vec)
 		iter.len = #vec
-		return solve()
+		return c_solver()
 	end
 end
 
-function soa_mt.__index:bind_solver(udata, vec, idx)
-	udata = udata[self]
+function soa_mt.__index:fhk_bind(solver, vec, idx)
+	local udata = fhk.udata(solver)[self]
 	udata.vp[0] = ffi.cast(vec_ctp, vec)
-	if idx then
-		udata.idxp[0] = idx
-	end
+	if idx then udata.idxp[0] = idx end
 end
 
-function soa_mt.__index:solver_pos(udata)
-	local sudata = udata[self]
-	local vp = ffi.cast(self.vec_ctp, sudata.vp[0])
-	local idx = tonumber(sudata.idxp and sudata.idxp[0] or udata.idxp[0])
+function soa_mt.__index:fhk_solver_ptr(solver)
+	local udata = fhk.udata(solver)[self]
+	local vp = ffi.cast(self.vec_ctp, udata.vp[0])
+	local idx = tonumber(udata.idxp and udata.idxp[0] or fhk.udata(solver).idxp[0])
 	return vp, idx
 end
-
--- TODO: zband solver
 
 --------------------------------------------------------------------------------
 

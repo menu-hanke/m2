@@ -1,5 +1,6 @@
+local fhk = require "fhk"
+local env = require "env"
 local misc = require "misc"
-local conf = require "conf"
 
 local sandbox = {}
 
@@ -20,59 +21,6 @@ local function create(sim)
 		m2  = m2,
 		sim = sim
 	}, simenv_mt)
-end
-
-local function from_conf(cfg)
-	local sim = require("sim").create()
-	local env = create(sim)
-
-	local fhk = require("fhk")
-	local mapper = fhk.hook(fhk.build_graph(cfg.fhk_vars, cfg.fhk_models))
-	local exf = fhk.create_models(cfg.fhk_vars, cfg.fhk_models, cfg.calib)
-	mapper:bind_models(exf)
-	env.___exf = exf -- XXX: this is not accessed, it's just anchoring it to avoid gc
-
-	env:inject_env()
-	env:inject_base()
-	env:inject_fhk(mapper)
-	env:inject_masks(cfg)
-
-	for _,modname in pairs(cfg.modules) do
-		env:require(modname)
-	end
-
-	return sim, env
-end
-
--- this is mostly for debugging, it creates a sim without any config (ie. no fhk/types available)
-local function plain()
-	local sim = require("sim").create()
-	local env = create(sim)
-
-	env:inject_env()
-	env:inject_base()
-
-	return sim, env
-end
-
-local function exists(fname)
-	local fp = io.open(fname)
-	if fp then
-		io.close(fp)
-		return true
-	end
-end
-
-local function from_cmdline(cfname)
-	if cfname then
-		return from_conf(conf.read(cfname))
-	end
-
-	if exists("Melasim.lua") then
-		return from_conf(conf.read("Melasim.lua"))
-	end
-
-	return plain()
 end
 
 function simenv_mt.__index:inject_env()
@@ -99,13 +47,8 @@ function simenv_mt.__index:inject_base()
 	require("vmath").inject(self)
 end
 
-function simenv_mt.__index:inject_fhk(mapper)
-	self.mapper = mapper
-	require("fhk").inject(self)
-end
-
-function simenv_mt.__index:inject_masks(cfg)
-	self.m2.masks = cfg.class
+function simenv_mt.__index:inject_fhk(def)
+	require("fhk").inject(self, def)
 end
 
 local function sandbox_require(env, module)
@@ -181,13 +124,85 @@ function simenv_mt.__index:run_file(fname)
 	return f()
 end
 
-function simenv_mt.__index:setup(data)
-	self.sim:event("sim:setup", data)
+--------------------------------------------------------------------------------
+
+local envconf_mt = { __index={} }
+
+local function envconf()
+	return setmetatable({
+		modules = {}
+	}, envconf_mt)
 end
+
+function envconf_mt.__index:fhk_def()
+	if not self._fhk_def then
+		self._fhk_def = fhk.def()
+	end
+
+	return self._fhk_def
+end
+
+function envconf_mt.__index:module(module)
+	table.insert(self.modules, module)
+end
+
+local function conf_env(conf)
+	local fhk_env
+
+	local cenv = setmetatable({
+		sim   = misc.delegate(conf, conf.module),
+		graph = function(fname)
+			fhk_env = fhk_env or fhk.def_env(conf:fhk_def())
+			fhk_env.read(fname)
+		end
+	}, { __index=_G })
+
+	cenv.read = function(fname) return env.read(cenv, fname) end
+	return cenv
+end
+
+local function from_conf(conf)
+	local sim = require("sim").create()
+	local env = create(sim)
+
+	env:inject_env()
+	env:inject_base()
+
+	if conf._fhk_def then
+		env:inject_fhk(conf._fhk_def)
+	end
+
+	env:require_all(conf.modules)
+	return env
+end
+
+local function exists(fname)
+	local fp = io.open(fname)
+	if fp then
+		io.close(fp)
+		return true
+	end
+end
+
+local function from_cmdline(cfname)
+	local conf = envconf()
+	local cenv = conf_env(conf)
+
+	cfname = cfname or (exists("Melasim.lua") and "Melasim.lua")
+	if cfname then
+		cenv.read(cfname)
+	end
+
+	return from_conf(conf)
+end
+
+--------------------------------------------------------------------------------
 
 return {
 	init_sandbox = init_sandbox,
 	create       = create,
+	conf         = envconf,
+	conf_env     = conf_env,
 	from_conf    = from_conf,
 	from_cmdline = from_cmdline
 }

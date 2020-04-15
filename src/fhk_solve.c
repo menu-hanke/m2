@@ -88,8 +88,8 @@ static void init_given_cost(struct fhk_var *y);
 #define MARKED(b)         (b)->mark
 #define MARK(b)           MARKED(b) = 1
 #define UNMARK(b)         MARKED(b) = 0
-#define DESCV(v)          ((G)->debug_desc_var ? (G)->debug_desc_var((v)->udata) : ddescv(v))
-#define DESCM(m)          ((G)->debug_desc_model ? (G)->debug_desc_model((m)->udata) : ddescm(m))
+#define DESCV(v)          ((G)->debug_desc_var ? (G)->debug_desc_var((G), (v)) : ddescv(v))
+#define DESCM(m)          ((G)->debug_desc_model ? (G)->debug_desc_model((G), (m)) : ddescm(m))
 #define SWAP(A, B)        do { typeof(A) _t = (A); (A) = (B); (B) = _t; } while(0)
 
 // we can't use -ffast-math for the whole solver since the solver algorithm depends on infinities
@@ -127,8 +127,10 @@ int fhk_solve(struct fhk_graph *G, size_t nv, struct fhk_var **ys){
 	if(UNLIKELY(!!G->solver_state))
 		FAIL(FHK_RECURSION, NULL, NULL);
 
-	if(UNLIKELY(setjmp(s.exc_env)))
+	if(UNLIKELY(setjmp(s.exc_env))){
+		G->solver_state = NULL;
 		return G->last_error.err;
+	}
 
 	G->solver_state = &s;
 
@@ -148,7 +150,6 @@ int fhk_solve(struct fhk_graph *G, size_t nv, struct fhk_var **ys){
 	}
 
 	G->solver_state = NULL;
-
 	return FHK_OK;
 }
 

@@ -1,369 +1,389 @@
 local cli = require "cli"
-local conf = require "conf"
 local fhk = require "fhk"
-local typing = require "typing"
+local model = require "model"
 local misc = require "misc"
 local ffi = require "ffi"
 local C = ffi.C
 
-local function hook_udata(fvars, fmodels)
-	for name,fv in pairs(fvars) do
+local debugger_mt = { __index={} }
+
+local function hook(dbg)
+	for name,fv in pairs(dbg.fvars) do
 		fv.udata = ffi.cast("char *", name)
 	end
 
-	for name,fm in pairs(fmodels) do
+	for name,fm in pairs(dbg.fmodels) do
 		fm.udata = ffi.cast("char *", name)
 	end
-end
 
-local function hook_graph(g)
-	local G = g.G
+	local G = dbg.G
 
 	G.exec_model = function(G, udata, ret, args)
-		local model = g.models[ffi.string(udata)]
-		return model.exf(ret, args) or C.FHK_OK
+		return dbg:model(ffi.string(udata), ret, args) or C.FHK_OK
 	end
 
 	G.resolve_var = function(G, udata, value)
-		local var = g.vars[ffi.string(udata)]
-		return var.virtual(value) or C.FHK_OK
+		return dbg:var(ffi.string(udata), value) or C.FHK_OK
 	end
 
-	G.debug_desc_var = function(udata)
-		return udata
+	G.debug_desc_model = function(G, fm)
+		return dbg:modelstr(ffi.string(ffi.cast("struct fhk_model *", fm).udata))
 	end
 
-	G.debug_desc_model = function(udata)
-		return udata
+	G.debug_desc_var = function(G, fv)
+		return dbg:varstr(ffi.string(ffi.cast("struct fhk_var *", fv).udata))
+	end
+
+	-- the callbacks need to be freed when the debugger is freed but luajit doesn't
+	-- support __gc on tables and I don't want to overwrite the __gc for G,
+	-- so we need to do it this way and anchor the proxy to dbg
+	local p = newproxy(true)
+	getmetatable(p).__gc = function()
+		G.exec_model:free()
+		G.resolve_var:free()
+		G.debug_desc_var:free()
+		G.debug_desc_model:free()
+	end
+	dbg.proxy___ = p
+
+	dbg:reset()
+	return dbg
+end
+
+local function debugger(hooks, G, fvars, fmodels)
+	return hook(setmetatable({
+		hooks   = hooks or {},
+		G       = G,
+		fvars   = fvars,
+		fmodels = fmodels,
+		vars    = {},
+		models  = {}
+	}, debugger_mt))
+end
+
+----------------------------------------
+
+function debugger_mt.__index:model(name, ret, args)
+	local mod = self.models[name]
+	if mod then
+		return mod(ret, args)
+	elseif self.hooks.model then
+		return self.hooks.model(name, ret, args)
+	else
+		return -1
 	end
 end
 
-local dgraph_mt = { __index = {} }
-
-local function hook(G, fvars, fmodels, vars, models, exf, virtuals)
-	local gvars, gmods = {}, {}
-
-	for name,var in pairs(vars) do
-		gvars[name] = {
-			name    = name,
-			fv      = fvars[name],
-			ptype   = var.ptype,
-			virtual = virtuals and virtual[name]
-		}
-	end
-
-	for name,mod in pairs(models) do
-		gmods[name] = {
-			name    = name,
-			params  = mod.params,
-			returns = mod.returns,
-			fm      = fmodels[name],
-			exf     = exf and exf[name]
-		}
-	end
-
-	local g = setmetatable({
-		G        = G,
-		vars     = gvars,
-		models   = gmods
-	}, dgraph_mt)
-
-	hook_udata(fvars, fmodels)
-	hook_graph(g)
-	g:reset()
-	return g
-end
-
-local function bminit(x)
-	if type(x) == "number" then return {u8 = x} end
-	if type(x) == "string" then return {[x] = 1} end
-	return x or {u8 = 0}
-end
-
-function dgraph_mt.__index:reset(v, m)
-	C.fhk_reset(self.G, ffi.new("fhk_vbmap", bminit(v)), ffi.new("fhk_mbmap", bminit(m)))
-end
-
-function dgraph_mt.__index:virtual(name, f)
-	local v = self.vars[name]
-	local desc = v.ptype.desc
-
-	v.virtual = function(value)
-		value[0] = C.vimportd(f(), desc)
+function debugger_mt.__index:var(name, value)
+	local var = self.vars[name]
+	if var then
+		return var(value)
+	elseif self.hooks.var then
+		return self.hooks.var(name, value)
+	else
+		return -1
 	end
 end
 
-function dgraph_mt.__index:exf(name, f)
-	local m = self.models[name]
-	local atypes, rtypes = {}, {}
-	for i,p in ipairs(m.params) do atypes[i] = self.vars[p].ptype.desc end
-	for i,r in ipairs(m.returns) do rtypes[i] = self.vars[r].ptype.desc end
+function debugger_mt.__index:modelstr(name)
+	return self.hooks.modelstr and self.hooks.modelstr(name) or name
+end
 
-	m.exf = function(ret, args)
+function debugger_mt.__index:varstr(name)
+	return self.hooks.varstr and self.hooks.varstr(name) or name
+end
+
+----------------------------------------
+
+-- type(x): nil           -> assume it's handled by a hook, just mark it as given
+--          pvalue        -> mark as given value (pvalue)
+--          anything else -> assume it's callable (virtual) and mark in vars
+function debugger_mt.__index:given(name, x)
+	local fv = self.fvars[name]
+	fv.bitmap.given = 1
+
+	if ffi.istype("pvalue", x) then
+		fv.bitmap.has_value = 1
+		fv.value = x
+	elseif x ~= nil then
+		self.vars[name] = x
+	end
+end
+
+function debugger_mt.__index:read(name)
+	local fv = self.fvars[name]
+	if fv.bitmap.has_value == 1 then
+		return fv.value
+	end
+end
+
+function debugger_mt.__index:reset()
+	C.fhk_reset(self.G, ffi.new("fhk_vbmap", {u8=0}), ffi.new("fhk_mbmap", {u8=0}))
+end
+
+-- this is similar to solver_failed_m, but they have different assumptions
+-- (this graph is mapped using the debugger and hence has more information)
+-- TODO?: this and solver_failed_m could be made into a single function?
+function debugger_mt.__index:error()
+	local err = self.G.last_error
+	local context = {string.format("Solver failed: %s (%d)", self.G:error(), err.err)}
+
+	if err.var ~= nil then
+		local name = ffi.string(err.var.udata)
+		table.insert(context, string.format("\t* Caused by this variable: %s", name))
+		if self.vars[name] then
+			table.insert(context, string.format("\t  -> mapping: %s", self.vars[name]))
+		end
+	end
+
+	if err.model ~= nil then
+		local name = ffi.string(err.model.udata)
+		table.insert(context, string.format("\t* Caused by this model: %s", name))
+		if self.models[name] then
+			table.insert(context, string.format("\t  -> mapping: %s", self.models[name]))
+		end
+	end
+
+	if self.hooks.error then
+		local ctx = self.hooks.error(err)
+		if ctx then
+			table.insert(context, ctx)
+		end
+	end
+
+	return table.concat(context, "\n")
+end
+
+function debugger_mt.__index:collect(names)
+	local ys = ffi.new("struct fhk_var *[?]", #names)
+
+	for i,name in ipairs(names) do
+		ys[i-1] = self.fvars[name]
+	end
+
+	return #names, ys
+end
+
+function debugger_mt.__index:solve(names)
+	return C.fhk_solve(self.G, self:collect(names)) == C.FHK_OK
+end
+
+function debugger_mt.__index:reduce(names)
+	local vmask = self.G:newvmask()
+	local mmask = self.G:newmmask()
+	local nv, ys = self:collect(names)
+	local ok = C.fhk_reduce(self.G, nv, ys, vmask, mmask) == C.FHK_OK
+	return ok, self:collectmask(vmask, mmask)
+end
+
+function debugger_mt.__index:collectmask(vmask, mmask)
+	local vnames = {}
+	local mnames = {}
+
+	for i=0, tonumber(self.G.n_var)-1 do
+		if vmask[i] ~= 0 then
+			table.insert(vnames, ffi.string(self.G.vars[i].udata))
+		end
+	end
+
+	for i=0, tonumber(self.G.n_mod)-1 do
+		if mmask[i] ~= 0 then
+			table.insert(mnames, ffi.string(self.G.models[i].udata))
+		end
+	end
+
+	return vnames, mnames
+end
+
+-- these call Lua -> C -> Lua, which should not be compiled
+jit.off(debugger_mt.__index.solve)
+jit.off(debugger_mt.__index.reduce)
+
+--------------------------------------------------------------------------------
+
+local function tomodel(apv, rpv, f)
+	return function(ret, args)
 		local a = {}
-		for i,t in ipairs(atypes) do
-			a[i] = tonumber(C.vexportd(args[i-1], t))
+		for i,pv in ipairs(apv) do
+			a[i] = args[i-1][pv]
 		end
 
 		local r = {f(unpack(a))}
 
-		for i,t in ipairs(rtypes) do
-			ret[i-1] = C.vimportd(r[i], t)
+		for i,pv in ipairs(rpv) do
+			ret[i-1][pv] = r[i]
 		end
 	end
 end
 
-function dgraph_mt.__index:collectvs(names)
-	local ret = ffi.new("struct fhk_var *[?]", #names)
-
-	for i,name in ipairs(names) do
-		ret[i-1] = self.vars[name].fv
-	end
-
-	return #names, ret
-end
-
-function dgraph_mt.__index:value(name)
-	local v = self.vars[name]
-	if self.G.v_bitmaps[v.fv.idx].has_value == 0 then
-		return
-	end
-
-	return tonumber(C.vexportd(v.fv.value, v.ptype.desc))
-end
-
-function dgraph_mt.__index:collect_values(names)
-	local ret = {}
-	for _,name in ipairs(names) do
-		ret[name] = self:value(name)
-	end
-	return ret
-end
-
-function dgraph_mt.__index:given_values(given)
-	for name, val in pairs(given) do
-		local fv = self.vars[name].fv
-		local bitmap = self.G.v_bitmaps[fv.idx]
-		bitmap.given = 1
-		bitmap.has_value = 1
-		fv.value = C.vimportd(val, self.vars[name].ptype.desc)
+local function tovar(pv, f)
+	return function(value)
+		value[pv] = f()
 	end
 end
-
-function dgraph_mt.__index:err()
-	local le = self.G.last_error
-	local e = { err = le.err }
-
-	if le.var ~= ffi.NULL then
-		e.var = self.vars[ffi.string(le.var.udata)]
-	end
-
-	if le.model ~= ffi.NULL then
-		e.model = self.models[ffi.string(le.model.udata)]
-	end
-
-	return e
-end
-
-function dgraph_mt.__index:solve(names)
-	local nv, ys = self:collectvs(names)
-
-	return function(given)
-		self:reset()
-		self:given_values(given)
-		local r = C.fhk_solve(self.G, nv, ys)
-		if r == C.FHK_OK then
-			return true, self:collect_values(names)
-		else
-			return false, self:err()
-		end
-	end
-end
-
-function dgraph_mt.__index:reduce(names)
-	local nv, ys = self:collectvs(names)
-	local G = self.G
-	local vmask = G:newvmask()
-	local mmask = G:newmmask()
-	local r = C.fhk_reduce(G, nv, ys, vmask, mmask)
-	if r ~= C.FHK_OK then
-		return false, self:err()
-	end
-
-	local size = C.fhk_subgraph_size(G, vmask, mmask)
-	local H = ffi.gc(ffi.cast("struct fhk_graph *", C.malloc(size)), C.free)
-	C.fhk_copy_subgraph(H, G, vmask, mmask)
-
-	local hvars, hmodels = {}, {}
-
-	for i=0, tonumber(H.n_var)-1 do
-		local fv = H.vars[i]
-		local name = ffi.string(fv.udata)
-		local v = self.vars[name]
-		hvars[name] = {
-			name    = name,
-			fv      = fv,
-			ptype   = v.ptype,
-			virtual = v.virtual
-		}
-	end
-
-	for i=0, tonumber(H.n_mod)-1 do
-		local fm = H.models[i]
-		local name = ffi.string(fm.udata)
-		local m = self.models[name]
-		hmodels[name] = {
-			name    = name,
-			fm      = fm,
-			params  = m.params,
-			returns = m.returns,
-			exf     = m.exf
-		}
-	end
-
-	return true, setmetatable({
-		G      = H,
-		vars   = hvars,
-		models = hmodels
-	}, dgraph_mt)
-end
-
--- solve will call back to Lua code via G hooks so this must not be compiled
-require("jit").off(dgraph_mt.__index.solve)
 
 --------------------------------------------------------------------------------
 
-local function reportv(visited, ret, g, name, reason)
-	if visited[name] then
-		return
+local function adj(s, len)
+	if #s > len then return s:sub(1, len) end
+	if #s < len then return s .. (" "):rep(len-#s) end
+	return s
+end
+
+local function printtable(tab, opt)
+	local colmax = {}
+
+	for _,row in ipairs(tab) do
+		for c,s in ipairs(row) do
+			colmax[c] = math.max(s and #s or 0, colmax[c] or 0)
+		end
 	end
 
-	visited[name] = true
+	local ret = {}
 
-	local fv = g.vars[name].fv
-	local bitmap = g.G.v_bitmaps[fv.idx]
+	for r,row in ipairs(tab) do
+		if r > 1 then table.insert(ret, "\n") end
+		for c,s in ipairs(row) do
+			if c > 1 then table.insert(ret, "    ") end
+			table.insert(ret, adj(s or "", colmax[c]))
+		end
+	end
 
-	local r = {
-		value  = g:value(name),
-		desc   = name,
-		reason = reason,
-		given  = bitmap.given == 1,
-		solved = bitmap.chain_selected == 1
+	return table.concat(ret, "")
+end
+
+local function bit(b, value)
+	return value == 1 and b or " "
+end
+
+local function reportv(dbg, mapper, name)
+	local fv = dbg.fvars[name]
+
+	if fv.bitmap.has_bound == 0 then
+		return -- not relevant
+	end
+
+	return {
+		name,
+		fv.bitmap.has_value == 1 and ""..mapper:export(name, dbg:read(name), "class"),
+		fv.bitmap.chain_selected == 1 and ffi.string(fv.model.udata),
+		fv.bitmap.given == 0 and (
+			fv.bitmap.chain_selected == 1 and
+				string.format("%.4f", fv.cost_bound[0]) or
+				string.format("[%.4f, %.4f]", fv.cost_bound[0], fv.cost_bound[1])
+		),
+		string.format("%s%s%s%s%s%s   %s%s%s%s",
+			bit("g", fv.bitmap.given),
+			bit("m", fv.bitmap.mark),
+			bit("s", fv.bitmap.chain_selected),
+			bit("v", fv.bitmap.has_value),
+			bit("b", fv.bitmap.has_bound),
+			bit("t", fv.bitmap.target),
+			fv.bitmap.chain_selected == 1 and bit("b", fv.model.bitmap.has_bound) or " ",
+			fv.bitmap.chain_selected == 1 and bit("s", fv.model.bitmap.chain_selected) or " ",
+			fv.bitmap.chain_selected == 1 and bit("r", fv.model.bitmap.has_return) or " ",
+			fv.bitmap.chain_selected == 1 and bit("m", fv.model.bitmap.mark) or " "
+		)
 	}
-
-	table.insert(ret, r)
-
-	if r.given then
-		r.cost = 0
-	end
-
-	if r.solved and (not r.given) then
-		local fm = fv.model
-		r.model = ffi.string(fm.udata)
-		r.cost = C.fhk_solved_cost(fm)
-
-		for i=0, tonumber(fm.n_param)-1 do
-			reportv(visited, ret, g, ffi.string(fm.params[i].udata), "parameter")
-		end
-
-		for i=0, tonumber(fm.n_check)-1 do
-			reportv(visited, ret, g, ffi.string(fm.checks[i].var.udata), "constraint")
-		end
-	end
 end
 
-local function report(g, vars)
-	local visited = {}
+local function report(dbg, mapper)
 	local ret = {}
 
-	for _,v in ipairs(vars) do
-		reportv(visited, ret, g, v, "root")
-	end
-
-	return ret
-end
-
-local function maxcol(rep, field, max)
-	max = max or 0
-
-	for _,r in ipairs(rep) do
-		local x = r[field]
-		if x and #x > max then
-			max = #x
+	for name,_ in pairs(dbg.fvars) do
+		local v = reportv(dbg, mapper, name)
+		if v then
+			table.insert(ret, v)
 		end
 	end
 
-	return max
+	table.sort(ret, function(a, b) return a[1] < b[1] end)
+
+	return printtable({
+		{"Variable", "Value", "Model", "Cost", "vbits  : mbits"},
+		{"--------", "-----", "-----", "----", "------   -----"},
+		unpack(ret)
+	})
 end
 
-local function print_report(rep)
-	local desc_len = maxcol(rep, "desc", 20)
-	local model_len = maxcol(rep, "model", 20)
-
-	print(string.format("%-"..desc_len.."s   %-20s %-"..model_len.."s %-16s %s",
-		"Variable",
-		"Value",
-		"Model",
-		"Cost",
-		"Status"
-	))
-
-	for _,r in ipairs(rep) do
-		print(string.format("%-"..desc_len.."s = %-20s %-"..model_len.."s %-16s %s %s",
-			r.desc,
-			r.value,
-			r.model or "",
-			r.cost  or "",
-			r.given and "given" or (r.solved and "solved" or "failed"),
-			r.reason
-		))
-	end
-end
-
---------------------------------------------------------------------------------
-
-local function main(args)
-	local cfg = conf.read(args.config)
-	local g = hook(fhk.build_graph(cfg.fhk_vars, cfg.fhk_models))
-	local exf = fhk.create_models(cfg.fhk_vars, cfg.fhk_models)
-	for name,f in pairs(exf) do
-		g.models[name].exf = f
-	end
-
-	local vars = misc.map(misc.split(args.vars), misc.trim)
-	local solve = g:solve(vars)
-	local given, values = misc.readcsv(args.input)
-
-	local vs = {}
+local function runinput(dbg, mapper, input, names)
+	local given, values = misc.readcsv(input)
 
 	for _,d in ipairs(values) do
-		local vals = {}
-		for i,v in ipairs(given) do
-			vals[v] = d[i]
+		dbg:reset()
+
+		for i,name in ipairs(given) do
+			dbg:given(name, mapper:import(name, tonumber(d[i]) or d[i]))
 		end
 
-		local ok, res = solve(vals)
-
-		print("--------------------")
-
-		if ok then
-			print_report(report(g, vars))
+		if not dbg:solve(names) then
+			print(dbg:error())
 		else
-			-- TODO: print some detailed info
-			print("Solver failed!")
+			print(report(dbg, mapper))
 		end
+
+		print() print(("-"):rep(70)) print()
+	end
+end
+
+----------------------------------------
+
+local function lazymod(def, mapper)
+	local models = {}
+
+	return function(name, ...)
+		if not models[name] then
+			models[name] = fhk.create_model(
+				def.models[name],
+				mapper,
+				def.calibs[name] ~= nil,
+				conf
+			)
+
+			if def.calibs[name] then
+				fhk.calibrate_model(models[name], def.calibs[name])
+			end
+		end
+
+		return models[name](...)
+	end
+end
+
+local function moderr(err)
+	return err.model ~= nil and model.error()
+end
+
+local function main(args)
+	local def = fhk.def()
+	local env = fhk.def_env(def)
+	env.read(args.graph or "Melafile.g.lua")
+	local mapper = fhk.mapper():hint(def)
+	local dbg = debugger({model=lazymod(def, mapper), error=moderr}, fhk.build_graph(def))
+
+	if args.input then
+		runinput(
+			dbg,
+			mapper,
+			args.input or error("Missing input (-i)"),
+			misc.map(misc.split(args.solve or error("Missing targets (-s)")), misc.trim)
+		)
+	else
+		-- TODO: interactive mode goes here
 	end
 end
 
 return {
 	cli_main = {
 		main = main,
-		usage = "[-c config] [-i input] [-f y1,y2,...,yN]",
+		usage = "[graph] [-i input] [-s y1,y2,...,yN]",
 		flags = {
-			cli.opt("-c", "config"),
+			cli.positional("graph"),
 			cli.opt("-i", "input"),
-			cli.opt("-f", "vars")
+			cli.opt("-s", "solve")
 		}
 	},
-	hook = hook
+
+	debugger = debugger,
+	tomodel  = tomodel,
+	tovar    = tovar
 }
