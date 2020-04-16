@@ -1,4 +1,5 @@
 local fhk = require "fhk"
+local model = require "model"
 local fhkdbg = require "fhkdbg"
 local misc = require "misc"
 local ffi = require "ffi"
@@ -238,6 +239,7 @@ function defgraph_mt.__index:inject(env)
 	env.any = function(...) return self:lazy_def():any(...) end
 	env.none = function(...) return self:lazy_def():none(...) end
 	env.between = function(...) return self:lazy_def():between(...) end
+	env.const = model.const
 end
 
 local testgraph_mt = { __index={} }

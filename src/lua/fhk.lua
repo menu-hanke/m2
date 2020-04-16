@@ -206,6 +206,7 @@ local function def_env(def)
 		cost       = cost,
 		read_cost  = function(fname) cost(misc.readjson(fname)) end,
 		model      = env.namespace(misc.delegate(def, def.model)),
+		const      = model.const,
 		class      = env.namespace(misc.delegate(def, def.class)),
 		any        = misc.delegate(def, def.any),
 		none       = misc.delegate(def, def.none),

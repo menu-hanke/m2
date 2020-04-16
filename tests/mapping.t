@@ -42,6 +42,21 @@ test_solver_direct = t(function()
 	end)
 end)
 
+test_const_model = t(function()
+	graph {
+		m("->x", const(1)),
+		m("->y,z", const(2, 3)),
+		h{x="real", y="real", z="real"}
+	}
+
+	local solver = m2.fhk.solve("x", "y", "z")
+
+	m2.on("test", function()
+		solver()
+		assert(solver.x == 1 and solver.y == 2 and solver.z == 3)
+	end)
+end)
+
 test_constraint_fail = t(function()
 	graph {
 		m("x->x'", "Lua::models::id"):check{x=between(0, math.huge)},

@@ -203,5 +203,6 @@ return {
 		else
 			return "(nil)"
 		end
-	end
+	end,
+	const   = function(...) return {lang="Const", opt={ret={...}}} end
 }
