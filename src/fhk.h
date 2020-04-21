@@ -106,6 +106,14 @@ enum {
 	FHK_RECURSION     = 4
 };
 
+/* options for fhk_dump_graph */
+enum {
+	FHK_DUMP_VARS   = 0x1,
+	FHK_DUMP_MODELS = 0x2,
+	FHK_DUMP_ERROR  = 0x4,
+	FHK_DUMP_ACTIVE = 0x8
+};
+
 struct fhk_einfo {
 	int err;
 	struct fhk_model *model;
@@ -153,6 +161,7 @@ void fhk_transfer_mask(bm8 *mH, bm8 *mG, bm8 *mask, size_t n);
 void fhk_model_set_cost(struct fhk_model *m, double k, double c);
 void fhk_check_set_cost(struct fhk_check *c, double out, double in);
 double fhk_solved_cost(struct fhk_model *m);
+int fhk_dump_graph(struct fhk_graph *G, char *s, size_t n, int opt);
 
 /* fhk_solve.c */
 int fhk_solve(struct fhk_graph *G, size_t nv, struct fhk_var **ys);

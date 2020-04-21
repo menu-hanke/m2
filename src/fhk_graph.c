@@ -3,6 +3,7 @@
 #include "def.h"
 
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <assert.h>
 
@@ -246,6 +247,111 @@ void fhk_check_set_cost(struct fhk_check *c, double in, double out){
 double fhk_solved_cost(struct fhk_model *m){
 	assert(m->cost_bound[0] == m->cost_bound[1]);
 	return m->cost_bound[0];
+}
+
+int fhk_dump_graph(struct fhk_graph *G, char *s, size_t n, int opt){
+	int r = 0;
+
+	// XXX v
+#define APPEND(fmt, ...) do {                  \
+	int _x = snprintf(s, n, fmt, __VA_ARGS__); \
+	if(_x < 0)                                 \
+		return _x;                             \
+	r += _x;                                   \
+	if((size_t)_x > n)                         \
+		_x = n;                                \
+	s += _x;                                   \
+	n -= _x;                                   \
+} while(0)
+
+	char cost[256];
+
+#define COST(x) ({                                                                            \
+	if((x)->bitmap->chain_selected)                                                           \
+		snprintf(cost, sizeof(cost), "%.4f", (x)->cost_bound[0]);                             \
+	else if((x)->bitmap->has_bound)                                                           \
+		snprintf(cost, sizeof(cost), "[%.4f, %.4f]", (x)->cost_bound[0], (x)->cost_bound[1]); \
+	else                                                                                      \
+		cost[0] = 0;                                                                          \
+	cost;                                                                                     \
+})
+
+	char descv[256], descm[256];
+
+#define DF(x) (__builtin_types_compatible_p(typeof(x), struct fhk_var *) ?\
+		G->debug_desc_var : G->debug_desc_model)
+#define DB(x) (__builtin_types_compatible_p(typeof(x), struct fhk_var *) ? descv : descm)
+#define DESC(x) ({                                                \
+	if(DF(x))                                                     \
+		snprintf(DB(x), 256, "[%-3d] %s", (x)->idx, DF(x)(G, x)); \
+	else                                                          \
+		sprintf(DB(x), "[%-3d] %p", (x)->idx, (x));               \
+	DB(x);                                                        \
+})
+
+	if(opt & FHK_DUMP_VARS){
+
+		APPEND("%-20s %-20s %-20s %s\n",
+				"Variable",
+				"Model",
+				"Cost",
+				"Flags"
+		);
+
+		for(size_t i=0;i<G->n_var;i++){
+			struct fhk_var *x = &G->vars[i];
+			fhk_vbmap *bm = x->bitmap;
+
+			if((opt & FHK_DUMP_ACTIVE) && !(bm->has_bound))
+				continue;
+
+			APPEND("%-20s %-20s %-20s %c%c%c%c%c%c%c\n",
+					DESC(x),
+					bm->chain_selected ? DESC(x->model) : "",
+					bm->given ? "" : COST(x),
+					bm->given          ? 'g' : ' ',
+					bm->mark           ? 'm' : ' ',
+					bm->chain_selected ? 'c' : ' ',
+					bm->has_value      ? 'v' : ' ',
+					bm->has_bound      ? 'b' : ' ',
+					bm->target         ? 't' : ' ',
+					(opt & FHK_DUMP_ERROR) && (G->last_error.var == x) ? '!': ' '
+			);
+		}
+	}
+
+	if(opt & FHK_DUMP_MODELS){
+
+		if(opt & FHK_DUMP_VARS)
+			APPEND("%s", "\n"); // XXX
+
+		APPEND("%-20s %-20s %s\n",
+				"Model",
+				"Cost",
+				"Flags"
+		);
+
+		for(size_t i=0;i<G->n_mod;i++){
+			struct fhk_model *m = &G->models[i];
+			fhk_mbmap *bm = m->bitmap;
+
+			if((opt & FHK_DUMP_ACTIVE) && !(bm->has_bound))
+				continue;
+
+			APPEND("%-20s %-20s %c%c%c%c%c\n",
+					DESC(m),
+					COST(m),
+					bm->mark           ? 'm' : ' ',
+					bm->chain_selected ? 'c' : ' ',
+					bm->has_return     ? 'r' : ' ',
+					bm->has_bound      ? 'b' : ' ',
+					(opt & FHK_DUMP_ERROR) && (G->last_error.model == m) ? '!' : ' '
+			);
+		}
+	}
+
+#undef WRITE
+	return r;
 }
 
 static int mark_isupp_v(struct fhk_graph *G, bm8 *vmask, bm8 *mmask, struct fhk_var *y){

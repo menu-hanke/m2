@@ -392,6 +392,41 @@ local function newbitmap(n)
 	return ret
 end
 
+local dumpflags = {
+	v = C.FHK_DUMP_VARS,
+	m = C.FHK_DUMP_MODELS,
+	e = C.FHK_DUMP_ERROR,
+	a = C.FHK_DUMP_ACTIVE
+}
+
+local function dumpg(G, fmt)
+	fmt = fmt or "vm"
+	local flags = 0
+
+	for i=1, #fmt do
+		flags = bit.bor(flags, dumpflags[fmt:sub(i, i)])
+	end
+
+	local sz = 8000
+	local buf = C.malloc(sz)
+	local n = C.fhk_dump_graph(G, buf, sz, flags)
+
+	if n >= sz then
+		C.free(buf)
+		buf = C.malloc(n)
+		C.fhk_dump_graph(G, buf, sz, flags)
+	end
+
+	local ret
+	if n >= 0 then
+		ret = ffi.string(buf)
+	end
+
+	C.free(buf)
+
+	return ret
+end
+
 local ecode = {
 	[tonumber(C.FHK_SOLVER_FAILED)] = "No solution exists",
 	[tonumber(C.FHK_VAR_FAILED)]    = "Failed to resolve given variable",
@@ -404,7 +439,8 @@ ffi.metatype("struct fhk_graph", { __index = {
 	newmmask = function(self) return newbitmap(self.n_mod) end,
 	init     = C.fhk_init,
 	reset    = C.fhk_reset_mask,
-	error    = function(self) return ecode[tonumber(self.last_error.err)] end
+	error    = function(self) return ecode[tonumber(self.last_error.err)] end,
+	dump     = dumpg
 }})
 
 --------------------------------------------------------------------------------
@@ -433,7 +469,8 @@ local function solver_failed_m(G)
 		table.insert(context, string.format("Model crashed (%d) details below:",C.FHK_MODEL_FAILED))
 		table.insert(context, model.error())
 	else
-		table.insert(context, string.format("\t* Reason: %s (%d)", G:error(), err.err))
+		table.insert(context, string.format("\t* Reason: %s (%d) graph dump below:", G:error(), err.err))
+		table.insert(context, G:dump("vme"))
 	end
 
 	error(table.concat(context, "\n"))
