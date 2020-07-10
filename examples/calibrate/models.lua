@@ -327,13 +327,16 @@ return {
 	gro_manty = gro_manty,
 	gro_kuusi = gro_kuusi,
 	gro_lehti = gro_lehti,
+	gro_0     = function() return 0 end,
 
 	sur_manty = sur_manty,
 	sur_kuusi = sur_kuusi,
 	sur_lehti = sur_lehti,
+	sur_1     = function() return 1 end,
 
 	ingrowth_manty = ingrowth_manty,
 	ingrowth_kuusi = ingrowth_kuusi,
 	ingrowth_koivu = ingrowth_koivu,
 	ingrowth_leppa = ingrowth_leppa
 }
+

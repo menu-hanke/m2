@@ -1,90 +1,76 @@
+local ffi = require "ffi"
 local m2 = require "m2"
+local Spe = require("categ").spe
+local fhk, vmath = m2.fhk, m2.vmath
 
-local soa, vmath = m2.soa, m2.vmath
-local Spe = m2.fhk.masks.species
+fhk.copylabels(Spe)
 
-local Plot_s, plot_s = m2.data.static(m2.type {
-	ts      = "real",
-	mtyyppi = "real",
-	atyyppi = "real"
-})
+local Plot_s = ffi.typeof [[
+	struct {
+		double ts;
+		uint8_t mtyyppi;
+		uint8_t atyyppi;
+	}
+]]
 
-local Plot_d, plot_d = m2.data.dynamic(m2.type {
-	step    = "real",
-	G       = "real",
-	G_ma    = "real"
-})
+local Plot_d = ffi.typeof [[
+	struct {
+		double step;
+	}
+]]
 
-local Trees = soa.new(m2.type {
-	f       = "real",
-	spe     = "mask",
-	dbh     = "real",
-	ba      = "real",
-	baL     = "real",
-	baL_ma  = "real",
-	baL_ku  = "real",
-	baL_ko  = "real"
-})
+local Trees = m2.soa.from_bands {
+	f       = "double",
+	spe     = "uint8_t",
+	dbh     = "double",
+	ba      = "double"
+}
 
-local trees = Trees()
+-- this also works:
+--
+--     local Trees = ffi.typeof [[
+--         struct {
+--             struct vec ___header;
+--             double *f;
+--             ...
+--             double *baL_ko;
+--         }
+--     ]]
+--
+--     ffi.metatype(Trees, (m2.soa.reflect(Trees)))
 
-local function mapprefix(x, p)
-	local pattern = p .. "#(.*)"
-	return function(name)
-		name = name:match(pattern)
-		name = name and name:gsub("/", "_")
-		return name and x:fhk_map(name)
-	end
-end
+local plot_s = m2.new(Plot_s, "static")
+local plot_d = m2.new(Plot_d, "vstack")
+local trees = m2.new_soa(Trees)
 
-local fhk_Plot = m2.fhk.context():given(mapprefix(Plot_s, "plot")):given(mapprefix(Plot_d, "plot"))
-local fhk_Tree = m2.fhk.context():given(mapprefix(Trees, "tree")):over(Trees)
+local subgraph = fhk.subgraph()
+	:given(fhk.group("plot", fhk.struct_mapper(Plot_s, plot_s), fhk.struct_mapper(Plot_d, plot_d)))
+	:given(fhk.group("tree", fhk.soa_mapper(Trees, trees)))
+	:edge(fhk.match_edges {
+		{ "=>%1",        fhk.ident },
+		{ "=>plot",      fhk.only }
+	})
 
-local solve_growstep = m2.fhk.solve("tree#+dbh", "tree#*f"):given(fhk_Plot):given(fhk_Tree)
-local solve_ingrowth = m2.fhk.solve("+f/ma", "+f/ku", "+f/ra", "+f/hi", "+f/le"):given(fhk_Plot)
+local solve_np = subgraph
+	:solve("tree#+dbh") -- kasvu
+	:solve("tree#*f") -- lupo
+	:solve({"plot#+f[manty]", "plot#+f[kuusi]", "plot#+f[rauduskoivu]", "plot#+f[hieskoivu]",
+		"plot#+f[leppa]"}) -- synty
+	:create()
+
+--------------------------------------------------------------------------------
 
 local function update_ba()
-	soa.newband(trees, "ba")
+	trees:newband("ba")
 	vmath.area(trees.dbh, #trees, trees.ba)
 	vmath.mul(trees.ba, trees.f, #trees)
 	vmath.mul(trees.ba, 1/10000.0, #trees)
 end
 
-local function update_baL()
-	local ind = vmath.sorti(trees.ba, #trees)
-	local spe = vmath.mask(trees.spe, #trees)
-
-	vmath.psumi(trees.ba, ind, #trees, soa.newband(trees, "baL"))
-	vmath.psumim(trees.ba, ind, spe, Spe.manty, #trees, soa.newband(trees, "baL_ma"))
-	vmath.psumim(trees.ba, ind, spe, Spe.kuusi, #trees, soa.newband(trees, "baL_ku"))
-	vmath.psumim(trees.ba, ind, spe, bit.bnot(Spe.manty + Spe.kuusi), #trees, soa.newband(trees, "baL_ko"))
-end
-
-local function update_G()
-	plot_d.G = vmath.sum(trees.ba, #trees)
-	plot_d.G_ma = vmath.summ(trees.ba, vmath.mask(trees.spe, #trees), Spe.manty, #trees)
-end
-
-local function grow_trees()
-	solve_growstep(trees)
-	local newf, f = soa.newband(trees, "f")
-	local newd, d = soa.newband(trees, "dbh")
-	vmath.mul(f, solve_growstep["tree#*f"], #trees, newf)
-	vmath.add(d, solve_growstep["tree#+dbh"], #trees, newd)
-end
-
 local newspe = { Spe.manty, Spe.kuusi, Spe.rauduskoivu, Spe.hieskoivu, Spe.haapa }
 
-local function ingrowth()
-	solve_ingrowth()
-
-	local newf = {
-		solve_ingrowth["+f/ma"],
-		solve_ingrowth["+f/ku"],
-		solve_ingrowth["+f/ra"],
-		solve_ingrowth["+f/hi"],
-		solve_ingrowth["+f/le"]
-	}
+local function ingrowth(fma, fku, fra, fhi, fhle)
+	local newf = { fma, fku, fra, fhi, fle }
 
 	local nnew = 0
 
@@ -98,7 +84,7 @@ local function ingrowth()
 		return
 	end
 
-	local pos = soa.alloc(trees, nnew)
+	local pos = trees:alloc(nnew)
 	
 	for i,F in ipairs(newf) do
 		if F > 5.0 then
@@ -110,6 +96,29 @@ local function ingrowth()
 	end
 end
 
+local function natproc()
+	local sol = solve_np()
+
+	-- kasvu
+	local newd, d = trees:newband("dbh")
+	vmath.add(d, sol.tree__dbh, #trees, newd)
+
+	-- lupo
+	local newf, f = trees:newband("f")
+	vmath.mul(f, sol.tree__f, #trees, newf)
+
+	update_ba()
+
+	-- synty
+	ingrowth(
+		sol.plot__f_manty_[0],
+		sol.plot__f_kuusi_[0],
+		sol.plot__f_rauduskoivu_[0],
+		sol.plot__f_hieskoivu_[0],
+		sol.plot__f_leppa_[0]
+	)
+end
+
 --------------------------------------------------------------------------------
 
 m2.on("sim:setup", function(state)
@@ -117,32 +126,25 @@ m2.on("sim:setup", function(state)
 	plot_s.mtyyppi = state.mtyyppi
 	plot_s.atyyppi = state.atyyppi
 
-	local idx = soa.alloc(trees, #state.trees)
+	local idx = trees:alloc(#state.trees)
 	
-	local f = soa.newband(trees, "f")
-	local spe = soa.newband(trees, "spe")
-	local dbh = soa.newband(trees, "dbh")
-	local ba = soa.newband(trees, "ba")
+	local f = trees:newband("f")
+	local spe = trees:newband("spe")
+	local dbh = trees:newband("dbh")
+	local ba = trees:newband("ba")
 
 	for i,t in ipairs(state.trees) do
 		local pos = idx + i-1
 		f[pos] = t.f
-		spe[pos] = m2.import_enum(math.min(t.spe, 6))
+		spe[pos] = math.min(t.spe, 6)
 		dbh[pos] = t.dbh
 		ba[pos] = t.ba
 	end
-
-	update_baL()
-	update_G()
 end)
 
 m2.on("grow", function(step)
 	plot_d.step = step
-	grow_trees()
-	ingrowth()
-	update_ba()
-	update_baL()
-	update_G()
+	natproc()
 end)
 
 return {

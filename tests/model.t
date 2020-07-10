@@ -1,130 +1,52 @@
 -- vim: ft=lua
-local ffi = require "ffi"
-local typing = require "typing"
+local models = require("testmod").models
 local model = require "model"
+local ffi = require "ffi"
+local C = ffi.C
 
-local function have(sym)
-	return pcall(function() return ffi.C[sym] end)
+local SLOW_TESTS = true
+
+test_parse_sig = function()
+	local function ok(s) return tostring(model.parse_sig(s) or nil) == s end
+	assert(ok "u8u16u32u64i8i16i32i64>m8m16m32m64fdz")
+	assert(ok "U8U16U32U64I8I16I32I64>M8M16M32M64FDZ" )
+	assert(ok ">")
+	assert(not ok "<")
 end
 
-local ct = {
-	r = typing.pvalues.real.desc,
-	b = typing.pvalues.mask.desc,
-	u = typing.pvalues.udata.desc
-}
+-- TODO: conversion tests
 
-local function settypes(dest, s)
-	for i=1, #s do
-		dest[i-1] = ct[s:sub(i, i)]
-	end
+if models.Const then
+
+	test_Const_d              = models.Const(">d", 123)                    :call()        :result(123)
+	test_Const_D              = models.Const(">D", {1,2,3})                :call()        :result({1,2,3})
+	test_Const_param          = models.Const("u64>u64", 123ULL)            :call(1)       :result(123ULL)
+
 end
 
-local function mtpl(sig)
-	local conf = model.config()
-	local atpl, rtpl, ncoef, iscal = sig:match("(%w*):(%w*):?(%d*)/?(c?)")
-	settypes(conf:newatypes(#atpl), atpl)
-	settypes(conf:newrtypes(#rtpl), rtpl)
-	conf.n_coef = tonumber(ncoef or 0)
-	conf.calibrated = iscal ~= ""
+if models.Lua then
 
-	return function(lang, opt)
-		local def = model.def(lang, opt):configure(conf)
-		local mod = def()
-		local argbuf = ffi.new("pvalue[?]", conf.n_arg)
-		local retbuf = ffi.new("pvalue[?]", conf.n_ret)
+	test_Lua_ident            = models.Lua("d>d", "models", "id")          :call(1)       :result(1)
+	test_Lua_noparam          = models.Lua(">d", "models", "ret1")         :call()        :result(1)
+	test_Lua_multiret         = models.Lua("dd>dd", "models", "id")        :call(1, 2)    :result(1, 2)
+	test_Lua_set              = models.Lua("D>D", "models", "id")          :call({1,2,3}) :result({1,2,3})
+	test_Lua_mixed_multiret   = models.Lua("dD>dD", "models", "id")        :call(1,{2,3}) :result(1,{2,3})
 
-		return function(...)
-			local args = {...}
-			for i=0, conf.n_arg-1 do
-				argbuf[i] = ffi.C.vimportd(args[i+1], conf.atypes[i])
-			end
+	test_Lua_ret_too_few      = models.Lua("d>dd", "models", "id")         :call(1)       :fails(C.MCALL_INVALID_RETURN)
+	test_Lua_ret_set_too_few  = models.Lua("D>D", "models", "id")          :call({1})     :fails(C.MCALL_INVALID_RETURN, 2)
+	test_Lua_ret_notset       = models.Lua("d>D", "models", "id")          :call(1)       :fails(C.MCALL_INVALID_RETURN)
+	test_Lua_ret_notsingle    = models.Lua("D>d", "models", "id")          :call({1})     :fails(C.MCALL_INVALID_RETURN)
+	test_Lua_runtime_error    = models.Lua("", "models", "runtime_error")  :call()        :fails(C.MCALL_RUNTIME_ERROR)
+	test_Lua_missing_func     = models.Lua("", "models", "missing")        :call()        :fails(C.MCALL_RUNTIME_ERROR)
+	test_Lua_missing_module   = models.Lua("", "models_missing", "func")   :call()        :fails(C.MCALL_RUNTIME_ERROR)
+	test_Lua_invalid_syntax   = models.Lua("", "models_syntax", "fail")    :call()        :fails(C.MCALL_RUNTIME_ERROR)
 
-			local r = mod(retbuf, argbuf)
-			if r ~= ffi.C.MODEL_CALL_OK then
-				error(string.format("model crashed: %d", r))
-			end
-
-			local ret = {}
-			for i=0, conf.n_ret-1 do
-				ret[i+1] = ffi.C.vexportd(retbuf[i], conf.rtypes[i])
-			end
-
-			return unpack(ret)
-		end, mod
-	end
-end
-
-local M_axb      = mtpl "rrr:r"      -- (a, x, b) -> a*x + b
-local M_is7      = mtpl "b:b"        -- x -> x == 7 
-local M_ret12    = mtpl ":rr"        -- () -> 1,2
-local M_axby     = mtpl "rr:r:2"     -- (x, y) -> a*x + b*y     uncalibrated (a=1, b=2)
-local M_axby_cal = mtpl "rr:r:2/c"   -- (x, y) -> a*x + b*y     calibrated
-local M_crash    = mtpl ":r"         --                         always crashes
-local M_ret123   = mtpl ":rrr"       -- () -> 1,2,3             for errors - don't implement
-
-local function cases(lang, mopt)
-	return {
-		simple = function()
-			local axb = M_axb(lang, mopt("axb"))
-			assert(axb(1, 2, 3) == 1*2+3)
-
-			local is7 = M_is7(lang, mopt("is7"))
-			assert(is7(1) == 0)
-			assert(is7(7) == 1)
-
-			local ret12 = M_ret12(lang, mopt("ret12"))
-			local a, b = ret12()
-			assert(a == 1 and b == 2)
-		end,
-
-		errors = function()
-			local crash = M_crash(lang, mopt("crash"))
-			assert(fails(crash))
-
-			local ret123 = M_ret123(lang, mopt("ret12"))
-			assert(fails(ret123))
-		end,
-
-		calib = function()
-			local axby = M_axby(lang, mopt("axby"))
-			assert(axby(1, 2) == 1*1+2*2)
-
-			local axby_cal, axby_cal_m = M_axby_cal(lang, mopt("axby"))
-			axby_cal_m.coefs[0] = 100
-			axby_cal_m.coefs[1] = 200
-			axby_cal_m:calibrate()
-			assert(axby_cal(1, 2) == 1*100+2*200)
-		end
-	}
-end
-
-if have("mod_Lua_create") then
-	local cases_Lua = cases("Lua", function(name) return string.format("models::%s", name) end)
-	test_simple_Lua = cases_Lua.simple
-	test_errors_Lua = cases_Lua.errors
-	test_calib_Lua = cases_Lua.calib
-end
-
-if have("mod_R_create") then
-	local cases_R = cases("R", function(name) return string.format("models.r::%s", name) end)
-	test_simple_R = cases_R.simple
-	test_errors_R = cases_R.errors
-	test_calib_R = cases_R.calib
-end
-
--- TODO: simo tests go here
-
-if have("mod_Const_create") then
-
-	function test_Const_1()
-		local ret1 = mtpl(":r")("Const", {ret={123}})
-		assert(ret1() == 123)
+	if SLOW_TESTS then
+		-- this must have a lot of iterations (eg. 10k reps isn't enough to blow Lua stack if the
+		-- model caller doesn't properly cleanup)
+		test_Lua_stress_test      = models.Lua("d>d", "models", "id")      :call(1)       :rep(100000, 1)
+		test_Lua_stress_test_set  = models.Lua("D>D", "models", "id")      :call({1})     :rep(100000, {1})
 	end
 
-	function test_Const_multi()
-		local ret123 = mtpl(":rrr")("Const", {ret={1, 2, 3}})
-		local a, b, c = ret123()
-		assert(a == 1 and b == 2 and c == 3)
-	end
-
+	-- TODO calibrate tests
 end

@@ -1,19 +1,15 @@
 #pragma once
 
-#include "mlib.h"
+#include "model.h"
+#include "conv.h"
 
-enum mod_Lua_calib_mode {
-	MOD_LUA_EXPAND,
-	MOD_LUA_PASS_TABLE
-	/* TODO: pass args/coefs by name in a table */
-};
+#include <stdint.h>
 
-struct mod_Lua_def {
-	MODEL_INIT_DEF;
-	const char *module;
-	const char *func;
-	unsigned n_coef;
-	enum mod_Lua_calib_mode mode;
-};
+typedef struct mod_Lua mod_Lua;
 
-model *mod_Lua_create(struct mod_Lua_def *def);
+uint64_t mod_Lua_types();
+mod_Lua *mod_Lua_create(const char *module, const char *func, struct mt_sig *sig, size_t n_co);
+void mod_Lua_calibrate(mod_Lua *m, double *co);
+int mod_Lua_call(mod_Lua *m, mcall_s *mc);
+void mod_Lua_destroy(mod_Lua *m);
+void mod_Lua_cleanup();

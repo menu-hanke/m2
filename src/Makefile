@@ -11,8 +11,7 @@ XLDFLAGS ?=
 
 # -fstack-protector causes about ~10% slowdown for typical fhk graphs.
 # Turn it on if you're scared of hackers.
-# You must either turn off -ffast-math or have -fno-finite-math-only here.
-FHK_CCOPT = $(CCOPT) -fno-lto -fno-finite-math-only -fno-stack-protector
+FHK_CCOPT = $(CCOPT) -fno-lto -fno-stack-protector
 
 # What model languages do you want to build in? You can choose any from the following:
 # * R      Call R models (requires libR)
@@ -25,7 +24,7 @@ MODEL_LANG        ?= R SimoC Lua
 USE_COROUTINES    ?= on
 
 # Where to find/install the frontend lua files?
-LUAPATH           ?= $(abspath lua)
+LUAPATH           ?= $(abspath frontend)
 
 # Library options
 LUAJIT_CFLAGS     ?= $(shell pkg-config --cflags luajit)
@@ -42,39 +41,38 @@ LIBACO_LIB        ?= -Wl,-rpath=$(shell realpath ../libaco) -L$(shell realpath .
 ################################################################################
 
 M2_EXECUTABLE = m2
-M2_CDEF       = lua/m2_cdef.lua
-LUA_EXPORTS   = lua_exports.h
+M2_CDEF       = frontend/m2_cdef.lua
+LUA_EXPORTS   = frontend/m2_cdef.h
 M2_LIBS       = $(LUAJIT_LIB)
 
-M2_O = main.o bitmap.o fhk_graph.o fhk_solve.o fhk_aux.o type.o mem.o sim.o grid.o vec.o\
-	   vmath.o vgrid.o graph_map.o graph_solve.o
-
+M2_O = sim.o bitmap.o mem.o grid.o vec.o vmath.o vgrid.o\
+	   fhk/solve.o fhk/build.o fhk/reduce.o fhk/debug.o\
+	   frontend/main.o frontend/fhk/driver.o frontend/fhk/mapping.o
 M2_C = $(M2_O:.o=.c)
 
-MODEL_O = model/mlib.o model/model_Const.o
+MODEL_O = model/mlib.o model/conv.o model/model_Const.o
 MODEL_C = $(MODEL_O:.o=.c)
 
 ifneq (,$(findstring Lua,$(MODEL_LANG)))
 	MODEL_O += model/model_Lua.o
 endif
 
-ifneq (,$(findstring R,$(MODEL_LANG)))
-	MODEL_O += model/model_R.o
-	M2_LIBS += $(R_LIB)
-endif
-
-ifneq (,$(findstring SimoC,$(MODEL_LANG)))
-	MODEL_O += model/model_SimoC.o
-	M2_LIBS += $(LIBFFI_LIB) -ldl
-endif
+# ifneq (,$(findstring R,$(MODEL_LANG)))
+# 	MODEL_O += model/model_R.o
+# 	M2_LIBS += $(R_LIB)
+# endif
+# 
+# ifneq (,$(findstring SimoC,$(MODEL_LANG)))
+# 	MODEL_O += model/model_SimoC.o
+# 	M2_LIBS += $(LIBFFI_LIB) -ldl
+# endif
 
 ################################################################################
 
-ifeq ($(USE_COROUTINES),on)
-	CCDEF += -DM2_USE_COROUTINES
-	CCEXTRA += $(LIBACO_CFLAGS)
-	M2_LIBS += $(LIBACO_LIB)
-endif
+# TODO: this is only needed for fhk. when fhk uses the custom swap (on x86_64), enable this
+# conditionally for non-x86_64
+CCEXTRA += $(LIBACO_CFLAGS)
+M2_LIBS += $(LIBACO_LIB)
 
 CCDEF += -DM2_LUAPATH='"$(LUAPATH)"'
 CFLAGS = $(LUAJIT_CFLAGS) $(CCOPT) $(CCDEBUG) $(CCDEF) $(CCWARN) $(CCEXTRA) $(XCFLAGS)
@@ -93,22 +91,19 @@ valgrind: CCOPT = -g3 -O3 -march=x86-64 -fopenmp -flto -ffast-math
 valgrind: default
 
 debug: CCOPT = -g3 -fopenmp
-debug: CCDEBUG = -DDEBUG
+debug: CCDEBUG = -DDEBUG -DFHK_DEBUG
 debug: default
 
 ubsan: CC = clang
 ubsan: CCOPT = -g3 -O3 -march=native -fopenmp -flto -ffast-math -fsanitize=undefined -fsanitize=address
 ubsan: CCWARN += -Wno-c++17-extensions -Wno-gnu-alignof-expression
-ubsan: CCDEBUG = -DDEBUG
+ubsan: CCDEBUG = -DDEBUG -DFHK_DEBUG
 ubsan: default
 
 dep:
-	$(CC) $(CCOPT) $(CCDEBUG) $(CCDEF) $(CCEXTRA) $(XCFLAGS) -MM $(M2_C) \
-		| sed -r 's|\s/\S+\.h||'\
+	$(CC) $(CCOPT) $(CCDEBUG) $(CCDEF) $(CCEXTRA) $(XCFLAGS) -MM *.c fhk/*.c model/*.c frontend/*/**.c \
+		| sed -r 's|^(.*\.o:) (.*?)\.c|\2.o: \2.c|'\
 		> Makefile.dep
-	$(CC) $(CCOPT) $(CCDEBUG) $(CCDEF) $(CCEXTRA) $(XCFLAGS) -MM model/*.c\
-		| sed 's|^\([^ ]\)|model/\1|'\
-		>> Makefile.dep
 	$(CC) $(CCOPT) $(CCDEBUG) $(CCDEF) $(CCEXTRA) $(XCFLAGS) -MM -MT $(M2_CDEF) $(LUA_EXPORTS)\
 		>> Makefile.dep
 
@@ -127,7 +122,7 @@ ffi $(M2_CDEF): $(LUA_EXPORTS)
 	echo "]]" >> $(M2_CDEF)
 
 clean:
-	$(RM) $(M2_EXECUTABLE) $(M2_CDEF) *.o model/*.o
+	$(RM) $(M2_EXECUTABLE) $(M2_CDEF) *.o */**.o
 
 .PHONY: default valgrind debug ubsan dep ffi clean
 

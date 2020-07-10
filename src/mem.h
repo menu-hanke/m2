@@ -10,6 +10,7 @@ typedef struct region {
 } region;
 
 typedef struct arena arena;
+typedef struct arena_ptr arena_ptr;
 
 #define REGION_RESET(r)    (r)->ptr = (r)->mem
 #define REGION_INIT(r,m,s)\
@@ -23,8 +24,10 @@ void *region_alloc(struct region *region, size_t sz, size_t align) __attribute__
 int region_rw(struct region *region);
 int region_ro(struct region *region);
 
-struct arena *arena_create(size_t size);
-void arena_destroy(struct arena *arena);
-void *arena_alloc(struct arena *arena, size_t size, size_t align);
-void *arena_malloc(struct arena *arena, size_t size);
-void arena_reset(struct arena *arena);
+arena *arena_create(size_t size);
+void arena_destroy(arena *arena);
+void *arena_alloc(arena *arena, size_t size, size_t align);
+void *arena_malloc(arena *arena, size_t size);
+void arena_reset(arena *arena);
+arena_ptr *arena_save(arena *arena);
+void arena_restore(arena *arena, arena_ptr *to);

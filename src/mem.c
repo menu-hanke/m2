@@ -17,6 +17,11 @@ struct arena {
 	struct chunk *chunk;
 };
 
+struct arena_ptr {
+	struct chunk *chunk;
+	void *mem;
+};
+
 static struct chunk *alloc_chunk(size_t size);
 static void *bump_next_chunk(struct arena *arena, size_t size, size_t align);
 
@@ -122,6 +127,19 @@ void arena_reset(struct arena *arena){
 	REGION_RESET(&arena->chunk->r);
 }
 
+struct arena_ptr *arena_save(struct arena *arena){
+	struct chunk *chunk = arena->chunk;
+	void *mem = chunk->r.mem;
+	struct arena_ptr *ret = arena_alloc(arena, sizeof(*ret), alignof(*ret));
+	ret->chunk = chunk;
+	ret->mem = mem;
+	return ret;
+}
+
+void arena_restore(struct arena *arena, struct arena_ptr *to){
+	arena->chunk = to->chunk;
+	arena->chunk->r.mem = to->mem;
+}
 
 static struct chunk *alloc_chunk(size_t size){
 	struct chunk *ret = malloc(size + sizeof(*ret));

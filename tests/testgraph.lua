@@ -1,321 +1,509 @@
-local fhk = require "fhk"
-local model = require "model"
-local fhkdbg = require "fhkdbg"
+require "fhk" -- for metatypes
+local alloc = require "alloc" -- for malloc/free
 local misc = require "misc"
 local ffi = require "ffi"
+local C = ffi.C
 
-local function topvalue(x)
-	if ffi.istype("pvalue", x) then
-		return x
-	end
+-- TODO: non-double vars
 
-	local ret = ffi.new("pvalue")
+local __kind__ = {}
 
-	if type(x) == "number"           then ret.f64 = x
-	elseif ffi.istype("uint64_t", x) then ret.u64 = x
-	else assert(false)
-	end
+local m_mt = { __index={[__kind__] = "model"} }
+local g_mt = { __index={[__kind__] = "group"} }
+local s_mt = { __index={[__kind__] = "map"} }
+local NA = {}
 
-	return ret
+local function tofunc(f)
+	if type(f) == "table" and #f > 0 then return function() return unpack(f) end end
+	if type(f) == "number" then return function() return {f} end end
+	return f -- hope it's something callable
 end
 
---------------------------------------------------------------------------------
-
-local mdef_mt = { __index={} }
-
-local function parsemodel(def)
-	def = def:gsub("%s", "")
-
-	-- name:params->returns
-	local name, params, returns = def:match("^([^:]+):(.-)%->(.*)$")
-	if name then
-		return name, params, returns
+-- edge  :: var[:subset]
+local function splitedges(s)
+	local r = {}
+	for name, map in s:gmatch("([^,:]+):?([^,]*)") do
+		table.insert(r, {name=name, map=map})
 	end
-
-	-- params->returns
-	local params, returns = def:match("^(.-)%->(.*)$")
-	if params then
-		return def, params, returns
-	end
-
-	error(string.format("model syntax error: %s", def))
+	return r
 end
 
-local function isimpl(f)
-	return (type(f) == "string" or (type(f) == "table" and f.lang)) and f
-end
+-- model :: ep1,ep2,...epN->er1,er2,...,erN [@ name]
+local function m(conf)
+	local def = conf.def or conf[1]
+	local p, r, name = def:gsub("%s", ""):match("^(.-)%->([^#]*)#?(.-)$")
 
-local function m(def, f)
-	local name, params, returns = parsemodel(def)
+	if not p then
+		error(string.format("syntax error (model): %s", def))
+	end
 
 	return setmetatable({
-		name    = name,
-		params  = misc.split(params),
-		returns = misc.split(returns),
+		params  = splitedges(p),
+		returns = splitedges(r),
+		name    = (name ~= "") and name or def,
+		k       = conf.k or 1,
+		c       = conf.c or 2,
 		checks  = {},
-		coeffs  = {},
-		impl    = isimpl(f),
-		_impl   = f,
-		_cost   = { checks={} }
-	}, mdef_mt)
+		f       = tofunc(conf.f or conf[2])
+	}, m_mt)
 end
 
-function mdef_mt.__index:check(cs)
-	misc.merge(self.checks, cs)
-	return self
+local function g(def)
+	return setmetatable(def, g_mt)
 end
 
-function mdef_mt.__index:cost(cst)
-	misc.merge(self._cost, cst)
-	return self
+local function s(def)
+	return setmetatable({
+		name = def[1],
+		map  = def[2],
+		inverse = def[3]
+	}, s_mt)
 end
 
-function mdef_mt.__index:xcost(cst)
-	for name,xc in pairs(cst) do
-		self._cost.checks[name] = { cost_in=xc[1], cost_out=xc[2] }
+-- cmp :: edge[><]=num+penalty
+-- set :: edge{set}+penalty
+function m_mt.__index:check(def)
+	local ds = def:gsub("%s", "")
+	local name, map, cmp, arg, penalty = ds:match("([^:]+):?([^><]-)([><])=([%d%.]+)%+([einf%d%.]+)")
+	if name then
+		table.insert(self.checks, {
+			name    = name,
+			map     = map,
+			op      = cmp == ">" and C.FHKC_GEF64 or C.FHKC_LEF64,
+			arg     = ffi.new("fhk_arg", {f64=tonumber(arg)}),
+			penalty = tonumber(penalty)
+		})
+
+		return self
 	end
-	return self
-end
 
-function mdef_mt.__index:coef(names)
-	misc.merge(self.coeffs, names)
-	return self
-end
-
-function mdef_mt.__index:define(def)
-	def:model(self.name, self)
-	def:cost(self.name, self._cost)
-end
-
-function mdef_mt.__index:inject_debugger(debugger)
-	local impl = self._impl
-	local nret = #self.returns
-
-	if type(impl) == "function" then
-		local narg = #self.params
-
-		debugger.models[self.name] = function(ret, args)
-			local a = {}
-			for i=1, narg do
-				a[i] = args[i-1]
-			end
-
-			local r = {impl(unpack(a))}
-
-			for i,x in ipairs(r) do
-				ret[i-1] = topvalue(x)
-			end
+	-- this doesn't currently make sense because the test driver uses only doubles.
+	-- commented because i didn't commit it yet and i don't want to rewrite the pattern...
+	-- uncomment when test driver has proper type support.
+	--[[
+	local name, map, set, penalty = ds:match("([^:]+):?([^{]-){([%d%.,]+)}%+([einf%d%.]+)")
+	if name then
+		local mask = 0ULL
+		for x in set:gmatch("[%d%.]+") do
+			mask = bit.bor(mask, bit.lshift(1, tonumber(x)))
 		end
-	elseif impl then
-		local r = ffi.new("pvalue[?]", nret)
-		if type(impl) == "table" then
-			for i,x in ipairs(impl) do
-				r[i-1] = topvalue(x)
+
+		table.insert(self.checks, {
+			name    = name,
+			map     = map,
+			op      = C.FHKC_U8_MASK64,
+			arg     = ffi.new("fhk_arg", {u64=mask}),
+			penalty = penalty
+		})
+
+		return self
+	end
+	]]
+
+	error(string.format("syntax error (constraint): %s", def))
+end
+
+--------------------------------------------------------------------------------
+
+local testgraph_mt = { __index={} }
+
+local function edgemap(m, edge, groups)
+	if edge.map == "" then
+		if groups[m.name] ~= groups[edge.name] then
+			error(string.format("can't have ident %s(#%d) -> %s(#%d)",
+				m.name, groups[m.name].idx, edge.name, groups[edge.name].idx))
+		end
+
+		return C.FHK_MAP_IDENT, ffi.new("fhk_arg", {u64=0})
+	end
+
+	if edge.map == "@space" then
+		return C.FHK_MAP_SPACE, ffi.new("fhk_arg", {u64=0})
+	end
+
+	return C.FHK_MAP_USER, ffi.new("fhk_arg", {p=ffi.cast("char *", edge.map)})
+end
+
+
+local function pass(g, fs)
+	for _,x in ipairs(g) do
+		local f = fs[x[__kind__]]
+		if f then f(x) end
+	end
+end
+
+local function wrapmodel(m)
+	local np = #m.params
+	local nr = #m.returns
+	local f  = m.f
+
+	return function(cm)
+		local p = {}
+		local e = cm.edges+0
+
+		for i=1, np do
+			local ptr = ffi.cast("double *", e.p)
+			p[i] = {}
+			for j=1, tonumber(e.n) do
+				p[i][j] = ptr[j-1]
+				--print("->", p[i][j])
 			end
+			e = e+1
+		end
+
+		local r = {f(unpack(p))}
+
+		for i, ri in ipairs(r) do
+			local rp = ffi.cast("double *", e.p)
+			for j=1, #ri do
+				rp[j-1] = ri[j]
+				--print("<-", ri[j])
+			end
+			e = e+1
+		end
+	end
+end
+
+local function runsolver(solver, driver)
+	while true do
+		local status = C.fhk_continue(solver)
+		local code = status:code()
+
+		if code == C.FHK_OK then
+			return
+		end
+
+		if code == C.FHK_ERROR then
+			return status:A()
+		end
+
+		if code == C.FHKS_SHAPE then
+			driver.shape(tonumber(status:X()))
+		elseif code == C.FHKS_MAPPING then
+			driver.map(ffi.string(status:Xudata().p), ffi.cast("struct fhks_mapping *", status:ABC()))
+		elseif code == C.FHKS_MAPPING_INVERSE then
+			driver.inverse(ffi.string(status:Xudata().p), ffi.cast("struct fhks_mapping *", status:ABC()))
+		elseif code == C.FHKS_COMPUTE_GIVEN then
+			driver.given(ffi.string(status:Xudata().p), tonumber(status:A()), tonumber(status:B()))
+		elseif code == C.FHKS_COMPUTE_MODEL then
+			driver.model(ffi.string(status:Xudata().p), ffi.cast("struct fhks_cmodel *", status:ABC()))
 		else
-			r[0] = topvalue(impl)
-		end
-
-		debugger.models[self.name] = function(ret)
-			ffi.copy(ret, r, nret * ffi.sizeof("pvalue"))
-		end
-	else
-		debugger.models[self.name] = function()
-			error(string.format("this model shouldn't be called: %s", self.name))
+			error(string.format("unhandled status: %d", code))
 		end
 	end
 end
 
---------------------------------------------------------------------------------
+local function driver(models, maps)
+	return {
+		model = function(name, cmarg)
+			models[name](cmarg)
+		end,
 
-local hdef_mt = { __index={} }
+		map = function(name, mparg)
+			mparg.ss[0] = maps[name].map(tonumber(mparg.instance))
+		end,
 
-local function h(hints)
-	return setmetatable({hints=hints}, hdef_mt)
-end
-
-function hdef_mt.__index:define(def)
-	for name,hint in pairs(self.hints) do
-		def:hint(name, hint)
-	end
-end
-
-function hdef_mt.__index:inject_debugger()
-end
-
---------------------------------------------------------------------------------
-
-local function solution(xs)
-	return function(dbg, ok)
-		if not ok then error(dbg:error()) end
-
-		for name,x in pairs(xs) do
-			local v = dbg:read(name)
-			x = topvalue(x)
-
-			if v.u64 ~= x.u64 then
-				error(string.format("%s: %f/%s != %f/%s", name, v.f64, v.u64, x.f64, x.u64))
-			end
+		inverse = function(name, mparg)
+			mparg.ss[0] = maps[name].inverse(tonumber(mparg.instance))
 		end
+	}
+end
+
+local function shapetable(groups)
+	local st = ffi.new("int16_t[?]", #groups)
+	for i,g in ipairs(groups) do
+		st[i-1] = g.size
 	end
-end
-
-local function samegraph(names)
-	local ns = {}
-	for _,name in ipairs(names) do
-		ns[name] = true
-	end
-
-	return function(dbg, ok, vars, models)
-		if not ok then error(dbg:error()) end
-
-		local subgraph = {}
-
-		for _,v in ipairs(vars) do
-			if not ns[v] then
-				error(string.format("Reduced graph is not subgraph: var '%s' is missing", v))
-			end
-			subgraph[v] = true
-		end
-
-		for _,m in ipairs(models) do
-			if not ns[m] then
-				error(string.format("Reduced graph is not subgraph: model '%s' is missing", m))
-			end
-			subgraph[m] = true
-		end
-
-		for _,name in ipairs(names) do
-			if not subgraph[name] then
-				error(string.format("Given graph is not subgraph: name '%s' is missing", name))
-			end
-		end
-	end
-end
-
-local function failure(how)
-	how = how or {}
-
-	return function(dbg, ok)
-		if ok then error("expected failure") end
-		if how.err and dbg.G.last_error.err ~= how.err then
-			error(string.format("err: %d != %d", dbg.G.last_error.err, how.err))
-		end
-	end
-end
-
---------------------------------------------------------------------------------
-
-local defgraph_mt = { __index = {} }
-
-local function defgraph(ondef)
-	return setmetatable({ondef=ondef}, defgraph_mt)
-end
-
-function defgraph_mt.__index:lazy_def()
-	self._def = self._def or fhk.def()
-	return self._def
-end
-
-function defgraph_mt.__index:clear_def()
-	self._def = nil
-end
-
-function defgraph_mt.__index:graph(ms)
-	local def = self:lazy_def()
-
-	for _,m in ipairs(ms) do
-		m:define(def)
-	end
-
-	self.ondef(def, ms)
-	self:clear_def()
-end
-
-function defgraph_mt.__index:inject(env)
-	env.m = m
-	env.h = h
-	env.graph = misc.delegate(self, self.graph)
-	env.any = function(...) return self:lazy_def():any(...) end
-	env.none = function(...) return self:lazy_def():none(...) end
-	env.between = function(...) return self:lazy_def():between(...) end
-	env.const = model.const
+	return st
 end
 
 local testgraph_mt = { __index={} }
 
-local function testgraph(def, ms)
-	local debugger = fhkdbg.debugger(nil, fhk.build_graph(def))
+local function testgraph(g)
+	-- [name vm] -> group
+	-- [index g] -> group
+	local gdefault
+	local groups = setmetatable({}, {
+		__index = function(self, name)
+			if type(name) ~= "string" then
+				return
+			end
 
-	for _,m in ipairs(ms) do
-		m:inject_debugger(debugger)
-	end
+			-- everything that was not explicitly marked goes to a default group (of size 1)
+			if not gdefault then
+				gdefault = {idx = #self, size = 1}
+				table.insert(self, gdefault)
+			end
+
+			self[name] = gdefault
+			return self[name]
+		end
+	})
+
+	local maps = {}
+
+	pass(g, {
+		group = function(group)
+			local g = {
+				idx = #groups,
+				size = group.size or 1
+			}
+
+			table.insert(groups, g)
+
+			for _,name in ipairs(group) do
+				groups[name] = g
+			end
+		end,
+
+		map = function(map)
+			maps[map.name] = map
+		end
+	})
+
+	local def = C.fhk_create_def()
+	local dsym = { v = {}, m = {} }
+
+	local vars = setmetatable({}, {
+		__index = function(self, name)
+			self[name] = C.fhk_def_add_var(def, groups[name].idx, 8,
+				ffi.new("fhk_arg", {p=ffi.cast("char *", name)}))
+			dsym.v[self[name]] = name
+			return self[name]
+		end
+	})
+
+	local models = {}
+	local midx = {}
+
+	pass(g, {
+		model = function(m)
+			local M = C.fhk_def_add_model(def, groups[m.name].idx, m.k, m.c,
+				ffi.new("fhk_arg", {p=ffi.cast("char *", m.name)}))
+
+			midx[m.name] = M
+			dsym.m[M] = m.name
+
+			for _,p in ipairs(m.params) do
+				C.fhk_def_add_param(def, M, vars[p.name], edgemap(m, p, groups))
+			end
+
+			for _,r in ipairs(m.returns) do
+				C.fhk_def_add_return(def, M, vars[r.name], edgemap(m, r, groups))
+			end
+
+			for _,c in ipairs(m.checks) do
+				local map, arg = edgemap(m, c, groups)
+				C.fhk_def_add_check(def, M, vars[c.name], map, arg, c.op, c.arg, c.penalty)
+			end
+
+			models[m.name] = wrapmodel(m)
+		end
+	})
+
+	dsym.v = ffi.new("const char *[?]", #dsym.v+1, dsym.v)
+	dsym.m = ffi.new("const char *[?]", #dsym.m+1, dsym.m)
+	local G = ffi.gc(C.fhk_build_graph(def, nil), function()
+		C.free(G)
+		dsym = nil
+	end)
+	C.fhk_set_dsym(G, dsym.v, dsym.m)
+
+	C.fhk_destroy_def(def)
 
 	return setmetatable({
-		_debugger = debugger
+		G       = G,
+		st      = shapetable(groups),
+		vidx    = setmetatable(vars, nil),
+		midx    = midx,
+		driver  = driver(models, maps)
 	}, testgraph_mt)
 end
 
-function testgraph_mt.__index:given(xs)
-	for name,x in pairs(xs) do
-		if type(name) == "string" then
-			self._debugger:given(name, type(x) == "function" and x or topvalue(x))
-		else
-			self._debugger:given(x)
+function testgraph_mt.__index:collectreq(req)
+	local creq = ffi.new("struct fhk_req[?]", #req)
+
+	for i,r in ipairs(req) do
+		creq[i-1].idx = self.vidx[r.name]
+		creq[i-1].ss = r.ss
+		creq[i-1].buf = nil
+	end
+
+	return creq
+end
+
+function testgraph_mt.__index:setshape(solver)
+	local status = C.fhkS_shape_table(solver, self.st)
+	assert(status:code() == C.FHK_OK)
+end
+
+function testgraph_mt.__index:setgiven(solver)
+	if self.given_values then
+		for name,vals in pairs(self.given_values) do
+			local status = C.fhkS_give_all(solver, self.vidx[name], vals)
+			assert(status:code() == C.FHK_OK)
 		end
 	end
 end
 
-function testgraph_mt.__index:want(names)
-	self._want = names
+function testgraph_mt.__index:solve(num, req)
+	self.arena = C.arena_create(32000)
+	local solver = C.fhk_create_solver(self.G, self.arena, num, req)
+	self:setshape(solver)
+	self:setgiven(solver)
+	local err = runsolver(solver, self.driver)
+	return solver, err
 end
 
-function testgraph_mt.__index:solution(check)
-	local names
+function testgraph_mt.__index:reduce()
+	self.arena = C.arena_create(32000)
+	local flags = self.arena:new("uint8_t", self.G.nv)
+	ffi.fill(flags, self.G.nv)
 
-	if type(check) == "table" then
-		names = misc.keys(check)
-		check = solution(check)
+	if self.given_names then
+		for _, name in ipairs(self.given_names) do
+			flags[self.vidx[name]] = C.FHK_GIVEN
+		end
+	end
+
+	for _, name in ipairs(self.roots) do
+		flags[self.vidx[name]] = bit.bor(flags[self.vidx[name]], C.FHK_ROOT)
+	end
+
+	return C.fhk_reduce(self.G, self.arena, flags, nil)
+end
+
+-- user callbacks
+
+function testgraph_mt.__index:given(vs)
+	if #vs > 0 then
+		self.given_names = vs
 	else
-		names = self._want
-	end
+		local given = {}
+		for name,val in pairs(vs) do
+			if type(val) == "number" then
+				val = {val}
+			end
 
-	check(self._debugger, self._debugger:solve(names))
-	self._debugger:reset()
-end
+			local buf = ffi.new("double[?]", #val)
+			for i,v in ipairs(val) do
+				buf[i-1] = v
+			end
 
-function testgraph_mt.__index:reduces(check)
-	if type(check) == "table" then
-		check = samegraph(check)
-	end
-
-	check(self._debugger, self._debugger:reduce(self._want))
-	self._debugger:reset()
-end
-
-function testgraph_mt.__index:inject(env)
-	env.given = misc.delegate(self, self.given)
-	env.want = misc.delegate(self, self.want)
-	env.solution = misc.delegate(self, self.solution)
-	env.reduces = misc.delegate(self, self.reduces)
-	env.failure = failure
-end
-
---------------------------------------------------------------------------------
-
-return {
-	injector = function(ondef)
-		return function(env)
-			local env = env or setmetatable({}, {__index=_G})
-			defgraph(function(graph, ms) ondef(graph, ms, env) end):inject(env)
-			return env
+			given[name] = buf
 		end
-	end,
 
-	inject_test = function(graph, ms, env)
-		testgraph(graph, ms):inject(env)
-	end,
+		self.given_values = given
+	end
+end
 
-	m = m,
-	h = h
-}
+function testgraph_mt.__index:root(vs)
+	self.roots = vs
+end
+
+local function ss(arena, ...)
+	local ranges = {...}
+	if #ranges == 0 then return 0 end
+
+	if #ranges == 1 then
+		local from, to = ranges[1][1], ranges[1][2]
+		return bit.lshift(1ULL, 48) + bit.lshift(to, 16) + from
+	end
+
+	local rp = ffi.cast("uint32_t *", C.arena_malloc(arena, 4*#ranges))
+	for i,r in ipairs(ranges) do
+		rp[i-1] = bit.lshift(r[2], 16) + r[1]
+	end
+
+	return bit.lshift(ffi.new("uint64_t", #ranges), 48) + ffi.cast("uintptr_t", rp)
+end
+
+function testgraph_mt.__index:solution(s)
+	local ns = 0
+	for _,_ in pairs(s) do ns = ns+1 end
+
+	local req = ffi.new("struct fhk_req[?]", ns)
+	local buf = {}
+	local i = 0
+	for name,val in pairs(s) do
+		req[i].idx = self.vidx[name]
+		req[i].ss = ss(nil, {0, #val})
+		buf[name] = ffi.new("double[?]", #val)
+		req[i].buf = buf[name]
+		i = i+1
+	end
+
+	local solver, err = self:solve(ns, req)
+
+	if err then
+		error(string.format("solver was not supposed to fail, but error was: %d", err))
+	end
+
+	for name,val in pairs(s) do
+		local b = buf[name]
+		for i,v in ipairs(val) do
+			if v ~= NA and b[i-1] ~= v then
+				error(string.format("wrong solution: %s:%d -- got %f, expected %f",
+					name, i-1, b[i-1], v))
+			end
+		end
+	end
+end
+
+function testgraph_mt.__index:subgraph(names)
+	local sub = self:reduce()
+
+	assert(sub ~= ffi.NULL)
+
+	-- names <= sub ?
+	for _,name in ipairs(names) do
+		if self.vidx[name] then
+			if sub.r_vars[self.vidx[name]] == C.FHK_SKIP then
+				error(string.format("Variable '%s' not in subgraph", name))
+			end
+		else
+			if sub.r_models[self.midx[name]] == C.FHK_SKIP then
+				error(string.format("Model '%s' not in subgraph", name))
+			end
+		end
+	end
+
+	local iv, im = {}, {}
+	for _,name in ipairs(names) do
+		if self.vidx[name] then iv[self.vidx[name]] = true end
+		if self.midx[name] then im[self.midx[name]] = true end
+	end
+
+	-- sub <= names?
+	for i=0, self.G.nv-1 do
+		if sub.r_vars[i] ~= C.FHK_SKIP and not iv[i] then
+			error(string.format("Extra variable '%s' in subgraph", ffi.string(self.G.vars[i].udata.p)))
+		end
+	end
+
+	for i=0, self.G.nm-1 do
+		if sub.r_models[i] ~= C.FHK_SKIP and not im[i] then
+			error(string.format("Extra model '%s' in subgraph", ffi.string(self.G.models[i].udata.p)))
+		end
+	end
+end
+
+local function inject(env)
+	env.m = m
+	env.g = g
+	env.s = s
+	env.NA = NA
+	env.graph = function(g)
+		local t = testgraph(g)
+		env.given = misc.delegate(t, t.given)
+		env.root = misc.delegate(t, t.root)
+		env.solution = misc.delegate(t, t.solution)
+		env.subgraph = misc.delegate(t, t.subgraph)
+		env.ss = function(...) return ss(t.arena, ...) end
+	end
+	return env
+end
+
+return function(f)
+	return setfenv(f, inject({}))
+end

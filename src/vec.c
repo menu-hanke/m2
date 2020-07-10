@@ -10,47 +10,47 @@
 #include <assert.h>
 
 struct cpy_interval {
-	unsigned dst;
-	unsigned src;
-	unsigned num;
+	uint32_t dst;
+	uint32_t src;
+	uint32_t num;
 };
 
-static unsigned calc_intervals_s(struct cpy_interval *cpy, unsigned *ncpy, unsigned n,
-		unsigned *skip, unsigned tail);
-static void copy_intervals(struct cpy_interval *cpy, unsigned ncpy, void *restrict dst,
-		void *restrict src, unsigned size);
+static uint32_t calc_intervals_s(struct cpy_interval *cpy, uint32_t *ncpy, uint32_t n,
+		uint32_t *skip, uint32_t tail);
+static void copy_intervals(struct cpy_interval *cpy, uint32_t ncpy, void *restrict dst,
+		void *restrict src, uint32_t size);
 static int cmp_idx(const void *a, const void *b);
-static void F_ensure_capacity(sim *sim, struct vec *v, unsigned n);
+static void F_ensure_capacity(sim *sim, struct vec *v, uint32_t n);
 
 void vec_clear(struct vec *v){
 	v->n_alloc = 0;
 	v->n_used = 0;
-	for(unsigned i=0;i<v->info->n_bands;i++)
+	for(size_t i=0;i<v->info->n_bands;i++)
 		v->bands[i] = NULL;
 }
 
-void vec_clear_bands(struct vec *v, unsigned n, unsigned *idx){
-	for(unsigned i=0;i<n;i++)
+void vec_clear_bands(struct vec *v, uint16_t n, uint16_t *idx){
+	for(size_t i=0;i<n;i++)
 		v->bands[idx[i]] = NULL;
 }
 
-unsigned vec_copy_skip(struct vec *v, void **dst, unsigned n, unsigned *skip){
-	qsort(skip, n, sizeof(*skip), cmp_idx);
+uint32_t vec_copy_skip(struct vec *v, void **dst, uint32_t n, uint32_t *skip){
+	qsort(skip, n, sizeof(*skip), cmp_idx); // XXX
 	return vec_copy_skip_s(v, dst, n, skip);
 }
 
-unsigned vec_copy_skip_s(struct vec *v, void **dst, unsigned n, unsigned *skip){
+uint32_t vec_copy_skip_s(struct vec *v, void **dst, uint32_t n, uint32_t *skip){
 	struct cpy_interval cpy[n + 1];
-	unsigned ncpy;
-	unsigned tail = calc_intervals_s(cpy, &ncpy, n, skip, v->n_used);
-	for(unsigned i=0;i<v->info->n_bands;i++){
+	uint32_t ncpy;
+	uint32_t tail = calc_intervals_s(cpy, &ncpy, n, skip, v->n_used);
+	for(uint32_t i=0;i<v->info->n_bands;i++){
 		if(v->bands[i])
 			copy_intervals(cpy, ncpy, dst[i], v->bands[i], v->info->stride[i]);
 	}
 	return tail;
 }
 
-struct vec_info *simS_vec_create_info(sim *sim, unsigned n_bands, unsigned *strides){
+struct vec_info *simS_vec_create_info(sim *sim, uint16_t n_bands, uint16_t *strides){
 	struct vec_info *info = sim_alloc(sim, sizeof(*info) + n_bands*sizeof(*info->stride),
 			alignof(*info), SIM_STATIC);
 
@@ -71,29 +71,29 @@ struct vec *simL_vec_create(sim *sim, struct vec_info *info, int lifetime){
 	return v;
 }
 
-void *simF_vec_create_band(sim *sim, struct vec *v, unsigned band){
+void *simF_vec_create_band(sim *sim, struct vec *v, uint16_t band){
 	return simF_vec_create_band_stride(sim, v, v->info->stride[band]);
 }
 
-void *simF_vec_create_band_stride(sim *sim, struct vec *v, unsigned stride){
+void *simF_vec_create_band_stride(sim *sim, struct vec *v, uint16_t stride){
 	return sim_alloc(sim, v->n_alloc * stride, VEC_ALIGN, SIM_FRAME);
 }
 
-unsigned simF_vec_alloc(sim *sim, struct vec *v, unsigned n){
+uint32_t simF_vec_alloc(sim *sim, struct vec *v, uint32_t n){
 	F_ensure_capacity(sim, v, n);
-	unsigned ret = v->n_used;
+	uint32_t ret = v->n_used;
 	v->n_used += n;
 	dv("alloc %u entries [%u-%u] on vector %p (%u/%u used)\n",
 			n, ret, v->n_used, v, v->n_used, v->n_alloc);
 	return ret;
 }
 
-void simF_vec_delete(sim *sim, struct vec *v, unsigned n, unsigned *idx){
+void simF_vec_delete(sim *sim, struct vec *v, uint32_t n, uint32_t *idx){
 	if(!n)
 		return;
 
 	void *newbands[v->info->n_bands];
-	for(unsigned i=0;i<v->info->n_bands;i++)
+	for(size_t i=0;i<v->info->n_bands;i++)
 		newbands[i] = v->bands[i] ? simF_vec_create_band(sim, v, i) : NULL;
 
 	vec_copy_skip(v, newbands, n, idx);
@@ -101,10 +101,10 @@ void simF_vec_delete(sim *sim, struct vec *v, unsigned n, unsigned *idx){
 	memcpy(v->bands, newbands, v->info->n_bands * sizeof(*v->bands));
 }
 
-static unsigned calc_intervals_s(struct cpy_interval *cpy, unsigned *ncpy, unsigned n,
-		unsigned *skip, unsigned tail){
+static uint32_t calc_intervals_s(struct cpy_interval *cpy, uint32_t *ncpy, uint32_t n,
+		uint32_t *skip, uint32_t tail){
 
-	unsigned next = 0, cpos = 0, nc = 0;
+	uint32_t next = 0, cpos = 0, nc = 0;
 
 	for(size_t i=0;i<n;i++){
 		size_t d = skip[i];
@@ -136,13 +136,13 @@ static unsigned calc_intervals_s(struct cpy_interval *cpy, unsigned *ncpy, unsig
 	return cpos;
 }
 
-static void copy_intervals(struct cpy_interval *cpy, unsigned ncpy, void *restrict dst,
-		void *restrict src, unsigned size){
+static void copy_intervals(struct cpy_interval *cpy, uint32_t ncpy, void *restrict dst,
+		void *restrict src, uint32_t size){
 
 	char *cd = dst;
 	char *cs = src;
 
-	for(unsigned i=0;i<ncpy;i++){
+	for(size_t i=0;i<ncpy;i++){
 		struct cpy_interval *c = &cpy[i];
 		memcpy(cd+c->dst*size, cs+c->src*size, c->num*size);
 	}
@@ -152,11 +152,11 @@ static int cmp_idx(const void *a, const void *b){
 	return *((int *) a) - *((int *) b);
 }
 
-static void F_ensure_capacity(sim *sim, struct vec *v, unsigned n){
+static void F_ensure_capacity(sim *sim, struct vec *v, uint32_t n){
 	if(v->n_used + n <= v->n_alloc)
 		return;
 
-	unsigned na = v->n_alloc;
+	uint32_t na = v->n_alloc;
 	if(!na)
 		na = 32;
 
@@ -170,7 +170,7 @@ static void F_ensure_capacity(sim *sim, struct vec *v, unsigned n){
 
 	// frame-alloc new bands, no need to free old ones since they were frame-alloced as well
 	// NOTE: this will not work if we some day do interleaved bands!
-	for(unsigned i=0;i<v->info->n_bands;i++){
+	for(size_t i=0;i<v->info->n_bands;i++){
 		void *old = v->bands[i];
 		if(old){
 			v->bands[i] = simF_vec_create_band(sim, v, i);

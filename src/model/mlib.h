@@ -1,5 +1,6 @@
 #pragma once
 
+#if 0
 #include "model.h"
 
 #include <stdarg.h>
@@ -23,3 +24,4 @@ void mlib_errf(const char *fmt, ...);
 	type *atypes;\
 	type *rtypes;\
 	unsigned flags
+#endif

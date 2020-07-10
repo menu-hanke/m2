@@ -1,36 +1,50 @@
 /* model that always returns a constant value - this is mainly useful for testing */
 
 #include "model_Const.h"
+#include "../def.h"
 
 #include <stdlib.h>
 #include <stddef.h>
+#include <stdalign.h>
 #include <string.h>
 
-struct model_Const {
-	struct model model;
-	pvalue ret[];
+struct mod_Const {
+	struct {
+		size_t size;
+		void *mem;
+	} bufs[0];
 };
 
-static int mod_Const_call(struct model_Const *m, pvalue *ret, pvalue *argv);
-
-static const struct model_func MOD_CONST = {
-	.call      = (model_call_f) mod_Const_call,
-	.calibrate = NULL,
-	.destroy   = (model_destroy_f) free
-};
-
-model *mod_Const_create(unsigned nret, pvalue *ret){
-	struct model_Const *m = malloc(sizeof(*m) + nret*sizeof(*ret));
-	memset(&m->model, 0, sizeof(m->model));
-	m->model.func = &MOD_CONST;
-	m->model.n_ret = nret;
-	// don't need to set rtypes, we don't care about them
-	memcpy(m->ret, ret, nret*sizeof(*ret));
-	return (model *) m;
+uint64_t mod_Const_types(){
+	return ~0ULL;
 }
 
-static int mod_Const_call(struct model_Const *m, pvalue *ret, pvalue *argv){
-	(void)argv;
-	memcpy(ret, m->ret, m->model.n_ret*sizeof(*ret));
-	return MODEL_CALL_OK;
+struct mod_Const *mod_Const_create(size_t num, size_t *nr, void **rv){
+	size_t off = sizeof(*((struct mod_Const *) 0)->bufs) * num;
+	size_t na = 0;
+	for(size_t i=0;i<num;i++)
+		na += nr[i];
+
+	struct mod_Const *M = malloc(na + off);
+
+	void *mem = ((void *) M) + off;
+	for(size_t i=0;i<num;i++){
+		M->bufs[i].size = nr[i];
+		M->bufs[i].mem = mem;
+		memcpy(mem, rv[i], nr[i]);
+		mem += nr[i];
+	}
+
+	return M;
+}
+
+int mod_Const_call(struct mod_Const *M, mcall_s *mc){
+	mcall_edge *e = mc->edges + mc->np;
+	for(size_t i=0;i<mc->nr;i++,e++)
+		memcpy(e->p, M->bufs[i].mem, M->bufs[i].size);
+	return MCALL_OK;
+}
+
+void mod_Const_destroy(struct mod_Const *M){
+	free(M);
 }

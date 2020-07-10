@@ -1,239 +1,319 @@
 -- vim: ft=lua
-local ffi = require "ffi"
-local T = require "testgraph"
-local testenv = T.injector(T.inject_test)
+local _ = require "testgraph"
 
-local function g(f)
-	return setfenv(f, testenv())
+-- identity : X^n -> X^n
+local function id(...) return ... end
+
+-- n-dimension dot product : X^n -> X^1
+local function dot(...)
+	local xs = {...}
+	local d = 0
+
+	for i,x in ipairs(xs[1]) do
+		for j=2, #xs do
+			x = x * xs[j][i]
+		end
+		d = d + x
+	end
+
+	return {d}
 end
 
-test_1model = g(function()
+---- sanity checks ----------------------------------------
+
+test_san_single = _(function()
 	graph {
-		m("x->a", 0)
+		m { "a -> x", id }
 	}
 
-	given { x = 0 }
-	solution { a = 0 }
+	given { a = {123} }
+	solution { x = {123} }
 end)
 
-test_selection = g(function()
+test_san_cost = _(function()
 	graph {
-		m("halpa:x->a", 1)  :cost{k=1, c=1},
-		m("kallis:x->a", 2) :cost{k=2, c=1}
+		m { "-> x # M1", function() return {2} end, k=2},
+		m { "-> x # M2", function() return {1} end, k=1}
 	}
 
-	given { x = 0 }
-	solution { a = 1 }
+	solution { x = {1} }
 end)
 
-test_chain_selection = g(function()
+test_san_given_check = _(function()
 	graph {
-		m("x,y->a", 1) :cost{k=1, c=1},
-		m("->x", 2)    :cost{k=100, c=1},
-		m("->y", 3)    :cost{k=10, c=1},
-		m("->a", 4)    :cost{k=5, c=1}
+		m { "-> x # M1", function() return {1} end } :check "a>=0 +10",
+		m { "-> x # M2", function() return {2} end } :check "a<=0 +10"
 	}
 
-	solution { a = 4 }
+	given { a = {1} }
+	solution { x = {1} }
+
+	given { a = {-1} }
+	solution { x = {2} }
 end)
 
-test_multi_return = g(function()
+test_san_computed_check = _(function()
 	graph {
-		m("->x,y", {1,2})      :cost{k=100, c=1},
-		m("->y,z", {10,20})    :cost{k=10, c=1},
-		m("->x,z", {100, 200}) :cost{k=1, c=1}
+	 	m { "-> x", function() return {1} end },
+		m { "-> y # M1", function() return {1} end, k=100, c=1},
+		m { "-> y # M2", function() return {2} end, k=1, c=1} :check "x<=0 +1000"
 	}
 
-	solution { x=100, y=10, z=200 }
+	solution { y = {1} }
 end)
 
-test_cycle = g(function()
+test_san_complex_parameter = _(function()
 	graph {
-		m("a0->a", 1) :cost{k=15, c=1},
-		m("b0->b", 2) :cost{k=5, c=1},
-		m("b->a", 10),
-		m("a->b", 20)
+		m { "a:even -> x", dot },
+		s { "even",
+			function() return ss({0, 1}, {2, 3}) end,
+			function(inst) return (ss%2==0) and ss({0, 3}) or ss() end
+		},
+		g { "a", size=4 }
 	}
 
-	given { a0=0, b0=0 }
-	solution { a=10, b=2 }
+	given { a = {1, 2, 3, 4} }
+	solution { x = {1+3} }
 end)
 
-test_interval_constraint = g(function()
+test_san_chain = _(function()
 	graph {
-		m("halpa:x->a", 1)  :check{x=between(-1, 1)} :cost{k=1, c=1},
-		m("kallis:x->a", 2)                          :cost{k=100, c=1}
+		m { "a -> x", id },
+		m { "x -> y", id }
 	}
 
-	given { x = 2 }
-	solution { a = 2 }
-
-	given { x = 0 }
-	solution { a = 1 }
+	given { a = {123} }
+	solution { x = {123} }
 end)
 
-test_mask_constraint = g(function()
+test_san_set = _(function()
 	graph {
-		m("halpa:x->a", 1)  :check{x=any(1,2,3)} :cost{k=1, c=1},
-		m("kallis:x->a", 2)                      :cost{k=100, c=1}
+		m { "a:@space -> x", dot },
+		g { "a", size=3 }
 	}
 
-	given { x = ffi.new("pvalue", {u64=2^2}) }
-	solution { a = 1 }
-
-	given { x = ffi.new("pvalue", {u64=2^4}) }
-	solution { a = 2 }
+	given { a = {1, 2, 3} }
+	solution { x = {1+2+3} }
 end)
 
-test_computed_check = g(function()
+test_san_set_chain = _(function()
 	graph {
-		m("halpa:x->a", 1)  :check{x=between(-1, 1)} :cost{k=1, c=1},
-		m("kallis:x->a", 2)                          :cost{k=100, c=1},
-		m("y->x", 0)
+		m { "a -> x # M", id },
+		m { "x:@space -> y", dot },
+		g { "a", "x", "M", size=3 }
 	}
 
-	given { y = 0 }
-	solution { a = 1 }
+	given { a = {1, 2, 3} }
+	solution { y = {1+2+3} }
 end)
 
-test_recursive_model_bound = g(function()
+---- tech tests ----------------------------------------
+
+test_tech_retbuf = _(function()
 	graph {
-		m("x,y->a,b", {1, 2}),
-		m("b->y", 3),
-		m("->y", 4) :cost{k=100, c=100}
+		-- this model has complex returns so it doesn't set the FHK_MNORETBUF flag,
+		-- ie it has to allocate the return buffers and then copy
+		m { "-> x:@space", function() return {1, 2, 3} end },
+		g { "x", size=3 }
 	}
 
-	given { x = 0 }
-	solution { a = 1 }
+	solution { x = {1, 2, 3} }
 end)
 
-test_partial_beta_bound = g(function()
+test_tech_instace_retbuf = _(function()
 	graph {
-		m("x->a", 1) :cost{k=1, c=1},
-		m("y->a", 2) :cost{k=2, c=2},
-		m("xp->x", 3):check{xp=between(0, 1), xq=between(0, 1)}:xcost{xp={0, 100}, xq={0, 200}},
-		m("yp->y", 4):check{yp=between(0, 1), yq=between(0, 1)}:xcost{yp={0, 100}, yq={0, 200}},
-		m("->xp", -1),
-		m("->xq", 0.5),
-		m("->yp", 0.5),
-		m("->yq", -1)
+		-- accessing the results here requires calculating the instance retbuf address
+		m { "x,y -> z,w # M", id },
+		g { "x", "y", "z", "w", "M", size=3 }
 	}
 
-	solution { a = 1 }
+	given { x = {1, 2, 3}, y = {4, 5, 6} }
+	solution { z = {1, 2, 3}, w = {4, 5, 6} }
 end)
 
-test_fail_no_chain = g(function()
+---- acyclic graphs ----------------------------------------
+
+test_acy_bound_retry = _(function()
 	graph {
-		m("x->a")
+		m { "x->a",  1, k=1, c=1},
+		m { "y->a",  2, k=2, c=2},
+		m { "xp->x", 3  } :check "xp>=0 +100" :check "xq>=0 +200",
+		m { "yp->y", 4  } :check "yp>=0 +100" :check "yq>=0 +200",
+		m { "->xp",  -1 },
+		m { "->xq",  1  },
+		m { "->yp",  1  },
+		m { "->yq",  -1 }
 	}
 
-	want { "a" }
-	solution( failure { err = ffi.C.FHK_SOLVER_FAILED } )
+	-- solve a
+	--     try x->a
+	--         solve x
+	--             try xp->x
+	--                 solve xp
+	--                     try ->xp
+	--                     xp = -1
+	--                 beta bound
+	--             beta bound
+	--         beta bound
+	--     beta bound
+	--     try y->a
+	--         solve y
+	--             try yp->y
+	--                 solve yp
+	--                     try ->yp
+	--                     yp = 1
+	--                 solve yq
+	--                     try ->yq
+	--                     yq = -1
+	--                 beta bound
+	--             beta bound
+	--         beta bound
+	--     beta bound
+	--     try x->a
+	--         solve x
+	--             try xp->x
+	--                 solve xq
+	--                     xq = 1
+	--              x = 3
+	--     a = 1
+
+	solution { a = {1} }
 end)
 
-test_fail_constraint = g(function()
+test_acy_set_given_constraint = _(function()
 	graph {
-		m("1:x->a"):check{x=between(-math.huge, -1)},
-		m("2:x->a"):check{x=between(1, math.huge)}
+		m { "->x # M1", 1 } :check "a:@space>=0 +100",
+		m { "->x # M2", 2, k=50 },
+		g { "a", size=2 }
 	}
 
-	given { x = 0 }
-	want { "a" }
-	solution( failure { err = ffi.C.FHK_SOLVER_FAILED } )
+	given { a = {1, -1} }
+	solution { x = {2} }
+
+	given { a = {1, 1} }
+	solution { x = {1} }
 end)
 
-test_reduce1 = g(function()
+test_acy_set_computed_constraint = _(function()
 	graph {
-		m("x->a")
+		m { "->x # M1", 1 } :check "a:@space>=0 +100",
+		m { "->x # M2", 2, k=50 },
+		m { "a0->a # M0", id },
+		g { "a0", "a", "M0", size=2 }
+	}
+
+	given { a0 = {1, -1} }
+	solution { x = {2} }
+
+	given { a0 = {1, 1} }
+	solution { x = {1} }
+end)
+
+test_acy_set_computed_param = _(function()
+	graph {
+		m { "a:second->x", id },
+		m { "->a:first", 123 },
+		m { "->a:second", 456 },
+		s { "first",
+			function() return ss{0, 1} end,
+			function(inst) return inst == 0 and ss{0, 1} or ss() end
+		},
+		s { "second",
+			function() return ss{1, 2} end,
+			function(inst) return inst == 1 and ss{0, 1} or ss() end
+		},
+		g { "a", size=2 }
+	}
+
+	solution { x = {456} }
+end)
+
+test_acy_return_overlap = _(function()
+	graph {
+		m { "->x,y", {{1}, {1}}, k=1 },
+		m { "->y,z", {{2}, {2}}, k=2 },
+		m { "->x,z", {{3}, {3}}, k=3 }
+	}
+
+	solution { x = {1}, y = {1}, z = {2} }
+end)
+
+test_acy_no_chain_constraint = _(function()
+	graph {
+		m { "->x # M1", 1 } :check "a>=0 +100",
+		m { "->x # M2", 2, k=200},
+		m { "->a", 10 } :check "b>=0 +inf"
+	}
+
+	given { b = {-1} }
+	solution { x = {2} }
+end)
+
+---- subgraph selection ----------------------------------------
+
+test_sub_omit_model = _(function()
+	graph {
+		m { "->x # M1", k=1 },
+		m { "->x # M2", k=2 }
+	}
+
+	root { "x" }
+	subgraph { "x", "M1" }
+end)
+
+test_sub_omit_given = _(function()
+	graph {
+		m { "x->y" },
+		m { "y->z" }
+	}
+
+	given { "y" }
+	root { "z" }
+	subgraph { "y", "z", "y->z" }
+end)
+
+test_sub_pick_bound = _(function()
+	graph {
+		m { "x->y # M1" } :check "x>=0 +100",
+		m { "x->y # M2", k=2 },
+		m { "x->y # M3", k=3 } :check "x>=0 +100"
 	}
 
 	given { "x" }
-	want { "a" }
-	reduces { "x", "a", "x->a"}
+	root { "y" }
+	subgraph { "x", "y", "M1", "M2" }
 end)
 
-test_reduce_omit_model = g(function()
+test_sub_omit_high_cycle = _(function()
 	graph {
-		m("halpa:x->a")  :cost{k=1, c=1},
-		m("kallis:x->a") :cost{k=100, c=100}
+		m { "x->y", k=100},
+		m { "y->x" },
+		m { "x->z" },
+		m { "y->z" },
+		m { "->x", k=100},
+		m { "->y"  }
 	}
 
-	given { "x" }
-	want { "a" }
-	reduces { "x", "a", "halpa" }
+	root { "z" }
+	subgraph { "y", "z", "y->z", "->y" }
 end)
 
-test_reduce_omit_var = g(function()
+test_sub_retain_bounded_cycle = _(function()
 	graph {
-		m("x->a") :cost{k=1, c=1},
-		m("y->a") :cost{k=100, c=100}
-	}
-
-	given { "x", "y" }
-	want { "a" }
-	reduces { "x", "a", "x->a" }
-end)
-
-test_reduce_keep_strict_beta = g(function()
-	graph {
-		m("cst:x->a")   :check{x=between(100, 200)} :cost{k=1, c=1},
-		m("nocst:x->a")                             :cost{k=100, c=100}
-	}
-
-	given { "x" }
-	want { "a" }
-	reduces { "x", "a", "cst", "nocst" }
-end)
-
-test_reduce_skip_high_beta = g(function()
-	graph {
-		m("1:x->a"):check{x=between(100, 200)},
-		m("2:x->a"):check{x=between(0, 1)}:xcost{x={50, 100}},
-		m("3:x->a"):check{x=between(1, 2)}:xcost{x={100, 100}}
-	}
-
-	given { "x" }
-	want { "a" }
-	reduces { "x", "a", "1", "2" }
-end)
-
-test_reduce_omit_high_cycle = g(function()
-	graph {
-		m("x->y"):cost{k=100, c=100},
-		m("y->x"),
-		m("x->z"),
-		m("y->z"),
-		m("->x"):cost{k=100, c=100},
-		m("->y")
-	}
-
-	want { "z" }
-	reduces { "y", "z", "y->z", "->y" }
-end)
-
-test_reduce_retain_bounded_cycle = g(function()
-	graph {
-		m("x->y"),
-		m("y->x"),
-		m("x->z"),
-		m("y->z"),
-		m("->x"):check{w=between(0, 1)},
-		m("->y"):check{w=between(1, 2)}
+		m { "x->y" },
+		m { "y->x" },
+		m { "x->z" },
+		m { "y->z" },
+		m { "->x"  } :check "w>=0 +100",
+		m { "->y"  } :check "w<=0 +100"
 	}
 
 	given { "w" }
-	want { "z" }
-	reduces {
+	root { "z" }
+	subgraph {
 		"x", "y", "z", "w",
 		"x->y", "y->x", "x->z", "y->z", "->x", "->y"
 	}
 end)
 
-test_reduce_fail_no_solution = g(function()
-	graph {
-		m("x->y")
-	}
-
-	want { "y" }
-	reduces( failure { err = ffi.C.FHK_SOLVER_FAILED } )
-end)
+-- TODO: reduce_fail tests

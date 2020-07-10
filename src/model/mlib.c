@@ -1,6 +1,40 @@
 #define _GNU_SOURCE // for vasprintf
 
 #include "model.h"
+
+#include <stdarg.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+
+static char *mod_error = NULL;
+
+void model_errf(const char *fmt, ...){
+	if(mod_error)
+		free(mod_error);
+
+	va_list ap;
+	va_start(ap, fmt);
+	vasprintf(&mod_error, fmt, ap);
+	va_end(ap);
+}
+
+const char *model_error(){
+	return mod_error;
+}
+
+void model_cleanup(){
+	if(mod_error){
+		free(mod_error);
+		mod_error = NULL;
+	}
+}
+
+#if 0
+
+#define _GNU_SOURCE // for vasprintf
+
+#include "model.h"
 #include "../list.h"
 
 #include <stdarg.h>
@@ -15,7 +49,6 @@ struct file_udata {
 };
 
 static VEC(struct file_udata) loaded_files;
-static const char *last_error = NULL;
 
 static struct file_udata *find_loaded(const char *file);
 
@@ -82,20 +115,6 @@ void mlib_importd(struct model *m, pvalue *retv){
 		retv[i] = vimportd(retv[i].f64, m->rtypes[i]);
 }
 
-void mlib_errf(const char *fmt, ...){
-	if(last_error)
-		free((void *)last_error);
-
-	va_list ap;
-	va_start(ap, fmt);
-	vasprintf((char **) &last_error, fmt, ap);
-	va_end(ap);
-}
-
-const char *model_error(){
-	return last_error;
-}
-
 static struct file_udata *find_loaded(const char *file){
 	for(size_t i=0;i<VECN(loaded_files);i++){
 		struct file_udata *f = &VECE(loaded_files, i);
@@ -105,3 +124,5 @@ static struct file_udata *find_loaded(const char *file){
 
 	return NULL;
 }
+
+#endif
