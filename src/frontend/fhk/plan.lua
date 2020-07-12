@@ -482,35 +482,24 @@ function subgraph_mt.__index:create(def, create_mod, static_alloc, runtime_alloc
 	-- scratch buffer for signature as seen by model (autoconverted)
 	local m_sig = ffi.cast("struct mt_sig *", scratch:alloc(514, 1))
 
-	-- scratch buffer for sig conversion
-	local insn, n_insn = scratch:alloc(512, 1), 512
-
 	for i, m in ipairs(m_models) do
 		if S.r_models[i-1] ~= C.FHK_SKIP then
 			types:sigof(g_sig, m)
 			types:autoconvsig(m_sig, m)
 
-			local cvins
+			local gscopy, mscopy
 
-			while true do
-				local size = C.mt_sig_conv(g_sig, m_sig, insn, n_insn)
-				if size >= 0 then
-					cvins = static_alloc(size, 1)
-					ffi.copy(cvins, insn, size)
-					break
-				end
-
-				if size ~= C.MT_CONV_EBUF then
-					-- TODO: error message
-					error("mt_sig_convn failed " .. tostring(g_sig) .. " => " .. tostring(m_sig) .. " @ " .. m.model.name)
-				end
-
-				n_insn = 2*n_insn
-				insn = scratch:alloc(n_insn, 1) -- TODO: C.arena_realloc
+			-- need to convert
+			if g_sig ~= m_sig then
+				local nalloc = (g_sig.np+g_sig.nr) * ffi.sizeof("mt_type")
+				gscopy = static_alloc(nalloc, ffi.alignof("mt_type"))
+				mscopy = static_alloc(nalloc, ffi.alignof("mt_type"))
+				ffi.copy(gscopy, g_sig.typ, nalloc)
+				ffi.copy(mscopy, m_sig.typ, nalloc)
 			end
 
 			local mp = create_mod(m.model, m_sig)
-			local udata = driver.mcall(static_alloc, mp, cvins)
+			local udata = driver.mcall(static_alloc, mp, gscopy, mscopy)
 
 			local idx = D:add_model(sub_g[m.group], m.model.k, m.model.c, udata)
 			m.sub_idx = idx -- for dsym

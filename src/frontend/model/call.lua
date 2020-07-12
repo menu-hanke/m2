@@ -9,12 +9,10 @@ local C = ffi.C
 -- TODO: a better way to do this is to precompute a table with the ctypes and use that
 
 local function parse_sig(s)
-	if not C.mt_sig_check(s, bit.bnot(0ULL)) then
-		return
+	local npnr = ffi.new("uint8_t[2]")
+	if C.mt_sig_info(s, npnr+0, npnr+1) ~= 0 then
+		error(string.format("invalid signature: %s", s))
 	end
-
-	local npnr = ffi.new("size_t[2]")
-	C.mt_sig_info(s, npnr+0, npnr+1)
 
 	local mts_p = C.malloc(ffi.sizeof("struct mt_sig") + (npnr[0] + npnr[1]) * ffi.sizeof("mt_type"))
 	local mts = ffi.gc(ffi.cast("struct mt_sig *", mts_p), C.free)

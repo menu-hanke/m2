@@ -1,20 +1,69 @@
 -- vim: ft=lua
 local models = require("testmod").models
 local model = require "model"
+local conv = require "model.conv"
 local ffi = require "ffi"
 local C = ffi.C
 
 local SLOW_TESTS = true
 
 test_parse_sig = function()
-	local function ok(s) return tostring(model.parse_sig(s) or nil) == s end
-	assert(ok "u8u16u32u64i8i16i32i64>m8m16m32m64fdz")
-	assert(ok "U8U16U32U64I8I16I32I64>M8M16M32M64FDZ" )
+	local function ok(s) return tostring(model.parse_sig(s)) == s end
+	assert(ok "u8u16u32u64i8i16i32i64>fdz")
+	assert(ok "U8U16U32U64I8I16I32I64>FDZ" )
 	assert(ok ">")
 	assert(not ok "<")
 end
 
--- TODO: conversion tests
+test_cconv = function()
+	local types = {
+		C.MT_SINT8, C.MT_SINT16, C.MT_SINT32, C.MT_SINT64,
+		C.MT_UINT8, C.MT_UINT16, C.MT_UINT32, C.MT_UINT64,
+		C.MT_FLOAT, C.MT_DOUBLE,
+		C.MT_BOOL
+		-- ignore C.MT_POINTER, it can't be converted
+	}
+
+	local tests = {
+		-- this must have the cast explicitly or else luajit does the conversion through double
+		-- and then the conversion to (u)int64_t will not work
+		{ C.MT_SINT8, {ffi.cast("int8_t", -1)} },
+
+		{ C.MT_UINT8, {1} },
+		{ C.MT_UINT16,  {256} },
+
+		-- cast to float or they will be doubles
+		{ C.MT_FLOAT, {ffi.cast("float", 0), ffi.cast("float", 1.23), ffi.cast("float", 1.99)} },
+
+		{ C.MT_DOUBLE, {-0.5} },
+		-- { C.MT_DOUBLE, {-2^40} }, -- this is UB,
+		{ C.MT_BOOL, {true, false} }
+	}
+
+	for _,test in ipairs(tests) do
+		local sty, vals = test[1], test[2]
+		local val_buf = ffi.new(ffi.typeof("$[?]", conv.ctypeof(sty)), #vals, vals)
+
+		for _,dty in ipairs(types) do
+			local test_buf = ffi.new(ffi.typeof("$[?]", conv.ctypeof(dty)), #vals)
+			local res = C.mt_cconv(test_buf, dty, val_buf, sty, #vals)
+
+			if res ~= 0 then
+				error(string.format("mt_cconv() failed on %s -> %s",
+					conv.nameof(sty), conv.nameof(dty)))
+			end
+
+			-- workaround because ffi.cast doesn't (obviously) convert to a lua type
+			local expect = ffi.new(ffi.typeof("$[?]", conv.ctypeof(dty)), #vals, vals)
+			for i=0, #vals-1 do
+				if test_buf[i] ~= expect[i] then
+					error(string.format("invalid conversion %s [%s] -> %s [%s] -- should have been %s",
+						conv.nameof(sty), tonumber(vals[i+1]), conv.nameof(dty), test_buf[i], expect[i]))
+				end
+			end
+		end
+	end
+end
 
 if models.Const then
 

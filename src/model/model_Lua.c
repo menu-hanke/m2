@@ -40,7 +40,7 @@ static void L_pushtable(lua_State *L, double *ds, size_t n);
 static int L_nreadtable(lua_State *L, int idx, double *ds, size_t n, size_t retidx);
 
 uint64_t mod_Lua_types(){
-	return MT_sS(MT_DOUBLE) | MT_sS(MT_UINT8);
+	return MT_sS(MT_DOUBLE);
 }
 
 struct mod_Lua *mod_Lua_create(const char *module, const char *func, struct mt_sig *sig,
@@ -75,20 +75,7 @@ int mod_Lua_call(struct mod_Lua *M, mcall_s *mc){
 	mt_type *typ = M->sig.typ;
 	mcall_edge *edge = mc->edges;
 
-	// XXX - temporary hack
-	arena *arena = NULL;
-
 	for(size_t i=0;i<M->sig.np;i++,typ++,edge++){
-
-		// XXX - temporary hack
-		if(((*typ) & ~MT_SET) == MT_UINT8){
-			if(!arena)
-				arena = arena_create(2000);
-			double *mem = arena_malloc(arena, 8 * edge->n);
-			for(size_t j=0;j<edge->n;j++)
-				mem[j] = ((uint8_t *)edge->p)[j];
-		}
-
 		if(UNLIKELY((*typ) & MT_SET)) // D
 			L_pushtable(L, edge->p, edge->n);
 		else           // d
@@ -99,10 +86,6 @@ int mod_Lua_call(struct mod_Lua *M, mcall_s *mc){
 		lua_pushnumber(L, M->co[i]);
 
 	int res = lua_pcall(L, M->sig.np + M->n_co, M->sig.nr, 0);
-
-	// XXX - temporary hack
-	if(arena)
-		arena_destroy(arena);
 
 	if(UNLIKELY(res)){
 		model_errf("Lua error (%d): %s", res, lua_tostring(L, -1));

@@ -188,20 +188,6 @@ test_missing_edge = _(gmodel_gx_Const(), function()
 	return fails
 end)
 
-test_missing_impl = _(function()
-	model "g#model" {
-		returns "g#x" *as "uint64_t"
-	}
-end, function()
-	m2.fhk.subgraph()
-		:edge(m2.fhk.match_edges { {"=>%1", m2.fhk.ident }})
-		:given(m2.fhk.group("g", unmapped))
-		:solve("g#x")
-		:create()
-	
-	return fails
-end)
-
 test_const_missing_type = _(function()
 	model "g#model" {
 		returns "g#x",

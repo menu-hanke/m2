@@ -1,4 +1,3 @@
-arena.o: arena.c def.h arena.h
 bitmap.o: bitmap.c bitmap.h def.h
 grid.o: grid.c grid.h bitmap.h def.h sim.h
 mem.o: mem.c mem.h def.h
@@ -25,9 +24,9 @@ model/model_R.o: model/model_R.c model/model_R.h model/mlib.h model/../def.h
 model/model_SimoC.o: model/model_SimoC.c model/model_SimoC.h model/mlib.h \
  model/../def.h
 frontend/fhk/driver.o: frontend/fhk/driver.c frontend/fhk/../../fhk/fhk.h \
- frontend/fhk/../../fhk/../mem.h frontend/fhk/../../def.h \
- frontend/fhk/driver.h frontend/fhk/../../model/model.h \
- frontend/fhk/../../model/conv.h
+ frontend/fhk/../../fhk/../mem.h frontend/fhk/../../model/conv.h \
+ frontend/fhk/../../model/model.h frontend/fhk/../../def.h \
+ frontend/fhk/driver.h
 frontend/fhk/mapping.o: frontend/fhk/mapping.c frontend/fhk/mapping.h \
  frontend/fhk/driver.h frontend/fhk/../../fhk/fhk.h \
  frontend/fhk/../../fhk/../mem.h frontend/fhk/../../model/model.h \

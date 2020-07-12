@@ -136,7 +136,7 @@ local function luacall(handle, handle2)
 	return 1 + bit.lshift(handle, 16ULL) + (handle2 and bit.lshift(handle2, 32ULL) or 0)
 end
 
-local function mcall(alloc, model, conv)
+local function mcall(alloc, model, gsig, msig)
 	local udata = ffi.cast("struct fhkD_cmodel *", alloc(
 		ffi.sizeof("struct fhkD_cmodel"),
 		ffi.alignof("struct fhkD_cmodel")
@@ -144,7 +144,8 @@ local function mcall(alloc, model, conv)
 
 	udata.model = model
 	udata.fp    = model.call
-	udata.conv  = conv
+	udata.gsig  = gsig
+	udata.msig  = msig
 
 	return ffi.new("fhk_arg", {p=udata})
 end

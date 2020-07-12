@@ -6,25 +6,39 @@ local function lsb(x)
 	return x ~= 0 and bit.band(x, -x) or nil
 end
 
--- must match conv.h
+local typct = {
+	[C.MT_SINT8]   = "int8_t",
+	[C.MT_SINT16]  = "int16_t",
+	[C.MT_SINT32]  = "int32_t",
+	[C.MT_SINT64]  = "int64_t",
+	[C.MT_UINT8]   = "uint8_t",
+	[C.MT_UINT16]  = "uint16_t",
+	[C.MT_UINT32]  = "uint32_t",
+	[C.MT_UINT64]  = "uint64_t",
+	[C.MT_FLOAT]   = "float",
+	[C.MT_DOUBLE]  = "double",
+	[C.MT_BOOL]    = "bool",
+	[C.MT_POINTER] = "void *"
+}
+
 local typname = {
-	[0] = "u8", "u16", "u32", "u64",
-	"i8", "i16", "i32", "i64",
-	"m8", "m16", "m32", "m64",
-	"f", "d",
-	"z",
-	"p"
+	[C.MT_SINT8]   = "i8",
+	[C.MT_SINT16]  = "i16",
+	[C.MT_SINT32]  = "i32",
+	[C.MT_SINT64]  = "i64",
+	[C.MT_UINT8]   = "u8",
+	[C.MT_UINT16]  = "u16",
+	[C.MT_UINT32]  = "u32",
+	[C.MT_UINT64]  = "u64",
+	[C.MT_FLOAT]   = "f",
+	[C.MT_DOUBLE]  = "d",
+	[C.MT_BOOL]    = "z",
+	[C.MT_POINTER] = "p"
 }
 
 local function nameof(typeid)
-	local set = false
-	if typeid >= C.MT_SET then
-		set = true
-		typeid = typeid - C.MT_SET
-	end
-
-	local name = typname[typeid]
-	if set and name then name = name:upper() end
+	local name = typname[bit.band(typeid, bit.bnot(C.MT_SET))]
+	if typeid >= C.MT_SET then name = name:upper() end
 	return name
 end
 
@@ -97,22 +111,27 @@ ffi.metatype("struct mt_sig", {
 			table.insert(buf, nameof(self.typ[i]))
 		end
 		return table.concat(buf, "")
+	end,
+
+	__eq = function(self, other)
+		if self.np ~= other.np or self.nr ~= other.nr then
+			return false
+		end
+
+		for i=0, self.np+self.nr-1 do
+			if self.typ[i] ~= other.typ[i] then
+				return false
+			end
+		end
+
+		return true
 	end
 })
-
-local function sigmask(sig)
-	return typemask(C.mt_sig_mask(sig))
-end
 
 local masks = {
 	any    = typemask(bit.bnot(0ULL)),
 	set    = typemask(0xffffffff00000000ULL),
-	single = typemask(0xffffffffULL),
-	mask8  = sigmask "m8M8",
-	mask16 = sigmask "m16M16",
-	mask32 = sigmask "m32M32",
-	mask64 = sigmask "m64M64",
-	mask   = sigmask "m8m16m32m64M8M16M32M64"
+	single = typemask(0xffffffffULL)
 }
 
 local intoffset = { [1]=0, [2]=1, [4]=2, [8]=3 }
@@ -145,6 +164,10 @@ local function fromctype(ct)
 	if ct.what == "ptr" then
 		return C.MT_POINTER
 	end
+end
+
+local function sizeof(ty)
+	return 2^(ty % 4)
 end
 
 return {
@@ -182,36 +205,14 @@ return {
 		end
 	end,
 
-	set_typemask = function(isset)
-		return isset and set_typemask or singleton_typemask
-	end,
+	sizeof = sizeof,
+	nameof = nameof,
 
-	sizeof = function(typ)
-		return tonumber(C.mt_sizeof(typ))
+	ctypeof = function(ty)
+		return ffi.typeof(typct[bit.band(ty, bit.bnot(C.MT_SET))])
 	end,
 
 	fromctype = fromctype,
-
-	ctypeof = function(ty)
-		local ct
-
-		ty = bit.band(ty, bit.bnot(C.MT_SET))
-		if ty <= C.MT_UINT64 or (ty >= C.MT_MASK8 and ty <= C.MT_MASK64) then
-			ct = string.format("uint%d_t", 8*tonumber(C.mt_sizeof(ty)))
-		elseif ty <= C.MT_SINT64 then
-			ct = string.format("int%d_t", 8*tonumber(C.mt_sizeof(ty)))
-		elseif ty == C.MT_FLOAT then
-			ct = "float"
-		elseif ty == C.MT_DOUBLE then
-			ct = "double"
-		elseif ty == C.MT_BOOL then
-			ct = "bool"
-		elseif ty == C.MT_POINTER then
-			ct = "void *"
-		end
-
-		return ffi.typeof(ct)
-	end,
 
 	isset = function(typ)
 		return bit.band(typ, C.MT_SET) ~= 0
@@ -219,7 +220,6 @@ return {
 
 	toset = function(ty)
 		return bit.bor(ty, C.MT_SET)
-	end,
+	end
 
-	nameof = nameof
 }

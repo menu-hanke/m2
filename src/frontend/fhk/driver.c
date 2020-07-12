@@ -1,10 +1,12 @@
 #include "../../fhk/fhk.h"
+#include "../../model/conv.h"
 #include "../../mem.h"
 #include "../../def.h"
 #include "driver.h"
 
 #include <assert.h>
 #include <stdlib.h>
+#include <stdalign.h>
 
 // XXX (mieti vielä)
 // tämä voi olla joka suora callback tai C api kutsu.
@@ -122,13 +124,79 @@ struct fhkD_cres *fhkD_continue(fhk_solver *S, void *udata, arena *arena){
 					uint64_t x = FHK_X(status);
 					struct fhks_cmodel *mcall = (struct fhks_cmodel *) FHK_ABC(status);
 					struct fhkD_cmodel *cm = UD_CPTR(x);
-					//mt_insn *conv = cm->conv;
-					//if(conv) conv = mt_conv(mcall, conv);
+					arena_ptr *p;
+
+					// need to convert?
+					if(UNLIKELY(cm->gsig)){
+						p = arena_save(arena);
+
+						for(size_t i=0;i<mcall->np;i++){
+							if(cm->gsig[i] != cm->msig[i]){
+								mcall_edge *e = mcall->edges+i;
+								void *mv = arena_alloc(arena,
+										e->n * MT_SIZEOF(cm->msig[i]),
+										MT_SIZEOF(cm->msig[i])
+								);
+
+								int res = mt_cconv(mv, cm->msig[i], e->p, cm->gsig[i], e->n);
+
+								// this shouldn't happen because all conversions produced by the
+								// autoconverter are valid.
+								if(UNLIKELY(res))
+									return R(
+											.status = FHKD_ERROR,
+											.ewhat = FHKD_CONVERSION_FAILED
+									);
+
+								e->p = mv;
+							}
+						}
+
+						// if we need to convert return values, reserve them now too
+						for(size_t i=mcall->np;i<mcall->np+mcall->nr;i++){
+							if(cm->gsig[i] != cm->msig[i]){
+								mcall_edge *e = mcall->edges+i;
+								// alloc extra space in the start to store the original pointer
+								void **buf = arena_alloc(arena,
+										sizeof(void *) + e->n*MT_SIZEOF(cm->msig[i]),
+										alignof(void *)
+								);
+								buf[0] = e->p;
+								e->p = buf+1;
+							}
+						}
+					}
+
 					int res = cm->fp(cm->model, mcall);
-					if(res)
-						dv("%s\n", model_error());
-					assert(!res); // TODO
-					//if(conv) mt_conv(mcall, conv);
+
+					if(UNLIKELY(res))
+						return R(
+								.status = FHKD_ERROR,
+								.ewhat = FHKD_MODEL_FAILED
+						);
+
+					// if we stored return values in a temp buffer, read them back now
+					if(UNLIKELY(cm->gsig)){
+						for(size_t i=mcall->np;i<mcall->np+mcall->nr;i++){
+							if(cm->gsig[i] != cm->msig[i]){
+								mcall_edge *e = mcall->edges+i;
+								void *buf = *(((void **) e->p)-1);
+								int res = mt_cconv(buf, cm->msig[i], e->p, cm->gsig[i], e->n);
+
+								// shouldn't happen
+								if(UNLIKELY(res))
+									return R(
+											.status = FHKD_ERROR,
+											.ewhat = FHKD_CONVERSION_FAILED
+									);
+
+								e->p = buf;
+							}
+						}
+
+						arena_restore(arena, p);
+					}
+
 					continue;
 				}
 		}
