@@ -8,16 +8,6 @@
 #include <stdlib.h>
 #include <stdalign.h>
 
-// XXX (mieti vielä)
-// tämä voi olla joka suora callback tai C api kutsu.
-// jos on paljon side traceja (10+?), niin C api on tehokkaampi, eikä hidastu side tracejen
-// määrän kasvatessa. tämän voi valita vaikka heuristiikalla.
-
-// TODO: fhk joku -DFHK_USE_CALLBACKS tjsp, udata tulkitaan callbackina, jolloin kutsuketju
-// menee seuraavasti:
-//     fhk   ---callback-->   driver funktio   ---lua C api--->   lua
-// tämä on todennäköisesti tehokkaampi kun sidetracet (lj 2.1 stitchaa sen kutsun muutenkin)
-
 #define UD_ISLUA(ud)      ((ud) & 1)
 #define UD_CPTR(ud)       ((void *)((ud) & 0xffffffffffff))
 #define UD_CARGOFFSET(ud) ((ud) >> 48)
@@ -29,41 +19,35 @@ enum {
 	VAR_REFX = 3
 };
 
-struct fhkD_cres *fhkD_continue(fhk_solver *S, void *udata, arena *arena){
-#define R(...) ({                                             \
-	struct fhkD_cres *_r = arena_malloc(arena, sizeof(*_r));  \
-	*_r = (struct fhkD_cres){__VA_ARGS__};                    \
-	_r;                                                       \
-})
+int fhkD_continue(fhk_solver *S, void *udata, arena *arena, union fhkD_status *stat){
+
 	for(;;){
 		fhk_status status = fhk_continue(S);
 
 		switch(FHK_CODE(status)){
 
 			case FHK_OK:
-				return NULL;
-
 			case FHKS_SHAPE:
-				// should never happen because caller sets shape table
-				assert(!"caller didn't set shape table");
-				return R(.status=FHKS_SHAPE, .handle=-1);
+				return FHK_CODE(status);
 
 			case FHK_ERROR:
-				// TODO
-				return R(.status=FHK_ERROR, .handle=-1);
+				stat->efhk.error = FHK_A(status);
+				stat->efhk.flags = FHK_B(status);
+				stat->efhk.ei = (struct fhk_ei *) FHK_X(status);
+				return FHKD_EFHK;
 
 			case FHKS_MAPPING:
 			case FHKS_MAPPING_INVERSE:
 				{
 					struct fhks_mapping *sm = (struct fhks_mapping *) FHK_ABC(status);
 					uint64_t x = FHK_X(status);
-					if(UNLIKELY(UD_ISLUA(x)))
-						return R(
-								.status = FHK_CODE(status),
-								.handle = x >> (16*FHK_CODE(status)),
-								.instance = sm->instance,
-								.map_ss = sm->ss
-						);
+
+					if(UNLIKELY(UD_ISLUA(x))){
+						stat->interrupt.handle = x >> (16*FHK_CODE(status));
+						stat->interrupt.instance = sm->instance;
+						stat->interrupt.map_ss = sm->ss;
+						return FHK_CODE(status);
+					}
 
 					struct fhkD_cmap *cm = UD_CPTR(x);
 					fhkD_cmap_f fp = cm->fp[FHK_CODE(status) & 1];
@@ -86,12 +70,10 @@ struct fhkD_cres *fhkD_continue(fhk_solver *S, void *udata, arena *arena){
 							}
 
 						case VAR_LUA:
-							return R(
-									.status = FHKS_COMPUTE_GIVEN,
-									.handle = x >> 16,
-									.instance = inst,
-									.xi = xi
-							);
+							stat->interrupt.handle = x >> 16;
+							stat->interrupt.instance = inst;
+							stat->interrupt.xi = xi;
+							return FHKS_COMPUTE_GIVEN;
 
 						case VAR_REFK:
 							{
@@ -143,10 +125,7 @@ struct fhkD_cres *fhkD_continue(fhk_solver *S, void *udata, arena *arena){
 								// this shouldn't happen because all conversions produced by the
 								// autoconverter are valid.
 								if(UNLIKELY(res))
-									return R(
-											.status = FHKD_ERROR,
-											.ewhat = FHKD_CONVERSION_FAILED
-									);
+									return FHKD_ECONV;
 
 								e->p = mv;
 							}
@@ -169,11 +148,10 @@ struct fhkD_cres *fhkD_continue(fhk_solver *S, void *udata, arena *arena){
 
 					int res = cm->fp(cm->model, mcall);
 
-					if(UNLIKELY(res))
-						return R(
-								.status = FHKD_ERROR,
-								.ewhat = FHKD_MODEL_FAILED
-						);
+					if(UNLIKELY(res)){
+						stat->emod.error = res;
+						return FHKD_EMOD;
+					}
 
 					// if we stored return values in a temp buffer, read them back now
 					if(UNLIKELY(cm->gsig)){
@@ -185,10 +163,7 @@ struct fhkD_cres *fhkD_continue(fhk_solver *S, void *udata, arena *arena){
 
 								// shouldn't happen
 								if(UNLIKELY(res))
-									return R(
-											.status = FHKD_ERROR,
-											.ewhat = FHKD_CONVERSION_FAILED
-									);
+									return FHKD_ECONV;
 
 								e->p = buf;
 							}
@@ -205,5 +180,4 @@ struct fhkD_cres *fhkD_continue(fhk_solver *S, void *udata, arena *arena){
 		__builtin_unreachable();
 	}
 
-#undef R
 }

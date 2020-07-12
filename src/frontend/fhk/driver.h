@@ -39,30 +39,39 @@ struct fhkD_cmodel {
 	mt_type *msig;
 };
 
-struct fhkD_cres {
-	int16_t status;
-	union {
-		struct {
-			int16_t handle;
-			uint16_t instance;
-		};
-		struct {
-			uint16_t ewhat;
-			uint16_t eflags;
-		};
-	};
-	union {
-		fhk_subset *map_ss;
-		int xi;
-		struct fhk_ei *ei;
-	};
-};
-
 enum {
-	FHKD_ERROR = -1,
-	FHKD_CONVERSION_FAILED = -1,
-	FHKD_MODEL_FAILED = -2
+	FHKD_ECONV = -3,    // type conversion failed
+	FHKD_EMOD = -2,     // model call failed
+	FHKD_EFHK = -1      // fhk failed
+	// >=0 is the corresponding FHKS_* interrupt
 };
 
-// NULL for FHK_OK, non-NULL for callback/error
-struct fhkD_cres *fhkD_continue(fhk_solver *S, void *udata, arena *arena);
+union fhkD_status {
+	// FHKD_ECONV: this is a bug (eg. someone passed an invalid ctype)
+
+	// FHKD_EMOD:
+	struct {
+		int error;
+		// use model_error() to get the error message
+	} emod;
+
+	// FHKD_EFHK:
+	struct {
+		int error;
+		int flags;
+		struct fhk_ei *ei;
+	} efhk;
+
+	// FHKS_*
+	struct {
+		uint16_t handle;
+		uint16_t instance;
+
+		union {
+			fhk_subset *map_ss; // FHKS_MAPPING*
+			int xi;             // FHKS_COMPUTE_GIVEN
+		};
+	} interrupt;
+};
+
+int fhkD_continue(fhk_solver *S, void *udata, arena *arena, union fhkD_status *stat);

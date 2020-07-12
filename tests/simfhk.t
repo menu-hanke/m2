@@ -463,3 +463,42 @@ end, function()
 	
 	return fails
 end)
+
+test_no_solution = _(function()
+	derive ("g#x" *as "double") {
+		impl.Const(1)
+	}
+
+	model "g#mody" {
+		check "g#x" *le(0),
+		returns "g#y" *as "double",
+		impl.Const(0)
+	}
+end, function()
+	local solver = m2.fhk.subgraph()
+		:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+		:given(m2.fhk.group("g", unmapped))
+		:solve("g#y")
+		:create()
+	
+	m2.on("test", function()
+		assert(fails(solver))
+	end)
+end)
+
+test_model_crash = _(function()
+	model "g#mody" {
+		returns "g#y" *as "double",
+		impl.Lua("models", "runtime_error")
+	}
+end, function()
+	local solver = m2.fhk.subgraph()
+		:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+		:given(m2.fhk.group("g", unmapped))
+		:solve("g#y")
+		:create()
+	
+	m2.on("test", function()
+		assert(fails(solver))
+	end)
+end)

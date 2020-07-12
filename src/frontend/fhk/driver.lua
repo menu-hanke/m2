@@ -1,7 +1,28 @@
 require "fhk.ctypes"
 local code = require "code"
+local model = require "model"
+local ctypes = require "fhk.ctypes"
 local ffi = require "ffi"
 local C = ffi.C
+
+ffi.metatype("union fhkD_status", {
+	__index = {
+		fmt_error = function(self, ecode, symbols)
+			if ecode == C.FHKD_ECONV then return "type conversion error" end
+			if ecode == C.FHKD_EMOD then
+				return string.format("model call error (%d): %s", self.emod.error, model.error())
+			end
+			if ecode == C.FHKD_EFHK then
+				return string.format("fhk failed: %s", ctypes.fmt_error(
+					self.efhk.error,
+					self.efhk.flags,
+					self.efhk.ei,
+					symbols
+				))
+			end
+		end
+	}
+})
 
 local stgen_mt = { __index={} }
 local dvgen_mt = { __index={} }
@@ -32,7 +53,6 @@ function stgen_mt.__index:compile()
 	]], 2*ng)
 
 	for i=0, #self do
-		-- TODO: specialize for constants
 		st:emitf("shape[%d] = group%d_shapef(state)", i, i)
 	end
 
@@ -68,21 +88,26 @@ function dvgen_mt.__index:virtual(f)
 	return handle
 end
 
-local function driver_loop(virt)
-	return function(solver, udata, arena)
-		while true do
-			local cr = C.fhkD_continue(solver, udata, arena)
+function dvgen_mt.__index:syms(vars, models)
+	self.symbols = {vars=vars, models=models}
+end
 
-			if cr == ffi.NULL then
+local function driver_loop(virt, symbols)
+	return function(solver, udata, arena)
+		local status = arena:new("union fhkD_status")
+
+		while true do
+			local rv = C.fhkD_continue(solver, udata, arena, status)
+
+			if rv == C.FHK_OK then
 				return
 			end
 
-			if cr.status == C.FHK_ERROR then
-				-- TODO error message
-				error("Driver failed")
+			if rv < 0 then
+				error(status:fmt_error(rv, symbols))
 			end
 
-			virt[cr.handle](cr, solver, arena)
+			virt[status.interrupt.handle](status, solver, arena)
 		end
 	end
 end
@@ -122,7 +147,7 @@ function dvgen_mt.__index:compile()
 	return caller:compile({
 		ffi    = ffi,
 		inits  = self.inits,
-		driver = driver_loop(self.virt)
+		driver = driver_loop(self.virt, self.symbols)
 	}, string.format("=(driver@%p)", self))()
 end
 

@@ -78,8 +78,32 @@ local function space(n)
 	return bor(0x1000000000000ULL, lshift(n, 16))
 end
 
+local function fmt_error(code, flags, ei, syms)
+	local info = {}
+
+	if bit.band(flags, C.FHKEI_G) ~= 0 then
+		table.insert(info, string.format("group: %d", ei.g))
+	end
+
+	if bit.band(flags, C.FHKEI_V) ~= 0 then
+		table.insert(info, string.format("var: %s", (syms and syms.vars and syms.vars[ei.v]) or ei.v))
+	end
+
+	if bit.band(flags, C.FHKEI_M) ~= 0 then
+		table.insert(info, string.format("model: %s", (syms and syms.models and syms.models[ei.m]) or ei.m))
+	end
+
+	if bit.band(flags, C.FHKEI_I) ~= 0 then
+		table.insert(info, string.format("instance: %d", ei.i))
+	end
+
+	info = #info > 0 and string.format(" [%s]", table.concat(info, ", ")) or ""
+	return string.format("%s%s", ffi.string(ei.desc), info)
+end
+
 return {
-	ZERO_ARG = ZERO_ARG,
-	ss1      = ss1,
-	space    = space
+	ZERO_ARG  = ZERO_ARG,
+	ss1       = ss1,
+	space     = space,
+	fmt_error = fmt_error
 }

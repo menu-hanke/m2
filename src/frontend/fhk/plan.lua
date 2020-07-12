@@ -469,10 +469,17 @@ function subgraph_mt.__index:create(def, create_mod, static_alloc, runtime_alloc
 	local sub_g = indexer()
 	D:reset()
 
+	-- driver symbols, for displaying names in error messages.
+	-- note that we can't just use these as debug symbols, because we want to also have debug syms
+	-- for the bigger graph, but we don't need a driver for it. we also want these to work even
+	-- when compiled without -DDEBUG. that's why debugsyms are handled separately.
+	local sym_vars, sym_models = {}, {}
+
 	for i, v in ipairs(m_vars) do
 		if S.r_vars[i-1] ~= C.FHK_SKIP then
 			local udata = v.create and v.create(gen, static_alloc) or fhk_ct.ZERO_ARG
 			v.sub_idx = D:add_var(sub_g[v.group], conv.sizeof(types:typeof(v.name)), udata)
+			sym_vars[v.sub_idx] = v.name
 		end
 	end
 
@@ -503,6 +510,7 @@ function subgraph_mt.__index:create(def, create_mod, static_alloc, runtime_alloc
 
 			local idx = D:add_model(sub_g[m.group], m.model.k, m.model.c, udata)
 			m.sub_idx = idx -- for dsym
+			sym_models[m.sub_idx] = m.model.name
 
 			-- TODO: create edge maps here too
 			for _,p in ipairs(m.params) do
@@ -518,6 +526,8 @@ function subgraph_mt.__index:create(def, create_mod, static_alloc, runtime_alloc
 			end
 		end
 	end
+
+	gen:syms(sym_vars, sym_models)
 
 	local G = D:build(static_alloc(D:size(), ffi.alignof("fhk_graph")))
 	local drv = gen:compile()

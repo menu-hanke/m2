@@ -1,7 +1,7 @@
 return {
 	id            = function(...) return ... end,
 	ret1          = function() return 1 end,
-	runtime_error = function() error() end,
+	runtime_error = function() error("model crashed") end,
 
 	ba_sum        = function(k, bas)
 		local s = 0
