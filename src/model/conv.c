@@ -127,9 +127,14 @@ int mt_cconv(void *dest, mt_type to, void *src, mt_type from, size_t n){
 		return 0;
 	}
 
-	// conversion between set and non-set, or conversion between pointer and non-pointer?
-	// if they are both pointers, the first check returns, so now we have no pointers!
-	if(UNLIKELY((from^to) >= MT_POINTER))
+	// conversion between set and scalar?
+	if(UNLIKELY((from^to) >= MT_SET))
+		return MT_ECONV;
+
+	// conversion involving pointers?
+	// * first check quarantees both aren't pointers
+	// * second check quarantees either both or neither are scalars
+	if(UNLIKELY((from+0b100)^(to+0b100)) >= MT_SET)
 		return MT_ECONV;
 
 #define L(bits, lab) [bits] = &&lab - &&invalid
