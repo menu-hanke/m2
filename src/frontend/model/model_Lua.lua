@@ -7,9 +7,9 @@ end
 
 ffi.metatype("mod_Lua", {
 	__index = {
-		call = C.mod_Lua_call
-	},
-	__gc = C.mod_Lua_destroy
+		call    = C.mod_Lua_call,
+		destroy = C.mod_Lua_destroy
+	}
 })
 
 local def_mt = { __index={} }
@@ -22,16 +22,21 @@ function def_mt.__index:return_types()
 	return C.mod_Lua_types()
 end
 
-function def_mt.__index:create(sig)
-	-- TODO co
-	return C.mod_Lua_create(self.module, self.func, sig, 0)
-end
-
+-- TODO: co
 return {
 	def = function(module, func)
 		return setmetatable({
-			module = module,
-			func   = func,
+			create = function(_, sig)
+				return C.mod_Lua_create(module, func, sig)
+			end
 		}, def_mt)
+	end,
+
+	def_jit = function(module, func)
+		return setmetatable({
+			create = function(_, sig)
+				return C.mod_LuaJIT_create(module, func, sig)
+			end
+		})
 	end
 }

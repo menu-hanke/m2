@@ -19,7 +19,8 @@ model/mlib.o: model/mlib.c model/model.h model/../mem.h model/../fhk/fhk.h
 model/model_Const.o: model/model_Const.c model/model_Const.h model/model.h \
  model/../mem.h model/../fhk/fhk.h model/../def.h
 model/model_Lua.o: model/model_Lua.c model/model.h model/../mem.h \
- model/../fhk/fhk.h model/conv.h model/model_Lua.h model/../def.h
+ model/../fhk/fhk.h model/conv.h model/model_Lua.h model/../def.h \
+ model/loader.lua.in
 model/model_R.o: model/model_R.c model/model_R.h model/mlib.h model/../def.h
 model/model_SimoC.o: model/model_SimoC.c model/model_SimoC.h model/mlib.h \
  model/../def.h

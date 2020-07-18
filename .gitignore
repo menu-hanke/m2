@@ -1,4 +1,5 @@
 *.o
+*.in
 /src/m2
 .gdb_history
 /simo-libs

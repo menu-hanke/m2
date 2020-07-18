@@ -49,7 +49,7 @@ end
 test_struct_mapper = _(function()
 	model "s#model" {
 		params {"s#x", "s#y"},
-		returns {"s#z", "s#w"},
+		returns {"s#z", "s#w"} *as "double",
 		impl.Lua("models", "id")
 	}
 end, function()
@@ -80,7 +80,7 @@ end)
 test_soa_mapper = _(function()
 	model "s#model" {
 		params { "s#x", "s#y" },
-		returns { "s#z", "s#w"},
+		returns { "s#z", "s#w"} *as "double",
 		impl.Lua("models", "id")
 	}
 end, function()
