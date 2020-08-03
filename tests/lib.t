@@ -168,7 +168,7 @@ end)
 
 test_vmath_kernel_reduce = with_env(function()
 	local sum = m2.vmath.loop(1, true):reduce(function(a, b) return a+b end, 0)
-	local v = m2.allocv(3)
+	local v = m2.vmath.allocvd(3)
 	v.data[0] = 1; v.data[1] = 2; v.data[2] = 3
 
 	assert(sum(v) == 1+2+3)
@@ -176,7 +176,7 @@ end)
 
 test_vmath_kernel_raw = with_env(function()
 	local sqsum = m2.vmath.loop(1):map(function(x) return x^2 end):sum()
-	local v = m2.allocv(3)
+	local v = m2.vmath.allocvd(3)
 	v.data[0] = 1; v.data[1] = 2; v.data[2] = 3
 
 	assert(sqsum(v.data, #v) == 1^2+2^2+3^2)
@@ -184,7 +184,7 @@ end)
 
 test_vmath_kernel_multiple = with_env(function()
 	local dot = m2.vmath.loop(2, true):map(function(x, y) return x*y end):sum()
-	local x, y = m2.allocv(3), m2.allocv(3)
+	local x, y = m2.vmath.allocvd(3), m2.vmath.allocvd(3)
 	x.data[0] = 1; x.data[1] = 2; x.data[2] = 3
 	y.data[0] = 4; y.data[1] = 5; y.data[2] = 6
 

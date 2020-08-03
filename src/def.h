@@ -32,17 +32,6 @@
 
 #endif // ifndef M2_VECTOR_SIZE
 
-// use float for a bit of speedup for vector operations (you most likely don't need to change this)
-// (see vmath.c)
-#ifndef M2_VECTOR_REAL
-#define M2_VECTOR_REAL double
-#endif
-
-#ifndef M2_VECTOR_MASK
-#include <stdint.h>
-#define M2_VECTOR_MASK uint64_t
-#endif
-
 // round n to next multiple of m where m=2^k
 #define ALIGN(n, m) ((typeof(n)) (((uintptr_t)(n) + (m) - 1) & ~((m) - 1)))
 

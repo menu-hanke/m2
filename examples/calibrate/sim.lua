@@ -1,7 +1,7 @@
 local ffi = require "ffi"
 local m2 = require "m2"
 local Spe = require("categ").spe
-local fhk, vmath = m2.fhk, m2.vmath
+local fhk, vmath = m2.fhk, m2.vmath.double
 
 fhk.copylabels(Spe)
 

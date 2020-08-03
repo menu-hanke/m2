@@ -23,12 +23,7 @@ ffi.cdef [[ int memcmp ( const void *, const void *, size_t); ]]
 --     ba:mul(trees.f)
 --     ba:mul(1/10000)
 
-local vreal_size = ffi.sizeof("vreal")
-local vreal_align = ffi.alignof("vreal")
-local vreal_type = ffi.typeof("vreal")
-local vptr_type = ffi.typeof("vreal *")
-local vmask_size = ffi.sizeof("vmask")
-local vmask_align = ffi.alignof("vmask")
+local sizeof_double = ffi.sizeof("double")
 
 --------------------------------------------------------------------------------
 
@@ -57,46 +52,45 @@ local function overload2(scalarf, vectorf)
 	end
 end
 
-local function vsubc(d, x, c, n) C.vaddc(d, x, -c, n) end
-local function vsubv(d, x, y, n) C.vaddsv(d, x, -1, y, n) end
+local function vdsubc(d, x, c, n) C.vdaddc(d, x, -c, n) end
+local function vdsubv(d, x, y, n) C.vdaddsv(d, x, -1, y, n) end
 
 local vmath_f = {
-	----- real vectors -----
-	set      = C.vsetc,
-	add      = overload2(C.vaddc, C.vaddv),
-	sub      = overload2(vsubc, vsubv),
-	saddc    = function(x, a, b, n, d) C.vaddsc(d or x, a, x, b, n) end,
-	adds     = function(x, a, y, n, d) C.vaddsv(d or x, x, a, y, n) end,
-	mul      = overload2(C.vscale, C.vmulv),
-	refl     = function(x, a, y, n, d) C.vrefl(d or x, a, x, y, n) end,
-	area     = function(x, n, d) C.varead(d, x, n) end,
-	sum      = C.vsum,
-	summ     = C.vsumm,
-	dot      = C.vdot,
-	avgw     = C.vavgw,
-	psumi    = function(x, idx, n, d) return (C.vpsumi(d, x,  idx, n)) end,
-	psumim   = function(x, idx, m, mask, n, d) return (C.vpsumim(d, x, idx, m, mask, n)) end,
-	copyvec  = function(dest, src, n) ffi.copy(dest, src, n*vreal_size) end,
-	tostring = vecstr,
+	double = {
+		set      = C.vdsetc,
+		add      = overload2(C.vdaddc, C.vdaddv),
+		sub      = overload2(vdsubc, vdsubv),
+		saddc    = function(x, a, b, n, d) C.vdaddsc(d or x, a, x, b, n) end,
+		adds     = function(x, a, y, n, d) C.vdaddsv(d or x, x, a, y, n) end,
+		mul      = overload2(C.vdscale, C.vdmulv),
+		refl     = function(x, a, y, n, d) C.vdrefl(d or x, a, x, y, n) end,
+		area     = function(x, n, d) C.vdaread(d, x, n) end,
+		sum      = C.vdsum,
+		summ8    = C.vdsumm8,
+		dot      = C.vddot,
+		avgw     = C.vdavgw,
+		copy     = function(dest, src, n) ffi.copy(dest, src, n*sizeof_double) end,
+		tostring = vecstr,
+	},
 
-	---- bitmaps -----
-	copybitmap = C.bm_copy,
-	not_       = C.bm_not,
-	and_       = C.bm_and,
-	or_        = C.bm_or,
-	xor        = C.bm_xor
+	bitmap = {
+		copy     = C.bm_copy,
+		not_     = C.bm_not,
+		and_     = C.bm_and,
+		or_      = C.bm_or,
+		xor      = C.bm_xor
+	}
 }
 
 --------------------------------------------------------------------------------
 
-local function todata(x)
-	-- TODO? maybe this should accept void pointers also
-	return ffi.istype(vptr_type, x) and x or x.data
+local function todatad(x)
+	return ffi.istype("double *", x) and x or x.data
 end
 
-local function overload2v(scalarf, vectorf)
+local function overload2vd(scalarf, vectorf)
 	return function(self, p, d)
-		d = d and todata(d) or self.data
+		d = d and todatad(d) or self.data
 
 		if isscalar(p) then
 			scalarf(d, self.data, p, self.n)
@@ -106,61 +100,55 @@ local function overload2v(scalarf, vectorf)
 	end
 end
 
-local vecm_ct = ffi.metatype([[
+local vecm8d_ct = ffi.metatype([[
 	struct {
-		vreal *data;
-		vmask *m;
-		vmask mask;
+		double *data;
+		uint8_t *k;
+		uint64_t mask;
 		size_t n;
 	}]], {
 	
 	__index = {
-		sum   = function(self) return (C.vsumm(self.data, self.m, self.mask, self.n)) end,
-		psumi = function(self, dest, idx)
-			return (C.vpsumim(todata(dest), self.data, idx, self.m, self.mask, self.n))
-		end
+		sum   = function(self) return (C.vsumm8(self.data, self.k, self.mask, self.n)) end
 	}
 })
 
-local vec_ct = ffi.metatype([[
+local vecd_ct = ffi.metatype([[
 	struct {
-		vreal *data;
+		double *data;
 		size_t n;
 	}]], {
 
 	__index = {
-		set   = function(self, c) C.vsetc(self.data, c, self.n) end,
-		add   = overload2v(C.vaddc, C.vaddv),
-		sub   = overload2v(vsubc, vsubv),
+		set   = function(self, c) C.vdsetc(self.data, c, self.n) end,
+		add   = overload2vd(C.vdaddc, C.vdaddv),
+		sub   = overload2vd(vdsubc, vdsubv),
 		saddc = function(self, a, b, d)
-			vmath_f.saddc(self.data, a, b, self.n, d and todata(d))
+			vmath_f.double.saddc(self.data, a, b, self.n, d and todatad(d))
 		end,
 		adds  = function(self, a, y, d)
-			vmath_f.adds(self.data, a, todata(y), self.n, d and todata(d))
+			vmath_f.double.adds(self.data, a, todatad(y), self.n, d and todatad(d))
 		end,
-		mul   = overload2v(C.vscale, C.vmulv),
+		mul   = overload2vd(C.vdscale, C.vdmulv),
 		refl  = function(self, a, y, d)
-			vmath_f.refl(self.data, a, todata(y), self.n, d and todata(d))
+			vmath_f.double.refl(self.data, a, todatad(y), self.n, d and todatad(d))
 		end,
-		area  = function(self, d) C.varead(self.data, todata(d), self.n) end,
-		sum   = function(self) return (C.vsum(self.data, self.n)) end,
-		dot   = function(self, y) return (C.vdot(self.data, todata(y), self.n)) end,
-		avgw  = function(self, w) return (C.vavgw(self.data, todata(w), self.n)) end,
-		psumi = function(self, dest, idx)
-			return (C.vpsumi(todata(dest), self.data, idx, self.n))
-		end,
+		area  = function(self, d) C.vdaread(self.data, todatad(d), self.n) end,
+		sum   = function(self) return (C.vdsum(self.data, self.n)) end,
+		dot   = function(self, y) return (C.vddot(self.data, todatad(y), self.n)) end,
+		avgw  = function(self, w) return (C.vdavgw(self.data, todatad(w), self.n)) end,
 		mask  = function(self, mask, m) return (vecm_ct(self.data, mask, m, self.n)) end
 	},
 
 	__tostring = function(self) return vecstr(self.data, self.n) end,
 	__len = function(self) return tonumber(self.n) end,
 	__eq = function(self, other)
-		return C.memcmp(self.data, todata(other), self.n*vreal_size) ~= 0
+		return C.memcmp(self.data, todata(other), self.n*sizeof_double) ~= 0
 	end
 })
 
-vmath_f.vec = vec_ct
-vmath_f.vecm = vecm_ct
+vmath_f.double.vec = vec_ct
+vmath_f.double.vecm8 = vecm_ct
 
 --------------------------------------------------------------------------------
 
@@ -267,9 +255,9 @@ local function freevec(v)
 	C.free(v.data)
 end
 
-local function allocvec(n)
-	local data = alloc.malloc_nogc(vreal_type, n, vptr_type)
-	return ffi.gc(vec_ct(data, n), freevec)
+local function allocvecd(n)
+	local data = alloc.malloc_nogc("double", n)
+	return ffi.gc(vecd_ct(data, n), freevec)
 end
 
 --------------------------------------------------------------------------------
@@ -379,46 +367,16 @@ end
 
 --------------------------------------------------------------------------------
 
-local vmexpand = { [4]=C.vmexpand32, [2]=C.vmexpand16, [1]=C.vmexpand8 }
 local function inject(env)
 	local _sim = env.sim
 
 	env.m2.vmath = setmetatable({
+		loop    = loop,
 
-		loop   = loop,
-
-		-- sorti(data, n [,dest [,life]])
-		sorti  = function(data, n, dest, life)
-			dest = dest or ffi.cast("unsigned *",
-				C.sim_alloc(_sim, vreal_size*n, vreal_align, life or C.SIM_FRAME))
-			C.vsorti(dest, data, n)
-			return dest
-		end,
-
-		-- vsorti(vec [,dest [,life]])
-		vsorti = function(vec, dest, life)
-			return env.m2.vmath.sorti(vec.data, vec.n, dest, life)
-		end,
-
-		-- mask(data, n [,size [,dest [,life]]])
-		mask   = function(data, n, size, dest, life)
-			size = size or bitmap_size(data) or
-				error(string.format("Not a bitmap type: '%s'", data))
-
-			if size < vmask_size then
-				dest = dest or C.sim_alloc(_sim, vmask_size*n, vmask_align, life or C.SIM_FRAME)
-				vmexpand[size](dest, data, n)
-				return dest
-			end
-
-			return data
-		end
-
+		-- Note: maybe add a function to alloc from sim pool instead if malloc is too slow
+		allocvd = allocvecd
+		-- allocbitmap?
 	}, { __index = vmath_f })
-
-	-- Note: maybe add a function to alloc from sim pool instead if malloc is too slow
-	env.m2.allocv = allocvec
-	-- allocbitmap?
 end
 
 return {
