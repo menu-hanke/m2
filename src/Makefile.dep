@@ -32,7 +32,7 @@ frontend/fhk/mapping.o: frontend/fhk/mapping.c frontend/fhk/mapping.h \
  frontend/fhk/driver.h frontend/fhk/../../fhk/fhk.h \
  frontend/fhk/../../fhk/../mem.h frontend/fhk/../../model/model.h \
  frontend/fhk/../../model/conv.h
-frontend/m2_cdef.lua: frontend/m2_cdef.h frontend/../sim.h \
+frontend/m2_cdef.lua: frontend/m2_cdef.lua.h frontend/../sim.h \
  frontend/../vec.h frontend/../grid.h frontend/../bitmap.h \
  frontend/../def.h frontend/../vgrid.h frontend/../mem.h \
  frontend/../vmath.h frontend/../model/all.h frontend/../model/model.h \

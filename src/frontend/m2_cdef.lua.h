@@ -1,5 +1,6 @@
-// luajit doesn't parse these so remove them when exporting cdefs
-#define static_assert(...) @@remove@@
+//-- vim: ft=lua:
+require("ffi").cdef [[
+#define static_assert(...)
 
 #include "../sim.h"
 #include "../vec.h"
@@ -15,3 +16,4 @@
 
 #include "fhk/driver.h"
 #include "fhk/mapping.h"
+]]
