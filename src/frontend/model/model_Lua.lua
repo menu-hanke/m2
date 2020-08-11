@@ -37,6 +37,6 @@ return {
 			create = function(_, sig)
 				return C.mod_LuaJIT_create(module, func, sig)
 			end
-		})
+		}, def_mt)
 	end
 }
