@@ -273,7 +273,8 @@ static f2_128 r_searchm(struct fhk_reducer *restrict R, xidx mi, float beta){
 	// this doesn't need a cycle detection mark: if it has a cycle then some parameter will
 	// detect it and return [inf, inf]
 
-	for(size_t i=0;i<m->n_cparam;i++){
+	// Note: must loop over all params and not cparams here, as given variables may be different
+	for(size_t i=0;i<m->n_param;i++){
 		fhk_edge e = m->params[i];
 		f2_128 xb = r_searchv(R, e.idx, beta_S - low(bound_S));
 
