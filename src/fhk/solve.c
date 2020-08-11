@@ -700,7 +700,7 @@ start:
 			// check is after the loop because this loop isn't expensive
 			// (usually, unless checking huge subsets)
 			for(size_t c_ei=m->n_ccheck; c_ei<m->n_check; c_ei++){
-				struct fhk_check *c = &m->checks[c_ei++];
+				struct fhk_check *c = &m->checks[c_ei];
 				fhk_subset c_ss = S_map(S, c->edge.map, m_inst);
 
 				if(UNLIKELY(!c_ss))
