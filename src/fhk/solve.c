@@ -33,26 +33,31 @@
 #define EMPTY ((int16_t)0xffff)
 
 // subset and iterator representation
-//                                   exclusive   inclusive
-//                                      vvvvvv   vvvvv
-//                    63..48   47..32   31..16   15..0
-// simple subset      1                 end      start
-// complex subset     n (>1)   ---pointer to ranges---
-// subset iterator    n                 end      index
-// fast singleton     1                 0        index
-// empty ss/iter      0        0        0        0
-// note: only representation allowed for an empty set is the canonical representation, 0
-// note: technically fast singleton can use n=0, but then the set {0} has the same representation
-//       as the empty set
+//                                        exclusive   inclusive
+//                                           vvvvvv   vvvvv
+//                    63..49   48   47..32   31..16   15..0
+// simple subset      0        0             end      start
+// complex subset     max(>=1) 1    ---pointer to ranges---
+// subset iterator    next                   end      index
+// fast singleton     0        0             1        index
+// empty ss/iter      0        0    0        0        0
+// note: only representation allowed for an empty set is the canonical representation, 0.
+
+// this must be signed for optimizations regarding addition (see ss_next).
 typedef int64_t ss_iter;
 
-#define SS_NUM(x)      ((uint64_t)((x) >> 48))
-#define SS_END(x)      ((uint64_t)(((x) >> 16) & 0xffff))
-#define SS_INDEX(x)    ((uint64_t)((x) & 0xffff))
-#define RANGE_LEN(x)   (SS_END(x) - SS_INDEX(x))
-#define SS_POINTER(x)  ((uint32_t *) ((x) & 0xffffffffffff))
-#define SS_ITER(n,e,i) ((ss_iter)((((uint64_t)(n))<<48) | ((e)<<16) | (i)))
-#define SS_EMPTY_ITER  0
+#define SS_MAX(x)         ((uint64_t)(x) >> 49)
+#define SS_IS1(x)         (!(SS_MAX(x)))
+#define SS_END(x)         ((uint64_t)(((x) >> 16) & 0xffff))
+#define SS_INDEX(x)       ((uint64_t)((x) & 0xffff))
+#define SS_POINTER(x)     ((uint32_t *) ((x) & 0xffffffffffff))
+#define SS_FAST1(x)       ((uint64_t)(x) | (1ULL << 16))
+#define SS_ISFAST1(x)     (SS_END(x) == 1)
+#define SS_1(f,t)         (((uint64_t)(t) << 16) | (f))
+#define RANGE_LEN(x)      (SS_END(x) - SS_INDEX(x))
+#define SS_LEN1(x)        (((int64_t)RANGE_LEN(x)) < 1 ? 1 : RANGE_LEN(x))
+#define SS_ITERN(n)       ((ss_iter)((uint64_t)(n) << 49))
+#define SS_0              0
 
 // state representation:
 //     vars:
@@ -387,8 +392,8 @@ static size_t S_shape(struct fhk_solver *restrict S, size_t group){
 static fhk_subset S_map(struct fhk_solver *restrict S, xmap map, xinst inst){
 	switch(MAP_TAG(map)){
 		case FHK_MAP_USER: return S_umap(S, map, inst);
-		case FHK_MAP_IDENT: return SS_ITER(1, 0, inst);
-		case FHK_MAP_SPACE: { size_t s = S_shape(S, map & 0xffff); return SS_ITER(!!s, s, 0); }
+		case FHK_MAP_IDENT: return SS_FAST1(inst);
+		case FHK_MAP_SPACE: return SS_1(0, S_shape(S, map & 0xffff));
 		case FHK_MAP_RANGE: assert(!"TODO");
 	}
 
@@ -960,12 +965,15 @@ fail:
 static void S_mcand(struct fhk_solver *restrict S, unsigned *m_ei, xinst *m_inst, float *m_cost,
 		float *m_beta, struct fhk_var *x, xinst x_inst){
 
+	assert(x->n_mod > 0);
+
 	float f1 = INFINITY;
 	float f2 = INFINITY;
 	unsigned ei;
 	xinst inst;
 
-	for(size_t i=0;i<x->n_mod;i++){
+	size_t i = 0;
+	do {
 		fhk_subset ss = S_map(S, x->models[i].map, x_inst);
 		ssp *sp = S_model_ssp(S, x->models[i].idx);
 
@@ -976,7 +984,7 @@ static void S_mcand(struct fhk_solver *restrict S, unsigned *m_ei, xinst *m_inst
 			f2   = min(f2, max(f1, cost));
 			f1   = min(f1, cost);
 		}
-	}
+	} while(++i < x->n_mod);
 
 	*m_ei = ei;
 	*m_inst = inst;
@@ -1226,7 +1234,7 @@ static void S_collect_ssne(struct fhk_solver *restrict S, void **p, size_t *num,
 	// XXX: if this mem access hurts then it could be stored in the edge
 	size_t sz = S->G.vars[xi].size;
 	
-	if(LIKELY(SS_NUM(ss) == 1)){
+	if(LIKELY(SS_IS1(ss))){
 		*p = S->vars[xi].vp + sz*SS_INDEX(ss);
 		*num = ss_size_nonempty(ss);
 		return;
@@ -1251,13 +1259,12 @@ static ss_iter ss_first(fhk_subset ss){
 
 static ss_iter ss_first_nonempty(fhk_subset ss){
 	// don't pass an empty set here
+	assert(ss);
 
-	if(LIKELY(SS_NUM(ss) == 1))
+	if(LIKELY(SS_IS1(ss)))
 		return ss;
 
-	// nonempty subset, must have SS_NUM(ss) > 1
-	assert(SS_NUM(ss) > 1);
-	return SS_ITER(1, 0, 0) | *SS_POINTER(ss);
+	return SS_ITERN(1) | *SS_POINTER(ss);
 }
 
 static ss_iter ss_next(fhk_subset ss, ss_iter it){
@@ -1276,46 +1283,40 @@ static ss_iter ss_next(fhk_subset ss, ss_iter it){
 	// note: here it does not necessarily hold that
 	//     SS_INDEX(it) == SS_END(it);
 	//
-	// because the fast encoding for singleton sets is
-	//     n        _        end      start
-	//     0x0001            0x0000   <index>
+	// because for a fast singleton, SS_END(it) = 1
 	//
 	// for the same reason it's not true that
-	//     it == SS_ITER(SS_NUM(ss), SS_END(it), SS_END(it)));
-	//
-	// (TODO: add these assertions for non-fast singleton sets)
+	//     it == SS_ITER(SS_MAX(it), SS_END(it), SS_END(it)));
 
 	// this comparison works because range index/range count is msb and we always store
 	// the NEXT range index.
 	if(UNLIKELY(it < ss)){
-		int64_t n = SS_NUM(it);
-		return SS_ITER(n+1, 0, 0) | SS_POINTER(ss)[n];
+		int64_t n = SS_MAX(it);
+		return SS_ITERN(n+1) | SS_POINTER(ss)[n];
 	}
 
-	return SS_EMPTY_ITER;
+	return SS_0;
 }
 
 static size_t ss_size_nonempty(fhk_subset ss){
-	if(LIKELY(SS_NUM(ss) == 1))
-		return SS_END(ss) ? RANGE_LEN(ss) : 1;
-	return ss_complex_size(ss);
+	return LIKELY(SS_IS1(ss)) ? SS_LEN1(ss) : ss_complex_size(ss);
 }
 
 static size_t ss_complex_size(fhk_subset ss){
-	assert(SS_NUM(ss) > 1);
+	assert(SS_MAX(ss) > 0);
 
 	size_t sz = 0;
-	for(size_t i=0;i<SS_NUM(ss);i++)
+	for(size_t i=0;i<=SS_MAX(ss);i++)
 		sz += RANGE_LEN(SS_POINTER(ss)[i]);
 
 	return sz;
 }
 
 static void ss_complex_collect(void *dest, void *src, size_t sz, fhk_subset ss){
-	assert(SS_NUM(ss) > 1);
+	assert(SS_MAX(ss) > 0);
 
 	uint32_t *rp = SS_POINTER(ss);
-	for(size_t i=0;i<SS_NUM(ss);i++){
+	for(size_t i=0;i<=SS_MAX(ss);i++){
 		uint64_t range = *rp++;
 		size_t s = sz * RANGE_LEN(range);
 		memcpy(dest, src+sz*SS_INDEX(range), s);
@@ -1324,24 +1325,26 @@ static void ss_complex_collect(void *dest, void *src, size_t sz, fhk_subset ss){
 }
 
 static void ss_collect(void *dest, void *src, size_t sz, fhk_subset ss){
-	if(LIKELY(SS_NUM(ss) == 1)){
-		memcpy(dest, src, sz*RANGE_LEN(ss));
+	if(LIKELY(SS_IS1(ss))){
+		memcpy(dest, src, sz*SS_LEN1(ss));
 		return;
 	}
 
-	if(SS_NUM(ss) > 1)
+	if(ss)
 		ss_complex_collect(dest, src, sz, ss);
 }
 
 static bool ss_contains(fhk_subset ss, xinst inst){
-	if(LIKELY(SS_NUM(ss) == 1))
-		return SS_END(ss) ? (inst - (uint64_t)SS_INDEX(ss)) < (uint64_t)RANGE_LEN(ss)
-			              : inst == SS_INDEX(ss);
+	if(LIKELY(SS_IS1(ss)))
+		return SS_ISFAST1(ss) ? (inst == SS_INDEX(ss))
+			                  : (inst - (uint64_t)SS_INDEX(ss)) < (uint64_t)RANGE_LEN(ss);
 
-	for(size_t i=0;i<SS_NUM(ss);i++){
-		uint64_t range = SS_POINTER(ss)[i];
-		if((inst - SS_INDEX(range)) >= RANGE_LEN(range))
-			return true;
+	if(ss){
+		for(size_t i=0;i<=SS_MAX(ss);i++){
+			uint64_t range = SS_POINTER(ss)[i];
+			if((inst - SS_INDEX(range)) >= RANGE_LEN(range))
+				return true;
+		}
 	}
 
 	return false;
@@ -1352,10 +1355,10 @@ static size_t ss_indexof(fhk_subset ss, xinst inst){
 	assert(ss_contains(ss, inst));
 
 	// this also works for fast singleton
-	if(LIKELY(SS_NUM(ss) == 1))
+	if(LIKELY(SS_IS1(ss)))
 		return inst - SS_INDEX(ss);
 
-	for(size_t i=0;i<SS_NUM(ss);i++){
+	for(size_t i=0;i<=SS_MAX(ss);i++){
 		uint64_t range = SS_POINTER(ss)[i];
 		if((inst - SS_INDEX(range)) >= RANGE_LEN(range))
 			return inst - SS_INDEX(range);
@@ -1411,12 +1414,12 @@ static bool bm_find0_range(uint64_t *b, xinst *inst, xinst from, xinst to){
 static bool bm_find0_ssne(uint64_t *b, xinst *inst, fhk_subset ss){
 	assert(ss);
 
-	if(LIKELY(SS_NUM(ss) == 1)){
+	if(LIKELY(SS_IS1(ss))){
 		xinst from = SS_INDEX(ss);
 		xinst to = SS_END(ss);
 
-		// special case: 1-element sets may be encoded with end=0
-		if(!to){
+		// special case fast1
+		if(to == 1){
 			bool found = !bm_isset(b, from);
 			if(found)
 				*inst = from;
@@ -1426,7 +1429,7 @@ static bool bm_find0_ssne(uint64_t *b, xinst *inst, fhk_subset ss){
 		return bm_find0_range(b, inst, from, to);
 	}
 
-	for(size_t i=0;i<SS_NUM(ss);i++){
+	for(size_t i=0;i<=SS_MAX(ss);i++){
 		uint64_t range = SS_POINTER(ss)[i];
 		if(bm_find0_range(b, inst, SS_INDEX(range), SS_END(range)))
 			return true;

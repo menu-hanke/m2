@@ -106,8 +106,7 @@ typedef struct fhk_solver fhk_solver;
 typedef struct fhk_def fhk_def;
 
 #define FHK_RANGE(from, to) (((to)<<16)|(from))
-#define FHK_SS1(range)      ((fhk_subset)((1ULL<<48)|(range)))
-#define FHK_SS(n,ranges)    ((fhk_subset)((n)<<48)|((uintptr_t)(ranges)))
+#define FHK_SS(n,ranges)    ((fhk_subset)(((n-1))<<49)|(1ULL<<48)|((uintptr_t)(ranges)))
 
 typedef union {
 	float f32;
