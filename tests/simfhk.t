@@ -422,6 +422,41 @@ end, function()
 	end)
 end)
 
+test_subset = _(function()
+	model "v#0_nonnegative" {
+		check "v#x" *ge(0),
+		returns "v#y" *as "double",
+		impl.Const(0)
+	}
+end, function()
+	local v_ct = m2.soa.from_bands { x = "double" }
+	local v = m2.new_soa(v_ct)
+
+	v:alloc(5)
+	v:newband("x")
+
+	v.x[0] = 1
+	v.x[1] = 2
+	v.x[2] = -3
+	v.x[3] = -4
+	v.x[4] = 5
+
+	local solver = m2.fhk.subgraph()
+		:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+		:given(m2.fhk.group("v", m2.fhk.soa_mapper(v_ct, v)))
+		:solve("v#y", {subset="sub"})
+		:create()
+
+	local sub = m2.fhk.subset_builder()
+		:add(0, 2)
+		:add(4)
+		:to_subset()
+	
+	m2.on("test", function()
+		solver({sub=sub})
+	end)
+end)
+
 test_solver_fail_chain = _(function()
 	derive ("g#u8" *as "uint8_t") {
 		impl.Const(4)

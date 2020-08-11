@@ -1,6 +1,6 @@
 local ffi = require "ffi"
 local C = ffi.C
-local bor, lshift = bit.bor, bit.lshift
+local bor, band, lshift, rshift = bit.bor, bit.band, bit.lshift, bit.rshift
 
 -- this is only useful for debugging. calls to functions returning fhk_status aren't compiled.
 ffi.metatype("fhk_status", {
@@ -70,12 +70,82 @@ ffi.metatype("struct fhk_subgraph", {
 })
 
 local function ss1(from, to)
-	return bor(0x1000000000000ULL, bor(lshift(to, 16), from))
+	return bor(lshift(to, 16), from)
 end
 
 local function space(n)
 	-- same as ss1(0, n)
-	return bor(0x1000000000000ULL, lshift(n, 16))
+	return lshift(n, 16)
+end
+
+-- pure lua versions of RANGE_LEN and ss_size_nonempty/ss_complex_size
+local function range_len(range)
+	return band(rshift(range, 16), 0xffff) - band(range, 0xffff)
+end
+
+-- this doesn't handle fast singletons (which is an fhk internal detail), ie. all ranges
+-- must have a valid end
+local function ss_size(ss)
+	local n = tonumber(rshift(ss, 49))
+	if n == 0 then
+		return range_len(ss)
+	end
+
+	-- n may be 0 and that's ok,
+	-- then the loop will not do any iterations
+
+	local l = 0
+	local p = ffi.cast("uint32_t *", band(ss, 0xffffffffffffULL))
+	for i=0, n do
+		l = l + range_len(p[i])
+	end
+
+	return l
+end
+
+local setbuilder_mt = { __index = {} }
+
+-- from: self[-1], self[-2], ...
+-- to:   self[1], self[2], ...
+local function ss_builder()
+	return setmetatable({}, setbuilder_mt)
+end
+
+local function subset(ind, arena)
+	local builder = ss_builder()
+	for _,i in ipairs(ind) do
+		builder:add(i)
+	end
+	return builder:to_subset(arena)
+end
+
+function setbuilder_mt.__index:add(from, to)
+	to = to or (from + 1)
+
+	-- this is never true when the set builder is empty - self[0] = nil
+	if from == self[#self] then
+		self[#self] = to
+		return self
+	end
+
+	self[-(#self+1)] = from
+	self[#self+1] = to
+	return self
+end
+
+-- if you don't pass arena, then make sure to keep the second return value alive until you're
+-- done using the subset, or luajit will gc it
+function setbuilder_mt.__index:to_subset(arena)
+	if #self == 1 then return ss1(self[-1], self[1]) end
+	if #self == 0 then return 0ULL end
+
+	local p = arena and arena:new("uint32_t", #self) or ffi.new("uint32_t[?]", #self)
+
+	for i=1, #self do
+		p[i-1] = bor(lshift(self[i], 16), self[-i])
+	end
+
+	return bor(lshift(ffi.cast("uint64_t", #self-1), 49) + lshift(1ULL, 48), ffi.cast("uintptr_t", p)), p
 end
 
 local function fmt_error(code, flags, ei, syms)
@@ -102,8 +172,11 @@ local function fmt_error(code, flags, ei, syms)
 end
 
 return {
-	ZERO_ARG  = ZERO_ARG,
-	ss1       = ss1,
-	space     = space,
-	fmt_error = fmt_error
+	ZERO_ARG   = ZERO_ARG,
+	ss1        = ss1,
+	space      = space,
+	ss_size    = ss_size,
+	ss_builder = ss_builder,
+	subset     = subset,
+	fmt_error  = fmt_error
 }

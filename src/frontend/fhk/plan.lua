@@ -570,11 +570,17 @@ function solver_mt.__index:compile(G, static_alloc, runtime_alloc)
 			ffi.alignof("struct fhk_req"))
 	)
 
-	local fields, types, mangled = {}, {}, {}
+	local fields, types, mangled, subsets = {}, {}, {}, {}
 
 	for i,v in ipairs(self) do
 		rq[i-1].idx = v.idx
 		rq[i-1].buf = nil
+
+		if type(v.subset) == "cdata" then
+			rq[i-1].ss = v.subset
+		else
+			subsets[i] = v.subset
+		end
 
 		-- need a valid C identifier for the result struct, so force this to be a valid C identifier
 		-- by making non-alnums underscores and prepending an underscore if it starts with a number.
@@ -590,6 +596,12 @@ function solver_mt.__index:compile(G, static_alloc, runtime_alloc)
 
 	local solve = code.new()
 
+	for i,v in ipairs(self) do
+		if subsets[i] then
+			solve:emitf("local subset%d = subsets[%d]", i-1, i)
+		end
+	end
+
 	solve:emit([[
 		local ffi = ffi
 		local C = ffi.C
@@ -597,22 +609,27 @@ function solver_mt.__index:compile(G, static_alloc, runtime_alloc)
 
 		return function(state, shape, arena)
 			local res = arena:new(res_ct)
-			local num, ss
 	]])
 
 	for i,v in ipairs(self) do
-		if not v.map then
-			-- special case: if no map is specified, use space by default.
-			solve:emitf([[
-				rq[%d].ss = space(shape[%d])
-			]], i-1, v.group)
+		if v.subset then
+			if subsets[i] then
+				solve:emitf([[
+					rq[%d].ss = state[subset%d]
+					rq[%d].buf = alloc(size(rq[%d].ss) * %d, %d)
+				]],
+				i-1, i-1,
+				i-1, i-1, ffi.sizeof(v.ctype), ffi.alignof(v.ctype))
+			else
+				solve:emitf([[
+					rq[%d].buf = alloc(%d, %d)
+				]],
+				i-1, i-1,
+				i-1, fhk_ct.ss_size(v.subset)*ffi.sizeof(v.ctype), ffi.alignof(v.ctype))
+			end
+			solve:emitf("res.%s = rq[%d].buf", mangled[i], i-1)
 		else
-			solve:emitf([[
-				num, ss = ss%d()
-				rq[%d].ss = ss
-				rq[%d].buf = alloc(num * %d, %d)
-				res.%s = rq[%d].buf
-			]], i-1, i-1, i-1, ffi.sizeof(v.ctype), ffi.alignof(v.ctype), mangled[i], i-1)
+			solve:emitf("rq[%d].ss = space(shape[%d])", i-1, v.group)
 		end
 	end
 
@@ -622,14 +639,14 @@ function solver_mt.__index:compile(G, static_alloc, runtime_alloc)
 	-- in two loops to group the allocations and fhk calls
 
 	for i,v in ipairs(self) do
-		if not v.map then
+		if not v.subset then
 			solve:emitf("res.%s = alloc(shape[%d] * %d, %d)",
 				mangled[i], v.group, ffi.sizeof(v.ctype), ffi.alignof(v.ctype))
 		end
 	end
 
 	for i,v in ipairs(self) do
-		if not v.map then
+		if not v.subset then
 			solve:emitf("C.fhkS_use_mem(solver, %d, res.%s)", v.idx, mangled[i])
 		end
 	end
@@ -640,12 +657,14 @@ function solver_mt.__index:compile(G, static_alloc, runtime_alloc)
 	]])
 
 	return solve:compile({
-		ffi    = ffi,
-		rq     = rq,
-		res_ct = res_ct,
-		G      = G,
-		alloc  = runtime_alloc,
-		space  = fhk_ct.space
+		ffi     = ffi,
+		rq      = rq,
+		res_ct  = res_ct,
+		G       = G,
+		alloc   = runtime_alloc,
+		subsets = subsets,
+		space   = fhk_ct.space,
+		size    = fhk_ct.ss_size
 	}, string.format("=(solve@%p)", self))()
 end
 
@@ -757,7 +776,9 @@ function solver_mt.__index:solve(var, opt)
 		name   = var,
 		alias  = opt.as,
 
-		-- function returning `fhk_subset`, or `nil` to solve over the whole space
+		-- if you want a custom subset.
+		-- cdata -> always use this constant subset
+		-- string -> read this key from state
 		subset = opt.subset,
 
 		-- both `typ` and `ctype` are optional. if not given, the type will be inferred by model
