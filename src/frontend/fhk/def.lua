@@ -207,6 +207,14 @@ local gdef_func = setmetatable({
 		)
 	end),
 
+	-- TODO: allow reading costs from file
+	cost = function(kc)
+		return function(mod)
+			mod.k = kc.k
+			mod.c = kc.c
+		end
+	end,
+
 	coeffs = function() return function() end end, -- TODO
 
 	set = function(def)
