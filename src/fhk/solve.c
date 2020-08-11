@@ -80,8 +80,8 @@ typedef union {
 #define SP_CHAIN_EI(sp)       (((sp).state >> 16) & 0xff)
 #define SP_CHAIN_INSTANCE(sp) ((sp).state & 0xffff)
 
-#define FP_INFINITY   0x7f800000
-#define FP_SIGN       0x80000000
+#define FP_INFINITY   0x7f800000ULL
+#define FP_SIGN       0x80000000ULL
 #define SP_DONE(sp)   (((sp).u64 & ~FP_SIGN) >= FP_INFINITY)
 #define SP_MARK       ((union { uint32_t u32; float f; }){.u32=0x80800000}).f
 #define SP_MARKED(sp) ((sp).cost < 0)
@@ -916,6 +916,8 @@ choose: // (cost, xi, xinst, m_ei, m_inst)
 					fhk_Dvar(&S->G, x_i), x_inst,
 					fhk_Dmodel(&S->G, S->G.vars[x_i].models[m_ei].idx), m_inst,
 					cost, m_ei);
+
+			assert(SP_DONE(*sp));
 
 			goto *top->ret_ok;
 		}
