@@ -40,12 +40,14 @@ struct fhk_def {
 	struct fhk_umap *umaps;
 };
 
-#define LIST_ADD(n, na, p) ({                          \
-		if(UNLIKELY(*(n) >= *(na))){                   \
-			*(na) = *(na) ? 2*(*na) : 8;               \
-			*(p) = realloc(*(p), sizeof(**(p))*(*na)); \
-		}                                              \
-		*(p) + (*(n))++;                               \
+#define LIST_ADD(n, na, p) ({                               \
+		if(UNLIKELY(*(n) >= *(na))){                        \
+			typeof(*(na)) _n = *(n);                        \
+			*(na) = *(na) ? 2*(*na) : 8;                    \
+			*(p) = realloc(*(p), sizeof(**(p))*(*na));      \
+			memset(*(p)+_n, 0, sizeof(**(p))*(*(na)-_n));   \
+		}                                                   \
+		*(p) + (*(n))++;                                    \
 	})
 
 #define LIST_PREALLOC(n, na, p, init) do {             \

@@ -131,6 +131,15 @@ test_tech_instace_retbuf = _(function()
 	solution { z = {1, 2, 3}, w = {4, 5, 6} }
 end)
 
+test_tech_large_graph = _(function()
+	local ms = {}
+	for i=1, 255 do
+		ms[i] = m { "x"..i..",y -> z"..i..",w # M"..i }
+	end
+
+	graph(ms)
+end)
+
 ---- acyclic graphs ----------------------------------------
 
 test_acy_bound_retry = _(function()
