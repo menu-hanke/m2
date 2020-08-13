@@ -209,6 +209,23 @@ function soa_mapper_mt.__index:shape_func()
 	end
 end
 
+-- aux mappings --------------------
+
+local fixed_mapper_mt = { __index={} }
+
+local function fixed_size(size)
+	return setmetatable({
+		shapef = function() return size end
+	}, fixed_mapper_mt)
+end
+
+function fixed_mapper_mt.__index:map_var(name)
+end
+
+function fixed_mapper_mt.__index:shape_func()
+	return self.shapef
+end
+
 -- virtual mapper --------------------
 
 ---- edges ----------------------------------------
@@ -271,6 +288,7 @@ return {
 	parallel_group   = pgroup,
 	struct_mapper    = struct_mapper,
 	soa_mapper       = soa_mapper,
+	fixed_size       = fixed_size,
 	match_edges      = match_edges,
 	space            = space,
 	only             = only,

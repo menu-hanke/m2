@@ -25,6 +25,7 @@ local function inject(env, def)
 		group          = mapping.parallel_group,
 		struct_mapper  = mapping.struct_mapper,
 		soa_mapper     = mapping.soa_mapper,
+		fixed_size     = mapping.fixed_size,
 		match_edges    = mapping.match_edges,
 		space          = mapping.space,
 		only           = mapping.only,
