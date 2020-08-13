@@ -12,7 +12,7 @@ fhk/prepare.o: fhk/prepare.c fhk/fhk.h fhk/../mem.h fhk/graph.h fhk/def.h
 fhk/reduce.o: fhk/reduce.c fhk/fhk.h fhk/../mem.h fhk/graph.h fhk/def.h \
  fhk/../def.h
 fhk/solve.o: fhk/solve.c fhk/fhk.h fhk/../mem.h fhk/graph.h fhk/def.h \
- fhk/coro.h /home/tapio/prog/luke/m2/libaco/aco.h fhk/../def.h
+ fhk/coro.h fhk/../def.h
 model/conv.o: model/conv.c model/../def.h model/../mem.h model/model.h \
  model/../fhk/fhk.h model/conv.h
 model/mlib.o: model/mlib.c model/model.h model/../mem.h model/../fhk/fhk.h

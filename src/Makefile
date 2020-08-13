@@ -99,10 +99,10 @@ ubsan: CCDEBUG = -DDEBUG -DFHK_DEBUG
 ubsan: default
 
 dep:
-	$(CC) $(CCOPT) $(CCDEBUG) $(CCDEF) $(CCEXTRA) $(XCFLAGS) -MM *.c fhk/*.c model/*.c frontend/*/**.c \
+	$(CC) $(CCOPT) $(CCDEBUG) $(CCDEF) $(XCFLAGS) -MM *.c fhk/*.c model/*.c frontend/*/**.c \
 		| sed -r 's|^(.*\.o:) (.*?)\.c|\2.o: \2.c|'\
 		> Makefile.dep
-	$(CC) $(CCOPT) $(CCDEBUG) $(CCDEF) $(CCEXTRA) $(XCFLAGS) -MM -MT frontend/m2_cdef.lua frontend/m2_cdef.lua.h\
+	$(CC) $(CCOPT) $(CCDEBUG) $(CCDEF) $(XCFLAGS) -MM -MT frontend/m2_cdef.lua frontend/m2_cdef.lua.h\
 		>> Makefile.dep
 
 frontend/m2_cdef.lua: frontend/m2_cdef.lua.h
