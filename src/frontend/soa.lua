@@ -185,6 +185,28 @@ end
 
 ----------------------------------------
 
+local function mt_merge(meta, mt)
+	local m = {}
+	for k,v in pairs(mt) do m[k] = v end
+	for k,v in pairs(meta) do m[k] = v end
+
+	if meta.__index then
+		if type(meta.__index) ~= "table" then
+			error("non-table __index")
+		end
+
+		local index = {}
+		for k,v in pairs(mt.__index) do index[k] = v end
+		for k,v in pairs(meta.__index) do index[k] = v end
+
+		m.__index = index
+	else
+		m.__index = mt.__index
+	end
+
+	return m
+end
+
 local function inject(env)
 	local _sim = env.sim
 
@@ -206,9 +228,10 @@ local function inject(env)
 		loop        = vec_loop,
 		reflect     = reflct,
 
-		from_bands  = function(bands)
+		from_bands  = function(bands, meta)
 			local ct = ctfrombands(bands)
 			local mt, info, slicect = reflct(ct)
+			if meta then mt = mt_merge(meta, mt) end
 			ffi.metatype(ct, mt)
 			return ct, info, slicect
 		end
