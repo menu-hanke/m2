@@ -90,6 +90,9 @@ if models.Lua then
 	test_Lua_missing_module   = models.Lua("", "models_missing", "func")   :call()        :fails(C.MCALL_RUNTIME_ERROR)
 	test_Lua_invalid_syntax   = models.Lua("", "models_syntax", "fail")    :call()        :fails(C.MCALL_RUNTIME_ERROR)
 
+	test_Lua_bytecode         = models.LuaJIT("d>d", function(x) return x+1 end)
+	                                                                       :call(1)       :result(2)
+
 	if SLOW_TESTS then
 		-- this must have a lot of iterations (eg. 10k reps isn't enough to blow Lua stack if the
 		-- model caller doesn't properly cleanup)

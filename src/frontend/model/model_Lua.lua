@@ -32,11 +32,25 @@ return {
 		}, def_mt)
 	end,
 
-	def_jit = function(module, func)
-		return setmetatable({
-			create = function(_, sig)
-				return C.mod_LuaJIT_create(module, func, sig)
+	def_jit = function(mf, name)
+		if type(mf) == "function" then
+			local info = debug.getinfo(mf)
+			name = name or string.format("%s:%d", info.short_src, info.linedefined)
+			if info.nups ~= 0 then
+				error(string.format("%s: inline model function can't have upvalues", name))
 			end
-		}, def_mt)
+			return setmetatable({
+				create = function(_, sig)
+					local bc = string.dump(mf)
+					return C.mod_LuaBC_create(bc, #bc, name, sig)
+				end
+			}, def_mt)
+		else
+			return setmetatable({
+				create = function(_, sig)
+					return C.mod_LuaJIT_create(mf, name, sig)
+				end
+			}, def_mt)
+		end
 	end
 }

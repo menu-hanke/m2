@@ -164,7 +164,7 @@ local function patcher(sig, useffi, name)
 				table.insert(returns, string.format("edge_fromtable%d(ffi.cast(edge_ct%d, mc.edges+%d)[0], rv%d)", i, i, i, i))
 			end
 		end
-		
+
 		return load(string.format([[
 				local ffi = ffi
 				local f = f
@@ -188,13 +188,31 @@ local function patcher(sig, useffi, name)
 	end
 end
 
-local function proxy(module, name, sig, useffi)
-	local patch = patcher(copysig(ffi.cast("struct mt_sig *", sig)), useffi, name)
+/*
+-- pure Lua: mode: "lua", mod_or_bc: module name, name: function name
+-- ffi Lua:  mode: "ffi", mod_or_bc: module name, name: function name
+-- bytecode: mode: "bc",  mod_or_bc: bytecode,    name: chunk name
+*/
+local function proxy(mod_or_bc, name, sig, mode)
+	local loader
+	if mode == "bc" then
+		loader = function()
+			local f, err = load(mod_or_bc)
+			if not f then
+				error(string.format("error while loading bytecode %s: %s", name, err))
+			end
+			return f
+		end
+	else
+		loader = function()
+			return require(mod_or_bc)[name] or
+				error(string.format("module \'%s\' doesn\'t export \'%s\'", module, name))
+		end
+	end
+	local patch = patcher(copysig(ffi.cast("struct mt_sig *", sig)), mode ~= "lua", name)
 	local handle = #models+1
 	models[handle] = function(mc)
-		local f = require(module)[name] or
-			error(string.format("module \'%s\' doesn\'t export \'%s\'", module, name))
-		f = patch(f)
+		f = patch(loader())
 		models[handle] = f
 		return f(mc)
 	end

@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <string.h>
 #include <assert.h>
 
 #include <lua.h>
@@ -43,18 +44,23 @@ static_assert(offsetof(struct mt_sig, np) == 0
 static lua_State *global_L = NULL;
 
 static void init_L();
-static handle make_proxy(const char *module, const char *func, struct mt_sig *sig, bool useffi);
+static handle make_proxy(const char *mod_or_bc, size_t n, const char *name, struct mt_sig *sig,
+		const char *mode);
 
 uint64_t mod_Lua_types(){
 	return ~0ULL;
 }
 
 mod_Lua *mod_Lua_create(const char *module, const char *func, struct mt_sig *sig){
-	return FROMHANDLE(make_proxy(module, func, sig, false));
+	return FROMHANDLE(make_proxy(module, strlen(module), func, sig, "lua"));
 }
 
 mod_Lua *mod_LuaJIT_create(const char *module, const char *func, struct mt_sig *sig){
-	return FROMHANDLE(make_proxy(module, func, sig, true));
+	return FROMHANDLE(make_proxy(module, strlen(module), func, sig, "ffi"));
+}
+
+mod_Lua *mod_LuaBC_create(const char *buf, size_t sz, const char *name, struct mt_sig *sig){
+	return FROMHANDLE(make_proxy(buf, sz, name, sig, "bc"));
 }
 
 void mod_Lua_calibrate(mod_Lua *M, size_t n_co, double *co){
@@ -110,13 +116,15 @@ static void init_L(){
 }
 
 // this can't fail, because the loading is deferred until first call
-static handle make_proxy(const char *module, const char *func, struct mt_sig *sig, bool useffi){
+static handle make_proxy(const char *mod_or_bc, size_t n, const char *name, struct mt_sig *sig,
+		const char *mode){
+
 	init_L();
 	lua_getfield(global_L, LUA_REGISTRYINDEX, K_PROXY);
-	lua_pushstring(global_L, module);
-	lua_pushstring(global_L, func);
+	lua_pushlstring(global_L, mod_or_bc, n);
+	lua_pushstring(global_L, name);
 	lua_pushlightuserdata(global_L, sig);
-	lua_pushboolean(global_L, useffi);
+	lua_pushstring(global_L, mode);
 	lua_call(global_L, 4, 1);
 	handle h = lua_tointeger(global_L, -1);
 	lua_pop(global_L, 1);
