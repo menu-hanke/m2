@@ -285,10 +285,10 @@ static f2_128 r_searchm(struct fhk_reducer *restrict R, xidx mi, float beta){
 
 		bound_S += xb;
 
-		// here possibly low(bound_S) >= beta_S, even if the COST_OVERFLOW flag isn't set.
-		// this is ok and in fact what we want: as long as no one sets it we are just summing
-		// precomputed values, ie. doing basically no extra work. as soon as the search hits
-		// a var/model that hasn't been computed it will stop with the flag
+		// may or may not COST_OVERFLOW (eg. if a parameter cost is constant infinity, then
+		// low(bound_S)=infinity without overflow)
+		if(low(bound_S) >= beta_S)
+			break;
 	}
 
 	f2_128 bound = costf(m, bound_S);
