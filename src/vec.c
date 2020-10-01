@@ -92,13 +92,18 @@ void simF_vec_delete(sim *sim, struct vec *v, uint32_t n, uint32_t *idx){
 	if(!n)
 		return;
 
+	// TODO: maybe compact the vector if deleting a lot?
+	// TODO: special case: if deleting everything just null the pointers
 	void *newbands[v->info->n_bands];
 	for(size_t i=0;i<v->info->n_bands;i++)
 		newbands[i] = v->bands[i] ? simF_vec_create_band(sim, v, i) : NULL;
 
-	vec_copy_skip(v, newbands, n, idx);
+	uint32_t tail = vec_copy_skip(v, newbands, n, idx);
+	assert(tail == v->n_used - n);
+	(void)tail;
 
 	memcpy(v->bands, newbands, v->info->n_bands * sizeof(*v->bands));
+	v->n_used = tail;
 }
 
 static uint32_t calc_intervals_s(struct cpy_interval *cpy, uint32_t *ncpy, uint32_t n,
