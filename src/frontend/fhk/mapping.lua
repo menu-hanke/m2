@@ -29,15 +29,17 @@ function pgroup_mt.__index:map_var(name)
 
 	local mapper, typ, create
 	for _,m in ipairs(self.mappers) do
-		local t,c = m:map_var(lname)
+		if m.map_var then
+			local t,c = m:map_var(lname)
 
-		if t then
-			if mapper then
-				error(string.format("Mapping conflict: '%s' (originally '%s') is claimed by"
-				.. " multiple mappers: %s and %s", lname, name, mapper, m))
+			if t then
+				if mapper then
+					error(string.format("Mapping conflict: '%s' (originally '%s') is claimed by"
+					.. " multiple mappers: %s and %s", lname, name, mapper, m))
+				end
+
+				mapper, typ, create = m, t, c
 			end
-
-			mapper, typ, create = m, t, c
 		end
 	end
 
@@ -55,19 +57,23 @@ end
 
 function pgroup_mt.__index:shape_func(...)
 	if #self.mappers == 0 then
+		-- allow empty group as a special case to claim names
 		return function() return 0 end
 	end
 
-	if #self.mappers == 1 then
-		return self.mappers[1]:shape_func(...)
+	local funs = {}
+	for i,m in ipairs(self.mappers) do
+		if m.shape_func then
+			table.insert(funs, m:shape_func(...))
+		end
 	end
 
-	local funs = {}
+	if #funs == 0 then
+		error(string.format("%s: Non-empty group (%d) without shape function", self, #self.mappers))
+	end
 
-	-- TODO tästä alaspäin ei ole testiä
-
-	for i,m in ipairs(self.mappers) do
-		funs[i] = m:shape_func(...)
+	if #funs == 1 then
+		return funs[1]
 	end
 
 	local sf = code.new()
@@ -152,6 +158,56 @@ function struct_mapper_mt.__index:shape_func()
 	return shape1
 end
 
+-- plain array mapper --------------------
+-- TODO TESTIT
+
+local array_mapper_mt = { __index={} }
+
+local function array_mapper(objs)
+	return setmetatable({objs = objs}, array_mapper_mt)
+end
+
+function array_mapper_mt.__index:ref_gen(gen, name)
+	-- this could technically be called multiple times if multiple variables resolve
+	-- to the same name (think aliases etc.)
+
+	if not gen[self] then
+		gen[self] = {}
+	end
+
+	if not gen[self][name] then
+		local ud = gen:reseve(ffi.typeof("void *"))
+		gen:init(function(state, _, ptr)
+			ptr[0] = state[name]       ---> obj *
+		end, ud)
+		gen[self][name] = ud
+	end
+
+	return gen[self][name]
+end
+
+function array_mapper_mt.__index:map_var(name)
+	local obj = self.objs[name]
+	if not obj then return end
+
+	local ct = ffi.typeof(obj)
+	local refct = reflect.typeof(ct)
+	local create
+
+	if type(obj) ~= "cdata" or obj == ct then -- it's a type
+		create = function(gen)
+			return driver.refx(self:ref_gen(gen, name))      ---> udata
+		end
+	else -- it's cdata
+		refct = refct.element_type
+		create = function()
+			return driver.refk(ffi.cast("void *", obj))      ---> obj
+		end
+	end
+
+	return conv.fromctype(refct), create
+end
+
 -- vec mapper --------------------
 
 local soa_mapper_mt = { __index={} }
@@ -163,7 +219,7 @@ local function soa_mapper(ctype, inst)
 	}, soa_mapper_mt)
 end
 
-function soa_mapper_mt.__index:ref_gen(gen, alloc)
+function soa_mapper_mt.__index:ref_gen(gen)
 	if not gen[self] then
 		gen[self] = gen:reserve(ffi.typeof("void *"))
 		local inst = self.inst
@@ -217,9 +273,6 @@ local function fixed_size(size)
 	return setmetatable({
 		shapef = function() return size end
 	}, fixed_mapper_mt)
-end
-
-function fixed_mapper_mt.__index:map_var(name)
 end
 
 function fixed_mapper_mt.__index:shape_func()
@@ -287,6 +340,7 @@ end
 return {
 	parallel_group   = pgroup,
 	struct_mapper    = struct_mapper,
+	array_mapper     = array_mapper,
 	soa_mapper       = soa_mapper,
 	fixed_size       = fixed_size,
 	match_edges      = match_edges,
