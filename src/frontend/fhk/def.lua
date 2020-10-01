@@ -93,7 +93,7 @@ function gdef_mt.__index:L(x)
 	return self.labels[x] or error(string.format("Undefined label: '%s'", x))
 end
 
-function gdef_mt.__index:set_constraint(val)
+function gdef_mt.__index:set_constraint(val, inverse)
 	val = type(val) ~= "table" and {val} or val
 
 	return function(typ)
@@ -105,6 +105,10 @@ function gdef_mt.__index:set_constraint(val)
 				error(string.format("not a valid bit: %s", v))
 			end
 			mask = bit.bor(mask, bit.lshift(1ULL, v))
+		end
+
+		if inverse then
+			mask = bit.bnot(mask)
 		end
 
 		if typ == C.MT_UINT8 then
@@ -273,6 +277,7 @@ local function gdef_env(def)
 		end,
 
 		is = function(cst) return cst_modifier(def:set_constraint(cst)) end,
+		is_not = function(cst) return cst_modifier(def:set_constraint(cst, true)) end,
 		ge = function(x) return cst_modifier(def:fp_constraint(x, ">=")) end,
 		gt = function(x) return cst_modifier(def:fp_constraint(x, ">")) end,
 		le = function(x) return cst_modifier(def:fp_constraint(x, "<=")) end,
