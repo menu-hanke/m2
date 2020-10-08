@@ -71,14 +71,6 @@ local vmath_f = {
 		avgw     = C.vdavgw,
 		copy     = function(dest, src, n) ffi.copy(dest, src, n*sizeof_double) end,
 		tostring = vecstr,
-	},
-
-	bitmap = {
-		copy     = C.bm_copy,
-		not_     = C.bm_not,
-		and_     = C.bm_and,
-		or_      = C.bm_or,
-		xor      = C.bm_xor
 	}
 }
 
@@ -149,105 +141,6 @@ local vecd_ct = ffi.metatype([[
 
 vmath_f.double.vec = vec_ct
 vmath_f.double.vecm8 = vecm_ct
-
---------------------------------------------------------------------------------
-
-local function binarystr(d, n)
-	local bs = {}
-
-	for i=1, n do
-		bs[i] = (d%2 == 1) and "1" or "0"
-		d = d / 2ULL
-	end
-
-	return table.concat(bs, "")
-end
-
-local function bitmapstr(data, n, size)
-	size = size or 8
-	local chunks = {}
-
-	for i=0, tonumber(n)-1 do
-		chunks[i+1] = binarystr(data[i], size)
-	end
-
-	return table.concat(chunks, "\t")
-end
-
-local mask_type = ffi.typeof("uint64_t")
-local function ismask(x)
-	return type(x) == "number" or ffi.istype(mask_type, x)
-end
-
-local function overload2b(maskf, bitmapf)
-	return function(self, x)
-		if ismask(x) then
-			maskf(self.bitmap, self.n8, x)
-		else
-			bitmapf(self.bitmap, tobitmap(x))
-		end
-	end
-end
-
-local function masked(f, size)
-	if size == 8 then
-		return f
-	end
-
-	local mask = ({[1]=C.bmask8, [2]=C.bmask16, [4]=C.bmask32})[size]
-	return function(bm8, n8, x)
-		return f(bm8, n8, mask(x))
-	end
-end
-
-local function bm8_ct(size)
-	local set64 = masked(C.bm_set64, size)
-
-	return ffi.metatype([[
-		struct {
-			bm8 *bitmap;
-			size_t n;
-		}]], {
-		
-		__index = {
-			set   = function(self, x) set64(self.bitmap, self.n, x) end,
-			zero  = function(self) C.bm_zero(self.bitmap, self.n) end,
-			not_  = function(self) C.bm_not(self.bitmap, self.n) end,
-			and_  = overload2b(masked(C.bm_and64, size), C.bm_and),
-			or_   = overload2b(masked(C.bm_or64,  size), C.bm_or),
-			xor   = overload2b(masked(C.bm_xor64, size), C.bm_xor)
-		},
-
-		__tostring = function(self) return bitmapstr(self.data, self.n/size, size) end,
-		__len = function(self) return tonumber(self.n/size) end,
-		__eq = function(self, other)
-			return C.memcmp(self.bitmap, other.bitmap, self.n) ~= 0
-		end
-	})
-end
-
-local bitmap_ct = setmetatable({}, {
-	__index = function(self, size)
-		self[size] = bm8_ct(size)
-		return self[size]
-	end
-})
-
--- there's probably a better way to do this (but it's not with a table lookup as cdata can't
--- be used for table keys)
-local function bitmap_size(data)
-	-- this is the fast path which is almost always taken
-	if ffi.istype("uint64_t *", data) then return 8 end
-
-	if ffi.istype("uint32_t *", data) then return 4 end
-	if ffi.istype("uint16_t *", data) then return 2 end
-	if ffi.istype("uint8_t  *", data) then return 1 end
-end
-
-function vmath_f.bitmap(data, n)
-	local ct = bitmap_ct[bitmap_size(data)]
-	return ct(ffi.cast("bm8 *", data), n)
-end
 
 --------------------------------------------------------------------------------
 

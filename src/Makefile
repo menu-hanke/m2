@@ -43,7 +43,7 @@ LIBACO_LIB        ?= -Wl,-rpath=$(shell realpath ../libaco) -L$(shell realpath .
 M2_EXECUTABLE = m2
 M2_LIBS       = $(LUAJIT_LIB)
 
-M2_O = sim.o bitmap.o mem.o grid.o vec.o vmath.o vgrid.o\
+M2_O = sim.o mem.o grid.o vec.o vmath.o vgrid.o\
 	   fhk/solve.o fhk/build.o fhk/reduce.o fhk/debug.o\
 	   frontend/main.o frontend/fhk/driver.o frontend/fhk/mapping.o
 M2_C = $(M2_O:.o=.c)

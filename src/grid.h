@@ -1,6 +1,5 @@
 #pragma once
 
-#include "bitmap.h"
 #include "sim.h"
 
 #include <stdlib.h>
@@ -15,11 +14,6 @@ struct grid {
 	size_t order;
 	size_t stride;
 	void *data;
-};
-
-struct bitgrid {
-	size_t order;
-	bm8 *bs;
 };
 
 #define GRID_INVALID   ((gridpos)(~0))
