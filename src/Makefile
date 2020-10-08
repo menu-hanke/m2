@@ -11,7 +11,8 @@ XLDFLAGS ?=
 
 # -fstack-protector causes about ~10% slowdown for typical fhk graphs.
 # Turn it on if you're scared of hackers.
-FHK_CCOPT = $(CCOPT) -fno-lto -fno-stack-protector
+FHK_CCOPT = $(CCOPT) -fno-stack-protector
+FHK_CCDEF =
 
 # What model languages do you want to build in? You can choose any from the following:
 # * R      Call R models (requires libR)
@@ -19,9 +20,10 @@ FHK_CCOPT = $(CCOPT) -fno-lto -fno-stack-protector
 # * Lua    Call Lua models (LuaJIT). Note: these run in a different lua state than the simulator.
 MODEL_LANG        ?= R SimoC Lua
 
-# Build coroutine support for fhk solver (requires libaco)?
-# This allows virtual variables to be written in Lua.
-USE_COROUTINES    ?= on
+# What implementation to use for fhk coroutines? options:
+# * builtin   fhk-builtin assembly routine (only on x86_64 sysv abi)
+# * libco     libco coroutines
+FHK_CO            ?= builtin
 
 # Where to find/install the frontend lua files?
 LUAPATH           ?= $(abspath frontend)
@@ -33,8 +35,8 @@ R_CFLAGS          ?= $(shell pkg-config --cflags libR)
 R_LIB             ?= $(shell pkg-config --libs-only-l --libs-only-L libR)
 LIBFFI_CFLAGS     ?= $(shell pkg-config --cflags libffi)
 LIBFFI_LIB        ?= $(shell pkg-config --libs libffi)
-LIBACO_CFLAGS     ?= -I$(shell realpath ../libaco)
-LIBACO_LIB        ?= -Wl,-rpath=$(shell realpath ../libaco) -L$(shell realpath ../libaco) -laco
+LIBCO_CFLAGS      ?= $(shell pkg-config --cflags libco)
+LIBCO_LIB         ?= $(shell pkg-config --libs libco)
 
 # You probably don't want to configure anything below this line
 
@@ -47,6 +49,22 @@ M2_O = sim.o mem.o grid.o vec.o vmath.o vgrid.o\
 	   fhk/solve.o fhk/build.o fhk/reduce.o fhk/debug.o\
 	   frontend/main.o frontend/fhk/driver.o frontend/fhk/mapping.o
 M2_C = $(M2_O:.o=.c)
+
+ifneq (,$(findstring Windows,$(OS)))
+	TARGET_ABI ?= Windows
+else
+	TARGET_ABI ?= sysv
+	TARGET_ARCH ?= $(shell uname -m)
+endif
+
+ifeq (builtin,$(FHK_CO))
+	M2_O += fhk/co_$(TARGET_ARCH)_$(TARGET_ABI).o
+	FHK_CCDEF += -DFHK_CO_$(TARGET_ARCH)_$(TARGET_ABI)
+else ifeq (libco,$(FHK_CO))
+	M2_O += fhk/co_libco.o
+	M2_LIBS += $(LIBCO_LIB)
+	FHK_CCDEF += -DFHK_CO_LIBCO
+endif
 
 MODEL_O = model/mlib.o model/conv.o model/model_Const.o
 MODEL_C = $(MODEL_O:.o=.c)
@@ -67,14 +85,9 @@ endif
 
 ################################################################################
 
-# TODO: this is only needed for fhk. when fhk uses the custom swap (on x86_64), enable this
-# conditionally for non-x86_64
-CCEXTRA += $(LIBACO_CFLAGS)
-M2_LIBS += $(LIBACO_LIB)
-
 CCDEF += -DM2_LUAPATH='"$(LUAPATH)"'
 CFLAGS = $(LUAJIT_CFLAGS) $(CCOPT) $(CCDEBUG) $(CCDEF) $(CCWARN) $(CCEXTRA) $(XCFLAGS)
-FHK_CFLAGS = $(FHK_CCOPT) $(CCDEBUG) $(CCDEF) $(CCWARN) $(XCFLAGS)
+FHK_CFLAGS = $(FHK_CCOPT) $(FHK_CCDEF) $(CCDEBUG) $(CCDEF) $(CCWARN) $(XCFLAGS)
 
 # -rdynamic is needed to access C symbols of the executable from lua
 # Note: GCC docs said I don't need to pass -f parameters again to linker,
@@ -131,8 +144,14 @@ $(M2_EXECUTABLE): $(M2_O) $(MODEL_O)
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-fhk_solve.o: fhk_solve.c
+%.o: %.S
+	$(CC) -c $< -o $@
+
+fhk/%.o: fhk/%.c
 	$(CC) $(FHK_CFLAGS) -c $< -o $@
+
+fhk/co_libco.o: fhk/co_libco.c
+	$(CC) $(FHK_CFLAGS) $(LIBCO_CFLAGS) -c $< -o $@
 
 model/model_R.o: model/model_R.c
 	$(CC) $(CFLAGS) $(R_CFLAGS) -c $< -o $@

@@ -1,7 +1,7 @@
 #include "fhk.h"
 #include "graph.h"
 #include "def.h"
-#include "coro.h"
+#include "co.h"
 
 #include "../def.h"
 #include "../mem.h"
@@ -127,9 +127,11 @@ typedef uint64_t sc_mem;
 #define UMAP_NONE (~0)
 
 struct fhk_solver {
+	// the solver coroutine, must be first
+	fhk_co co;
+
 	struct fhk_graph G;
 	arena *arena;
-	fhk_co *co;
 
 	// request
 	size_t r_nv;
@@ -151,9 +153,10 @@ struct fhk_solver {
 	sc_mem sc_mem[MAX_SCRATCH];
 };
 
+static_assert(offsetof(struct fhk_solver, co) == 0);
+
 // J_* functions jump out of the solver
 // only call from inside the solver coroutine
-#define J_yield(S,s) fhk_co_yield((S)->co, s)
 static void J_error(struct fhk_solver *S, int err, int flags, struct fhk_ei *ei);
 #define J_fail(S,code,why,flags,...) do {                                \
 		dv("solver failed here: %s:%d (" why ")\n", __func__, __LINE__); \
@@ -165,7 +168,6 @@ static void J_error(struct fhk_solver *S, int err, int flags, struct fhk_ei *ei)
 
 // S_* functions (solver functions) must be also called from the solver coroutine
 // (these may call J_* functions)
-static void S_solve_co();
 static void S_solve(struct fhk_solver *restrict S);
 static size_t S_shape(struct fhk_solver *restrict S, size_t group);
 
@@ -225,12 +227,19 @@ static bool bm_find0_range(uint64_t *b, xinst *inst, xinst from, xinst to);
 static bool bm_find0_ssne(uint64_t *b, xinst *inst, fhk_subset ss);
 
 fhk_solver *fhk_create_solver(struct fhk_graph *G, arena *arena, size_t nv, struct fhk_req *req){
-	fhk_co_thread_init();
+#if FHK_CO_BUILTIN
+	void *stack = arena_alloc(arena, FHK_CO_STACK_ALLOC, FHK_CO_STACK_ALIGN);
+#endif
 
 	struct fhk_solver *S = arena_malloc(arena, sizeof(*S));
 	S->G = *G;
 	S->arena = arena;
-	S->co = fhk_co_create(&S_solve_co, S);
+
+#if FHK_CO_BUILTIN
+	fhk_co_init(&S->co, stack, FHK_CO_STACK_ALLOC, &S_solve);
+#else
+	fhk_co_init(&S->co, &S_solve);
+#endif
 
 	S->vars = arena_malloc(arena, G->nv * sizeof(*S->vars));
 	S->models = arena_malloc(arena, G->nm * sizeof(*S->models));
@@ -252,10 +261,6 @@ fhk_solver *fhk_create_solver(struct fhk_graph *G, arena *arena, size_t nv, stru
 	memcpy(S->r_req, req, nv * sizeof(*S->r_req));
 
 	return S;
-}
-
-fhk_status fhk_continue(struct fhk_solver *S){
-	return fhk_co_resume(S->co);
 }
 
 fhk_status fhkS_shape(struct fhk_solver *S, size_t group, int16_t shape){
@@ -333,21 +338,14 @@ fhk_status fhkS_use_mem(struct fhk_solver *S, size_t xi, void *vp){
 __attribute__((cold,noreturn))
 static void J_error(struct fhk_solver *S, int err, int flags, struct fhk_ei *ei){
 	for(;;)
-		J_yield(S, STATUS(FHK_ERROR | S_A(err) | S_B(flags), (uintptr_t)ei));
-}
-
-static void S_solve_co(){
-	struct fhk_solver *S = fhk_co_arg();
-	S_solve(S);
-
-	for(;;)
-		J_yield(S, STATUS(FHK_OK));
+		fhkJ_yield(S, STATUS(FHK_ERROR | S_A(err) | S_B(flags), (uintptr_t)ei));
 }
 
 // the use of restrict is valid here because modifying the graph/solver is not allowed
 // this basically tells the compiler that user callbacks won't touch S
 // (unfortunately there's no way to tell the compiler S won't be written to at all,
 // but this still enables some optimizations on clang)
+__attribute__((noreturn))
 static void S_solve(struct fhk_solver *restrict S){
 	for(size_t i=0;i<S->r_nv;i++){
 		struct fhk_req r = S->r_req[i];
@@ -369,6 +367,13 @@ static void S_solve(struct fhk_solver *restrict S){
 		if(r.buf)
 			ss_collect(r.buf, S->vars[r.idx].vp, S->G.vars[r.idx].size, r.ss);
 	}
+
+#if FHK_CO_LIBCO
+	fhk_co_done(&S->co);
+#endif
+
+	for(;;)
+		fhkJ_yield(S, STATUS(FHK_OK));
 }
 
 // this will be inlined, but clang still can use the knowledge that this doesn't have side effects
@@ -376,7 +381,7 @@ static void S_solve(struct fhk_solver *restrict S){
 __attribute__((pure))
 static size_t S_shape(struct fhk_solver *restrict S, size_t group){
 	if(UNLIKELY(!S->g_shape || S->g_shape[group] == EMPTY)){
-		J_yield(S, STATUS(FHKS_SHAPE, group));
+		fhkJ_yield(S, STATUS(FHKS_SHAPE, group));
 
 		if(UNLIKELY(!S->g_shape || S->g_shape[group] == EMPTY))
 			J_fail(S, FHKE_INVAL, "missing shape table entry", FHKEI_G, .g=group);
@@ -384,10 +389,6 @@ static size_t S_shape(struct fhk_solver *restrict S, size_t group){
 
 	return S->g_shape[group];
 }
-
-#ifdef FHK_DEBUG
-
-#endif
 
 static fhk_subset S_map(struct fhk_solver *restrict S, xmap map, xinst inst){
 	switch(MAP_TAG(map)){
@@ -419,7 +420,7 @@ static fhk_subset S_umap(struct fhk_solver *restrict S, xmap map, xinst inst){
 	};
 
 	uint64_t udata = S->G.umaps[map & UMAP_INDEX].udata.u64;
-	J_yield(S, STATUS((FHKS_MAPPING+!!(map & UMAP_INVERSE)) | S_ABC(&mp), udata));
+	fhkJ_yield(S, STATUS((FHKS_MAPPING+!!(map & UMAP_INVERSE)) | S_ABC(&mp), udata));
 
 	if(UNLIKELY(cm[inst] == UMAP_NONE))
 		J_fail(S, FHKE_VALUE, "requested mapping not given", 0);
@@ -607,10 +608,8 @@ static void S_select_chain(struct fhk_solver *restrict S, xidx x_i, xinst x_inst
 		};
 	} frame;
 
-#define MAX_STK 32
-
-	frame _stk[MAX_STK];
-	frame *top = &_stk[MAX_STK-1];
+	frame _stk[FHK_MAX_STK];
+	frame *top = &_stk[FHK_MAX_STK-1];
 
 #define PUSH(ok, fail) do {\
 		if(UNLIKELY(top == _stk))\
@@ -620,7 +619,7 @@ static void S_select_chain(struct fhk_solver *restrict S, xidx x_i, xinst x_inst
 		top->ret_fail = (fail);\
 	} while(0)
 #define POP()  do { top++; } while(0)
-#define ISTOP() (top == &_stk[MAX_STK-1])
+#define ISTOP() (top == &_stk[FHK_MAX_STK-1])
 
 	top->ret_ok = &&done;
 	top->ret_fail = &&fail;
@@ -945,7 +944,6 @@ next: // ()
 #undef ISTOP
 #undef PUSH
 #undef POP
-#undef MAX_STK
 
 done:
 	return;
@@ -953,7 +951,6 @@ done:
 fail:
 	J_fail(S, FHKE_CHAIN, "no chain with finite cost", FHKEI_V|FHKEI_I, .v=x_i, .i=x_inst);
 }
-#pragma GCC diagnostic push
 
 // candidate selector:
 //     m_ei, m_inst : edge index and instance of the candidate
@@ -1070,7 +1067,7 @@ static void S_get_given_ssne(struct fhk_solver *restrict S, xidx xi, fhk_subset 
 		// asymptotically this is not optimal but the test is so fast it doesn't matter
 		// (asking for the variable is so much slower)
 		while(bm_find0_ssne(gs, &inst, ss)){
-			J_yield(S, STATUS(FHKS_COMPUTE_GIVEN | S_A(xi) | S_B(inst), udata));
+			fhkJ_yield(S, STATUS(FHKS_COMPUTE_GIVEN | S_A(xi) | S_B(inst), udata));
 			if(UNLIKELY(!bm_isset(gs, inst)))
 				goto fail;
 		}
@@ -1079,7 +1076,7 @@ static void S_get_given_ssne(struct fhk_solver *restrict S, xidx xi, fhk_subset 
 	}
 
 	inst = SS_INDEX(ss_first_nonempty(ss));
-	J_yield(S, STATUS(FHKS_COMPUTE_GIVEN | S_A(xi) | S_B(inst), udata));
+	fhkJ_yield(S, STATUS(FHKS_COMPUTE_GIVEN | S_A(xi) | S_B(inst), udata));
 	if(UNLIKELY(!S->vars[xi].gs))
 		goto fail;
 
@@ -1222,7 +1219,7 @@ static void S_compute_model(struct fhk_solver *restrict S, xidx mi, xinst inst, 
 	}
 
 	// make the request
-	J_yield(S, STATUS(FHKS_COMPUTE_MODEL | S_ABC(cm), m->udata.u64));
+	fhkJ_yield(S, STATUS(FHKS_COMPUTE_MODEL | S_ABC(cm), m->udata.u64));
 	S_scratch_release(S, sc_used);
 }
 

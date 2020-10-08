@@ -33,3 +33,14 @@ typedef uint32_t xmap;   // mapping
 const char *fhk_Dvar(struct fhk_graph *G, xidx vi);
 const char *fhk_Dmodel(struct fhk_graph *G, xidx mi);
 #endif
+
+// max solver recursive calls
+#ifndef FHK_MAX_STK
+#define FHK_MAX_STK 32
+#endif
+
+// coroutine stack size
+//#define FHK_CO_STACK 4*1024*1024
+#ifndef FHK_CO_STACK
+#define FHK_CO_STACK (65536 + 1024*FHK_MAX_STK)
+#endif
