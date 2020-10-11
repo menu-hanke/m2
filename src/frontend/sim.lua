@@ -1,4 +1,3 @@
-local control = require "control"
 local misc = require "misc"
 local ffi = require "ffi"
 local C = ffi.C
@@ -28,16 +27,17 @@ end
 
 ffi.metatype("sim", {
 	__index = {
-		enter       = function(self) check(C.sim_enter(self)) end,
+		fp          = function(self) return C.sim_fp(self) end,
 		savepoint   = function(self) check(C.sim_savepoint(self)) end,
-		restore     = function(self) check(C.sim_restore(self)) end,
-		exit        = function(self) check(C.sim_exit(self)) end,
+		load        = function(self, fp) check(C.sim_load(self, fp)) end,
+		enter       = function(self) check(C.sim_enter(self)) end,
 		branch      = function(self, hint) check(C.sim_branch(self, hint)) end,
-		take_branch = function(self, id)
-			local r = C.sim_take_branch(self, id)
+		enter_branch= function(self, fp, hint)
+			local r = C.sim_enter_branch(self, fp, hint)
 			check(r)
 			return r ~= C.SIM_SKIP
 		end,
+		exit_branch = function(self) check(C.sim_exit_branch(self)) end,
 
 		alloc       = function(self, size, align, life)
 			return C.sim_alloc(self, size, align, tolifetime(life))
@@ -71,14 +71,14 @@ end
 local function branch(sim, branches)
 	-- this is a lazy implementation, it won't even be compiled
 	-- TODO: codegen (with same api)
-	return function(e, x, s)
-		sim:branch(C.SIM_MULTIPLE)
+	return function(continue, x, f)
+		sim:branch(C.SIM_CREATE_SAVEPOINT)
+		local fp = sim:fp()
 
-		for id, f in pairs(branches) do
-			if sim:take_branch(id) then
-				f()
-				control.continue(e, x, s)
-				sim:exit()
+		for _, cb in ipairs(branches) do
+			if sim:enter_branch(fp, 0) then
+				cb()
+				f(continue, x)
 			end
 		end
 	end

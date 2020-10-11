@@ -1,62 +1,93 @@
 -- vim: ft=lua
+local sim = require "sim"
 local ffi = require "ffi"
 local C = ffi.C
 
-local function with_sim(f)
+local function _(f)
 	return function()
-		local sim = C.sim_create()
-		f(sim)
-		C.sim_destroy(sim)
+		f(sim.create())
 	end
 end
 
-local function new(sim, ct, lt)
-	ct = type(ct) == "string" and ffi.typeof(ct) or ct
-	local rt = ffi.typeof("$ *", ct)
-	return ffi.cast(rt, C.sim_alloc(sim, ffi.sizeof(ct), ffi.alignof(ct), lt))
-end
-
-test_single_branch = with_sim(function(sim)
-	local fid = C.sim_frame_id(sim)
-	C.sim_branch(sim, 0)
-	assert(C.sim_take_branch(sim, 0) == C.SIM_OK)
-	assert(C.sim_frame_id(sim) ~= fid)
-	C.sim_exit(sim)
-	assert(C.sim_frame_id(sim) == fid)
-end)
-
-test_savepoint = with_sim(function(sim)
-	local vsnum = new(sim, "double", C.SIM_VSTACK)
+test_savepoint = _(function(sim)
+	local vsnum = sim:new(ffi.typeof"double", C.SIM_VSTACK)
 
 	vsnum[0] = 1
 
-	C.sim_enter(sim)
-	C.sim_savepoint(sim)
+	sim:savepoint()
+	local fp = sim:fp()
 
 	assert(vsnum[0] == 1)
 	vsnum[0] = 2
 
-	C.sim_restore(sim)
+	sim:load(fp)
 	assert(vsnum[0] == 1)
 	vsnum[0] = 3
 
-	C.sim_restore(sim)
-	assert(vsnum[0] == 1)
-
-	C.sim_exit(sim)
+	sim:load(fp)
 	assert(vsnum[0] == 1)
 end)
 
-test_branch_save = with_sim(function(sim)
-	local vsnum = new(sim, "double", C.SIM_VSTACK)
+test_double_savepoint = _(function(sim)
+	local v = sim:new(ffi.typeof"double", C.SIM_VSTACK)
 
-	vsnum[0] = 1
+	v[0] = 1
+	sim:savepoint()
+	local fp = sim:fp()
 
-	C.sim_branch(sim, C.SIM_MULTIPLE);
-	for i=1, 3 do
-		assert(C.sim_take_branch(sim, i) == C.SIM_OK)
-		assert(vsnum[0] == 1)
-		vsnum[0] = 100+i
-		C.sim_exit(sim)
-	end
+	v[0] = 2
+	sim:savepoint()
+
+	v[0] = 3
+	sim:load(fp)
+
+	assert(v[0] == 2)
+
+	-- goes back to latest
+	sim:load(fp)
+	assert(v[0] == 2)
+end)
+
+test_leak_savepoint = _(function(sim)
+	local v = sim:new(ffi.typeof"double", C.SIM_VSTACK)
+
+	v[0] = 1
+	sim:savepoint()
+	local fp = sim:fp()
+
+	sim:new(ffi.typeof"double", C.SIM_VSTACK)
+	sim:new(ffi.typeof"double", C.SIM_FRAME)
+
+	-- first savepoint is leaked here
+	v[0] = 2
+	sim:savepoint()
+
+	v[0] = 3
+	sim:load(fp)
+
+	assert(v[0] == 2)
+end)
+
+test_jump_down = _(function(sim)
+	sim:savepoint()
+	local fp1 = sim:fp()
+
+	sim:enter()
+	sim:savepoint()
+	local fp2 = sim:fp()
+
+	sim:load(fp1)
+	assert(fails(function() sim:load(fp2) end))
+end)
+
+test_tail_branch = _(function(sim)
+	sim:branch(C.SIM_CREATE_SAVEPOINT)
+	local fid = C.sim_frame_id(sim)
+	local fp = sim:fp()
+
+	assert(sim:enter_branch(fp, 0))
+	assert(C.sim_frame_id(sim) ~= fid)
+	assert(sim:enter_branch(fp, C.SIM_TAILCALL))
+	assert(C.sim_frame_id(sim) == fid)
+	assert(fails(function() sim:enter_branch(fp, C.SIM_TAILCALL) end))
 end)

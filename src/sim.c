@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <stdalign.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <string.h>
 #include <assert.h>
 #include <sys/mman.h>
@@ -27,12 +28,13 @@
 #define VSTACK_REGION    (SIM_MAX_DEPTH-1)
 
 struct frame {
-	unsigned saved    : 1;
-	unsigned dirty    : 1;
-	unsigned branched : 1;
-	unsigned fid;
+	unsigned has_savepoint    : 1;
+	unsigned has_branchpoint  : 1;
+
+	uint32_t fid;
 	region mem;
 
+	// savepoint data, only touch this when has_savepoint=1
 	void *vstack_copy;
 	void *vstack_ptr;
 };
@@ -41,8 +43,8 @@ struct sim {
 	region stat;
 	region vstack;
 	void *mapping;
-	unsigned next_fid;
-	unsigned fp;
+	uint32_t next_fid;
+	uint32_t fp;
 	struct frame fstack[SIM_MAX_DEPTH];
 };
 
@@ -108,68 +110,46 @@ void *sim_alloc(struct sim *sim, size_t sz, size_t align, int lifetime){
 	return p;
 }
 
-unsigned sim_frame_id(struct sim *sim){
+uint32_t sim_fp(struct sim *sim){
+	return sim->fp;
+}
+
+uint32_t sim_frame_id(struct sim *sim){
 	return TOP(sim)->fid;
-}
-
-int sim_enter(struct sim *sim){
-	if(UNLIKELY(sim->fp+1 >= SIM_MAX_DEPTH)){
-		dv("[%u] @ %u ERR -- stack overflow\n", sim->fp, TOP(sim)->fid);
-		return SIM_EFRAME;
-	}
-
-#ifdef DEBUG
-	region_ro(&TOP(sim)->mem);
-#endif
-
-	sim->fp++;
-
-#ifdef DEBUG
-	region_rw(&TOP(sim)->mem);
-#endif
-
-	f_enter(sim, TOP(sim));
-
-	return SIM_OK;
-}
-
-int sim_exit(struct sim *sim){
-	if(UNLIKELY(!sim->fp)){
-		dv("[%u] @ %u ERR -- attempt to exit root frame\n", sim->fp, TOP(sim)->fid);
-		return SIM_EFRAME;
-	}
-
-	dv("[%u] @ %u -- exit\n", sim->fp, TOP(sim)->fid);
-
-#ifdef DEBUG
-	region_ro(&TOP(sim)->mem);
-#endif
-
-	sim->fp--;
-
-#ifdef DEBUG
-	region_rw(&TOP(sim)->mem);
-#endif
-
-	return SIM_OK;
 }
 
 int sim_savepoint(struct sim *sim){
 	struct frame *f = TOP(sim);
+	size_t size = REGION_USED(&sim->vstack);
 
-	if(UNLIKELY(f->saved)){
-		dv("[%u] @ %u ERR -- double savepoint\n", sim->fp, f->fid);
-		return SIM_ESAVE;
+	// have a reusable savepoint?
+	if(UNLIKELY(f->has_savepoint)){
+		// old alloc fits?
+		// note: sim->vstack.ptr >= f->vstack_ptr
+		if(sim->vstack.ptr == f->vstack_ptr)
+			goto copy;
+
+		// can extend old alloc?
+		if(f->mem.ptr == f->vstack_copy + (f->vstack_ptr - sim->vstack.mem)){
+			f->mem.ptr = f->vstack_copy + size;
+			f->vstack_ptr = sim->vstack.ptr;
+			goto copy;
+		}
+
+		dv("[%u] @ %u LEAK %p -- vstack grew %zu -> %zu bytes (savepoint not extendable)\n",
+				sim->fp, f->fid, f->vstack_copy,
+				f->vstack_ptr - sim->vstack.mem, size);
 	}
 
-	size_t size = REGION_USED(&sim->vstack);
 	f->vstack_ptr = sim->vstack.ptr;
 	f->vstack_copy = region_alloc(&f->mem, size, M2_SIMD_ALIGN);
 
 	if(UNLIKELY(!f->vstack_copy))
 		return SIM_EALLOC;
 
-	f->saved = 1;
+	f->has_savepoint = 1;
+
+copy:
 	memcpy(f->vstack_copy, sim->vstack.mem, size);
 
 	dv("[%u] @ %u -- savepoint %p -> %p (%zu bytes)\n", sim->fp, f->fid, sim->vstack.mem,
@@ -178,10 +158,28 @@ int sim_savepoint(struct sim *sim){
 	return SIM_OK;
 }
 
-int sim_restore(struct sim *sim){
+int sim_up(struct sim *sim, uint32_t fp){
+	if(UNLIKELY(fp > sim->fp)){
+		dv("[%u] @ %u ERR -- jump down -> %u\n", sim->fp, TOP(sim)->fid, fp);
+		return SIM_EFRAME;
+	}
+
+#ifdef DEBUG
+	for(uint32_t i=fp; i<sim->fp; i++)
+		region_ro(&sim->fstack[i].mem);
+#endif
+
+	dv("[%u->%u] @ %u->%u -- frame jump\n", sim->fp, fp, TOP(sim)->fid, sim->fstack[fp].fid);
+
+	sim->fp = fp;
+
+	return SIM_OK;
+}
+
+int sim_reload(struct sim *sim){
 	struct frame *f = TOP(sim);
 
-	if(UNLIKELY(!f->saved)){
+	if(UNLIKELY(!f->has_savepoint)){
 		dv("[%u] @ %u ERR -- no savepoint\n", sim->fp, f->fid);
 		return SIM_ESAVE;
 	}
@@ -196,47 +194,71 @@ int sim_restore(struct sim *sim){
 	return SIM_OK;
 }
 
-int sim_branch(struct sim *sim, int hint){
-	struct frame *f = TOP(sim);
+int sim_load(struct sim *sim, uint32_t fp){
+	int r;
+	if((r = sim_up(sim, fp)))
+		return r;
 
-	if(UNLIKELY(f->branched)){
-		dv("[%u] @ %u ERR -- double branch point\n", sim->fp, f->fid);
-		return SIM_EBRANCH;
+	return sim_reload(sim);
+}
+
+int sim_enter(struct sim *sim){
+	// XXX any reason to call this without a savepoint?
+	// if not, add an assertion.
+
+	if(UNLIKELY(sim->fp+1 >= SIM_MAX_DEPTH)){
+		dv("[%u] @ %u ERR -- stack overflow\n", sim->fp, TOP(sim)->fid);
+		return SIM_EFRAME;
 	}
 
-	f->branched = 1;
+	sim->fp++;
+
+#ifdef DEBUG
+	region_rw(&TOP(sim)->mem);
+#endif
+
+	f_enter(sim, TOP(sim));
+
+	return SIM_OK;
+}
+
+int sim_branch(struct sim *sim, int hint){
+	TOP(sim)->has_branchpoint = 1;
 
 	// TODO: if replaying, ignore hint and just check how many branches
-	if(hint & SIM_MULTIPLE){
+	if(hint & SIM_CREATE_SAVEPOINT){
 		int r;
 		if((r = sim_savepoint(sim)))
 			return r;
 	}
 
-	dv("[%u] @ %u -- branch point\n", sim->fp, f->fid);
+	dv("[%u] @ %u -- branch point\n", sim->fp, TOP(sim)->fid);
 
 	return SIM_OK;
 }
 
-int sim_take_branch(struct sim *sim, sim_branchid id){
-	// TODO:
-	// * if replaying and id is skipped, return SIM_SKIP
-	// * if recording, remember id
-	(void)id;
-
-	struct frame *f = TOP(sim);
-
-	if(UNLIKELY(!f->branched))
-		return SIM_EBRANCH;
-
-	if(f->dirty){
+int sim_enter_branch(struct sim *sim, uint32_t fp, int hint){
+	if(fp != sim->fp){
 		int r;
-		if((r = sim_restore(sim)))
+		if((r = sim_load(sim, fp)))
 			return r;
 	}
 
-	f->dirty = 1;
-	sim_enter(sim);
+	struct frame *f = TOP(sim);
+
+	if(UNLIKELY(!f->has_branchpoint)){
+		dv("[%u] @ %u ERR -- no branch point\n", sim->fp, f->fid);
+		return SIM_EBRANCH;
+	}
+
+	// TODO: if replaying, the last taken branch from a branchpoint is a tailcall
+	if(hint & SIM_TAILCALL){
+		f->has_branchpoint = 0;
+	}else{
+		int r;
+		if((r = sim_enter(sim)))
+			return r;
+	}
 
 	return SIM_OK;
 }
@@ -245,9 +267,8 @@ static void f_enter(struct sim *sim, struct frame *f){
 	assert(f == TOP(sim));
 
 	f->fid = sim->next_fid++;
-	f->saved = 0;
-	f->dirty = 0;
-	f->branched = 0;
+	f->has_savepoint = 0;
+	f->has_branchpoint = 0;
 	REGION_RESET(&f->mem);
 
 	dv("[%u] @ %u -- enter\n", sim->fp, f->fid);

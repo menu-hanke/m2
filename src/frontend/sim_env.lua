@@ -1,4 +1,3 @@
-local fhk = require "fhk"
 local control = require "control"
 local misc = require "misc"
 
@@ -13,7 +12,7 @@ end
 local simenv_mt = { __index = {} }
 
 local function create(sim)
-	local events = control.def()
+	local events = control.eset()
 
 	local m2 = {
 		on = misc.delegate(events, events.on)
@@ -49,10 +48,6 @@ function simenv_mt.__index:inject_base()
 	require("soa").inject(self)
 	require("vmath").inject(self)
 	--require("sched").inject(self)
-end
-
-function simenv_mt.__index:inject_fhk(def)
-	require("fhk").inject(self, def)
 end
 
 function simenv_mt.__index:prepare()
@@ -157,7 +152,8 @@ local envconf_mt = { __index={} }
 local function envconf()
 	return setmetatable({
 		modules = {},
-		gfiles  = {}
+		gfiles  = {},
+		efiles  = {}
 	}, envconf_mt)
 end
 
@@ -169,10 +165,15 @@ function envconf_mt.__index:graph(gfile)
 	table.insert(self.gfiles, gfile)
 end
 
+function envconf_mt.__index:events(efile)
+	table.insert(self.efiles, efile)
+end
+
 local function conf_env(conf)
 	local cenv = setmetatable({
-		sim   = misc.delegate(conf, conf.module),
-		graph = misc.delegate(conf, conf.graph)
+		sim    = misc.delegate(conf, conf.module),
+		graph  = misc.delegate(conf, conf.graph),
+		events = misc.delegate(conf, conf.events)
 	}, { __index=_G })
 
 	cenv.read = function(fname) return misc.dofile_env(cenv, fname) end
@@ -187,7 +188,13 @@ local function from_conf(conf)
 	env:inject_base()
 
 	if #conf.gfiles > 0 then
-		env:inject_fhk(fhk.read(unpack(conf.gfiles)))
+		local fhk = require "fhk"
+		fhk.inject(env, fhk.read(unpack(conf.gfiles)))
+	end
+
+	if #conf.efiles > 0 then
+		local event = require "event"
+		event.inject(env, event.read(unpack(conf.efiles)))
 	end
 
 	env:require_all(conf.modules)

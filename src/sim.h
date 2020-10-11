@@ -6,7 +6,6 @@
 #include <stdbool.h>
 
 typedef struct sim sim;
-typedef uint64_t sim_branchid;
 
 enum {
 	SIM_STATIC,
@@ -24,18 +23,23 @@ enum {
 };
 
 enum {
-	SIM_MULTIPLE = 1
+	SIM_CREATE_SAVEPOINT = 1,
+	SIM_TAILCALL = 1
 };
 
 sim *sim_create();
 void sim_destroy(sim *sim);
 
 void *sim_alloc(sim *sim, size_t sz, size_t align, int lifetime);
-unsigned sim_frame_id(sim *sim);
+uint32_t sim_fp(sim *sim);
+uint32_t sim_frame_id(sim *sim);
 
-int sim_enter(sim *sim);
-int sim_exit(sim *sim);
 int sim_savepoint(sim *sim);
-int sim_restore(sim *sim);
+int sim_load(sim *sim, uint32_t fp);
+int sim_up(sim *sim, uint32_t fp);
+int sim_reload(sim *sim);
+int sim_enter(sim *sim);
+
 int sim_branch(sim *sim, int hint);
-int sim_take_branch(sim *sim, sim_branchid id);
+int sim_enter_branch(sim *sim, uint32_t fp, int hint);
+int sim_exit_branch(sim *sim);

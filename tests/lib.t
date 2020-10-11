@@ -15,7 +15,8 @@ local function with_env(setup)
 		local instr, cb = setup()
 		env:prepare()
 		if instr then
-			control.exec(env:compile_insn(instr))
+			instr = env:compile_insn(instr)
+			instr()
 			if cb then cb() end
 		end
 	end
@@ -30,73 +31,11 @@ test_require_hide_path = with_env(function()
 	assert(fails(function() require "sim_env" end))
 end)
 
-test_chain_order = with_env(function()
-	local x = 0
-
-	m2.on("event", function()
-		assert(x == 1)
-		x = x+1
-	end)
-
-	m2.on("event#-1", function()
-		assert(x == 0)
-		x = x+1
-	end)
-
-	m2.on("event#1", function()
-		assert(x == 2)
-	end)
-
-	local instr = m2.record()
-	instr.event()
-	return instr
-end)
-
-test_multi_chain = with_env(function()
-	local x = 0
-
-	m2.on("event1", function()
-		assert(x % 2 == 0)
-		x = x+1
-	end)
-
-	m2.on("event2", function()
-		assert(x % 2 == 1)
-		x = x+1
-	end)
-
-	local instr = m2.record()
-	for i=1, 10 do
-		instr.event1()
-		instr.event2()
-	end
-	return instr
-end)
-
-test_chain_arg = with_env(function()
-	local x = 0
-
-	m2.on("set", function(v)
-		x = v
-	end)
-
-	m2.on("check", function(v)
-		assert(x == v)
-	end)
-
-	local instr = m2.record()
-	for i=1, 10 do
-		instr.set(i)
-		instr.check(i)
-	end
-	return instr
-end)
-
 test_binary_numbers_branching = with_env(function()
 	local G = m2.new(ffi.typeof [[
 		struct {
 			uint32_t bit;
-			uint32_t value;
+		uint32_t value;
 		}
 	]], "vstack")
 
@@ -135,32 +74,6 @@ test_binary_numbers_branching = with_env(function()
 		for i=0, 2^10-1 do
 			assert(seen[i])  -- did we see each 10 bit number?
 		end
-	end
-end)
-
-test_branch_continue_chain = with_env(function()
-	local seen = {}
-
-	local x
-	local function set(v)
-		return function() x = v end
-	end
-
-	local branch = m2.branch { set(1), set(2), set(3) }
-
-	m2.on("event", function()
-		return branch
-	end)
-
-	m2.on("event#1", function()
-		seen[x] = true
-	end)
-
-	local instr = m2.record()
-	instr.event()
-
-	return instr, function()
-		assert(seen[1] and seen[2] and seen[3])
 	end
 end)
 

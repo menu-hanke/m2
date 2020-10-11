@@ -1,7 +1,6 @@
 local misc = require "misc"
 local cli = require "cli"
 local sim_env = require "sim_env"
-local control = require "control"
 local log = require("log").logger
 
 local function main(args)
@@ -9,24 +8,23 @@ local function main(args)
 	env:require_all(args.scripts or {})
 	env:prepare()
 
-	local sim = env.sim
-
 	if args.instr then
-		local instr = env:load_insn(args.instr)
+		local insn = env:load_insn(args.instr)
 
 		if args.input then
+			local sim = env.sim
 			local data = misc.readjson(args.input)
 			sim:savepoint()
+			local fp = sim:fp()
 			for i,v in ipairs(data) do
 				log:verbose("[%s] %d/%d", args.input, i, #data)
 				sim:enter()
 				env:event("sim:setup", v)
-				control.exec(instr)
-				sim:exit()
-				sim:restore()
+				insn()
+				sim:load(fp)
 			end
 		else
-			control.exec(instr)
+			insn()
 		end
 	else
 		-- this is only for debugging
