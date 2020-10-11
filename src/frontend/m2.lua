@@ -26,6 +26,9 @@ local function bootstrap(path)
 	require("sim_env").init_sandbox(old_path, old_loaded)
 end
 
+local function help()
+end
+
 local function main(args)
 	local misc = require "misc"
 	local cli = require "cli"
@@ -44,19 +47,24 @@ local function main(args)
 	}
 
 	local cmd = args[2]
-	local sub = require(cmd).cli_main
-	local opt = cli.parse(append(flags, sub.flags or {}), args, 3)
+	local ok, sub = pcall(function() return require(cmd).cli_main end)
+	if not ok then
+		print("Usage: m2 <subcommand> [options]...")
+		print("Global options:")
+		print("  -v/-q   Verbose/quiet")
+		print("  -jcmd   Pass <cmd> to luajit")
 
-	if opt.help then
-		if cmd == args[2] then
-			print(string.format("Usage: m2 %s %s", cmd, sub.usage))
-		else
-			print("Usage: m2 <subcommand> [options]...")
-			print("Global options:")
-			print("  -v/-q   Verbose/quiet")
-			print("  -jcmd   Pass <cmd> to luajit")
+		if cmd then
+			print("\nIf you meant to run a subcommand, this is the load error:")
+			print(sub)
 		end
-		
+
+		return 1
+	end
+
+	local opt = cli.parse(append(flags, sub.flags or {}), args, 3)
+	if opt.help then
+		print(string.format("Usage: m2 %s %s", cmd, sub.usage))
 		return 1
 	end
 
