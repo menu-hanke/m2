@@ -1,6 +1,7 @@
 #include "grid.h"
 #include "sim.h"
 #include "def.h"
+#include "conf.h"
 
 #include <stdlib.h>
 #include <assert.h>
@@ -66,7 +67,7 @@ struct grid *simL_grid_create(sim *sim, size_t order, size_t size, int lifetime)
 }
 
 void *simL_grid_create_data(sim *sim, struct grid *g, int lifetime){
-	return sim_alloc(sim, grid_data_size(g->order, g->stride), M2_VECTOR_SIZE, lifetime);
+	return sim_alloc(sim, grid_data_size(g->order, g->stride), SIMD_ALIGN_HINT, lifetime);
 }
 
 static gridpos scatter(gridcoord x){

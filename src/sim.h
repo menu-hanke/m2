@@ -27,7 +27,7 @@ enum {
 	SIM_TAILCALL = 1
 };
 
-sim *sim_create();
+sim *sim_create(uint32_t nframe, uint32_t rsize);
 void sim_destroy(sim *sim);
 
 void *sim_alloc(sim *sim, size_t sz, size_t align, int lifetime);

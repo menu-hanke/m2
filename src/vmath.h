@@ -4,8 +4,6 @@
  * syntax: v<dtype><operation><mode>
  */
 
-#include "def.h"
-
 #include <stddef.h>
 #include <stdint.h>
 

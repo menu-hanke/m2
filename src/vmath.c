@@ -2,7 +2,6 @@
  * currently it just trusts GCC to auto-vectorize the loops */
 
 #include "vmath.h"
-#include "def.h"
 
 #include <stddef.h>
 #include <stdlib.h>

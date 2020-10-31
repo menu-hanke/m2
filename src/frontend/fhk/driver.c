@@ -19,8 +19,7 @@ enum {
 	VAR_REFX = 3
 };
 
-int fhkD_continue(fhk_solver *S, void *udata, arena *arena, union fhkD_status *stat){
-
+int fhkD_continue(fhk_solver *S, void *udata, arena *ar, union fhkD_status *stat){
 	for(;;){
 		fhk_status status = fhk_continue(S);
 
@@ -106,16 +105,15 @@ int fhkD_continue(fhk_solver *S, void *udata, arena *arena, union fhkD_status *s
 					uint64_t x = FHK_X(status);
 					struct fhks_cmodel *mcall = (struct fhks_cmodel *) FHK_ABC(status);
 					struct fhkD_cmodel *cm = UD_CPTR(x);
-					arena_ptr *p;
 
 					// need to convert?
 					if(UNLIKELY(cm->gsig)){
-						p = arena_save(arena);
+						arena ap = *ar;
 
 						for(size_t i=0;i<mcall->np;i++){
 							if(cm->gsig[i] != cm->msig[i]){
 								mcall_edge *e = mcall->edges+i;
-								void *mv = arena_alloc(arena,
+								void *mv = arena_alloc(&ap,
 										e->n * MT_SIZEOF(cm->msig[i]),
 										MT_SIZEOF(cm->msig[i])
 								);
@@ -136,7 +134,7 @@ int fhkD_continue(fhk_solver *S, void *udata, arena *arena, union fhkD_status *s
 							if(cm->gsig[i] != cm->msig[i]){
 								mcall_edge *e = mcall->edges+i;
 								// alloc extra space in the start to store the original pointer
-								void **buf = arena_alloc(arena,
+								void **buf = arena_alloc(&ap,
 										sizeof(void *) + e->n*MT_SIZEOF(cm->msig[i]),
 										alignof(void *)
 								);
@@ -168,8 +166,6 @@ int fhkD_continue(fhk_solver *S, void *udata, arena *arena, union fhkD_status *s
 								e->p = buf;
 							}
 						}
-
-						arena_restore(arena, p);
 					}
 
 					continue;

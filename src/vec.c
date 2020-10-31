@@ -1,7 +1,7 @@
 #include "vec.h"
 #include "sim.h"
-#include "mem.h"
 #include "def.h"
+#include "conf.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -76,7 +76,7 @@ void *simF_vec_create_band(sim *sim, struct vec *v, uint16_t band){
 }
 
 void *simF_vec_create_band_stride(sim *sim, struct vec *v, uint16_t stride){
-	return sim_alloc(sim, v->n_alloc * stride, VEC_ALIGN, SIM_FRAME);
+	return sim_alloc(sim, v->n_alloc * stride, SIMD_ALIGN_HINT, SIM_FRAME);
 }
 
 uint32_t simF_vec_alloc(sim *sim, struct vec *v, uint32_t n){
@@ -170,7 +170,7 @@ static void F_ensure_capacity(sim *sim, struct vec *v, uint32_t n){
 
 	dv("realloc vector %p grow %u -> %u\n", v, v->n_alloc, na);
 
-	assert(na == ALIGN(na, VEC_ALIGN));
+	assert(na == ALIGN(na, SIMD_ALIGN_HINT));
 	v->n_alloc = na;
 
 	// frame-alloc new bands, no need to free old ones since they were frame-alloced as well

@@ -5,8 +5,6 @@
 
 #include "sim.h"
 
-#define VEC_ALIGN M2_VECTOR_SIZE
-
 struct vec_info {
 	uint16_t n_bands;
 	uint16_t stride[];

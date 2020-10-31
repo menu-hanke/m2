@@ -57,8 +57,12 @@ ffi.metatype("sim", {
 	}
 })
 
-local function create()
-	local _sim = C.sim_create()
+local function create(opt)
+	opt = opt or {}
+	local _sim = C.sim_create(
+		opt.nframe or 16,
+		opt.rsize or 0x1000000
+	)
 
 	if _sim == ffi.NULL then
 		error("sim: failed to allocate virtual memory")

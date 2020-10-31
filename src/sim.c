@@ -1,31 +1,20 @@
 #include "def.h"
 #include "mem.h"
 #include "sim.h"
+#include "conf.h"
 
 #include <stddef.h>
 #include <stdlib.h>
 #include <stdalign.h>
-#include <stdbool.h>
 #include <stdint.h>
-#include <string.h>
 #include <assert.h>
-#include <sys/mman.h>
 
-// static, vstack and each frame = SIM_MAX_DEPTH + 2 regions
-// 1 extra region is allocated so the mapping can be aligned to SIM_REGION_SIZE.
-// this is not strictly necessary, but it makes debugging easier because the owning region
-// can be seen directly from the pointer
-#define SIM_MAP_SIZE ((SIM_MAX_DEPTH + 3) * SIM_REGION_SIZE)
-#define SIM_REGION_MEM(base, reg)\
-	((void *)(ALIGN((uintptr_t) (base), SIM_REGION_SIZE) + (reg) * SIM_REGION_SIZE))
+// reserve vstack+static+nframe frames + 1 extra for alignment
+#define MAPPING_SIZE(n,r) (((size_t)(r)) * ((size_t)(n) + 3))
 
-// from lowest to highest:
-// static frame0 ... frameN vstack
-// this makes the question "can I modify this memory?" a single pointer comparison:
-//     p >= frame->mem
-#define STATIC_REGION    0
-#define FRAME_REGION(fp) ((fp) + 1)
-#define VSTACK_REGION    (SIM_MAX_DEPTH-1)
+typedef struct {
+	char _[SIM_SAVEPOINT_BLOCKSIZE];
+} block __attribute__((aligned(SIM_SAVEPOINT_BLOCKSIZE)));
 
 struct frame {
 	unsigned has_savepoint    : 1;
@@ -43,34 +32,47 @@ struct sim {
 	region stat;
 	region vstack;
 	void *mapping;
+	uint32_t nframe;
+	uint32_t rsize;
 	uint32_t next_fid;
 	uint32_t fp;
-	struct frame fstack[SIM_MAX_DEPTH];
+	struct frame fstack[];
 };
 
 #define TOP(sim) (&((sim)->fstack[(sim)->fp]))
 static void f_enter(struct sim *sim, struct frame *f);
+static void blockcpy(void *restrict dst, void *restrict src, size_t size);
 
-struct sim *sim_create(){
-	void *mem = mmap_probe_region(SIM_MAP_SIZE);
+struct sim *sim_create(uint32_t nframe, uint32_t rsize){
+	// rsize must be a power of 2
+	if(rsize & (rsize-1))
+		return NULL;
+
+	size_t mapsz = MAPPING_SIZE(nframe, rsize);
+	void *mem = vm_map_probe(mapsz);
 	if(!mem)
 		return NULL;
 
-	dv("sim memory at: %p (%d frames, %lluM regions -> %lluM mapping)\n",
-			mem, SIM_MAX_DEPTH, SIM_REGION_SIZE/(1024*1024), SIM_MAP_SIZE/(1024*1024));
+	void *mem_align = ALIGN(mem, rsize);
+	dv("sim memory at: %p (map: %p) -- %d frames, %uM regions -> %zuM mapping\n",
+			mem_align, mem, nframe, rsize/(1024*1024), mapsz/(1024*1024));
 
-	// "allocate" sim's static region on itself
-	// Note: there's no alignment problems here, sim is aligned at least on a page boundary
-	struct sim *sim = SIM_REGION_MEM(mem, STATIC_REGION);
+	// allocate regions:
+	// 0           -> static
+	// [1, nframe] -> frame
+	// nframe+1    -> vstack
+	struct sim *sim = mem_align;
 	sim->mapping = mem;
-	REGION_INIT(&sim->stat, sim, SIM_REGION_SIZE);
-	region_alloc(&sim->stat, sizeof(*sim), alignof(*sim));
+	reg_init(&sim->stat, mem_align, rsize);
+	reg_alloc(&sim->stat, sizeof(*sim) + nframe*sizeof(*sim->fstack), alignof(*sim));
 
-	REGION_INIT(&sim->vstack, SIM_REGION_MEM(mem, VSTACK_REGION), SIM_REGION_SIZE);
+	reg_init(&sim->vstack, mem_align + (size_t)rsize*(nframe+1), rsize);
 
-	for(unsigned i=0;i<SIM_MAX_DEPTH;i++)
-		REGION_INIT(&sim->fstack[i].mem, SIM_REGION_MEM(mem, FRAME_REGION(i)), SIM_REGION_SIZE);
+	for(uint32_t i=0;i<nframe;i++)
+		reg_init(&sim->fstack[i].mem, mem_align + (size_t)rsize*(i+1), rsize);
 
+	sim->nframe = nframe;
+	sim->rsize = rsize;
 	sim->next_fid = 1;
 	sim->fp = 0;
 	f_enter(sim, TOP(sim));
@@ -79,7 +81,7 @@ struct sim *sim_create(){
 }
 
 void sim_destroy(struct sim *sim){
-	munmap(sim->mapping, SIM_MAP_SIZE);
+	vm_unmap(sim->mapping, MAPPING_SIZE(sim->nframe, sim->rsize));
 }
 
 void *sim_alloc(struct sim *sim, size_t sz, size_t align, int lifetime){
@@ -93,7 +95,7 @@ void *sim_alloc(struct sim *sim, size_t sz, size_t align, int lifetime){
 		default: return NULL;
 	}
 
-	void *p = region_alloc(mem, sz, align);
+	void *p = reg_alloc(mem, sz, align);
 
 #ifdef DEBUG
 	// Fill it with garbage (NaNs) to help the user detect if they are doing something stupid.
@@ -120,39 +122,40 @@ uint32_t sim_frame_id(struct sim *sim){
 
 int sim_savepoint(struct sim *sim){
 	struct frame *f = TOP(sim);
-	size_t size = REGION_USED(&sim->vstack);
+	size_t size = sim->vstack.ptr - sim->vstack.mem;
 
 	// have a reusable savepoint?
 	if(UNLIKELY(f->has_savepoint)){
 		// old alloc fits?
 		// note: sim->vstack.ptr >= f->vstack_ptr
-		if(sim->vstack.ptr == f->vstack_ptr)
+		if(sim->vstack.ptr == (uintptr_t)f->vstack_ptr)
 			goto copy;
 
 		// can extend old alloc?
-		if(f->mem.ptr == f->vstack_copy + (f->vstack_ptr - sim->vstack.mem)){
-			f->mem.ptr = f->vstack_copy + size;
-			f->vstack_ptr = sim->vstack.ptr;
+		if(f->mem.ptr == (uintptr_t)f->vstack_copy + ((uintptr_t)f->vstack_ptr - sim->vstack.mem)){
+			f->mem.ptr = (uintptr_t) f->vstack_copy + size;
+			f->vstack_ptr = (void *) sim->vstack.ptr;
 			goto copy;
 		}
 
 		dv("[%u] @ %u LEAK %p -- vstack grew %zu -> %zu bytes (savepoint not extendable)\n",
 				sim->fp, f->fid, f->vstack_copy,
-				f->vstack_ptr - sim->vstack.mem, size);
+				(uintptr_t)f->vstack_ptr - sim->vstack.mem, size);
 	}
 
-	f->vstack_ptr = sim->vstack.ptr;
-	f->vstack_copy = region_alloc(&f->mem, size, M2_SIMD_ALIGN);
-
+	// both the allocation and region end are aligned at least blocksize, so if the allocation
+	// succeeds the remainder of the last block can be copied over without overruning the region
+	f->vstack_ptr = (void*)sim->vstack.ptr;
+	f->vstack_copy = reg_alloc(&f->mem, size, SIM_SAVEPOINT_BLOCKSIZE);
 	if(UNLIKELY(!f->vstack_copy))
 		return SIM_EALLOC;
 
 	f->has_savepoint = 1;
 
 copy:
-	memcpy(f->vstack_copy, sim->vstack.mem, size);
+	blockcpy(f->vstack_copy, (void*)sim->vstack.mem, size);
 
-	dv("[%u] @ %u -- savepoint %p -> %p (%zu bytes)\n", sim->fp, f->fid, sim->vstack.mem,
+	dv("[%u] @ %u -- savepoint %p -> %p (%zu bytes)\n", sim->fp, f->fid, (void*)sim->vstack.mem,
 			f->vstack_copy, size);
 
 	return SIM_OK;
@@ -165,8 +168,8 @@ int sim_up(struct sim *sim, uint32_t fp){
 	}
 
 #ifdef DEBUG
-	for(uint32_t i=fp; i<sim->fp; i++)
-		region_ro(&sim->fstack[i].mem);
+	for(uint32_t i=fp+1; i<=sim->fp; i++)
+		reg_ro(&sim->fstack[i].mem);
 #endif
 
 	dv("[%u->%u] @ %u->%u -- frame jump\n", sim->fp, fp, TOP(sim)->fid, sim->fstack[fp].fid);
@@ -184,12 +187,12 @@ int sim_reload(struct sim *sim){
 		return SIM_ESAVE;
 	}
 
-	sim->vstack.ptr = f->vstack_ptr;
-	size_t size = REGION_USED(&sim->vstack);
-	memcpy(sim->vstack.mem, f->vstack_copy, size);
+	sim->vstack.ptr = (uintptr_t)f->vstack_ptr;
+	size_t size = sim->vstack.ptr - sim->vstack.mem;
+	blockcpy((void*)sim->vstack.mem, f->vstack_copy, size);
 
 	dv("[%u] @ %u -- restore %p -> %p (%zu bytes)\n", sim->fp, f->fid, f->vstack_copy,
-			sim->vstack.mem, size);
+			(void*)sim->vstack.mem, size);
 
 	return SIM_OK;
 }
@@ -206,7 +209,7 @@ int sim_enter(struct sim *sim){
 	// XXX any reason to call this without a savepoint?
 	// if not, add an assertion.
 
-	if(UNLIKELY(sim->fp+1 >= SIM_MAX_DEPTH)){
+	if(UNLIKELY(sim->fp+1 >= sim->nframe)){
 		dv("[%u] @ %u ERR -- stack overflow\n", sim->fp, TOP(sim)->fid);
 		return SIM_EFRAME;
 	}
@@ -214,7 +217,7 @@ int sim_enter(struct sim *sim){
 	sim->fp++;
 
 #ifdef DEBUG
-	region_rw(&TOP(sim)->mem);
+	reg_rw(&TOP(sim)->mem);
 #endif
 
 	f_enter(sim, TOP(sim));
@@ -269,7 +272,15 @@ static void f_enter(struct sim *sim, struct frame *f){
 	f->fid = sim->next_fid++;
 	f->has_savepoint = 0;
 	f->has_branchpoint = 0;
-	REGION_RESET(&f->mem);
+	REG_RESET(&f->mem);
 
 	dv("[%u] @ %u -- enter\n", sim->fp, f->fid);
+}
+
+static void blockcpy(void *restrict dst, void *restrict src, size_t size){
+	block *a = dst;
+	block *b = src;
+
+	for(size_t i=0;i<size;i+=SIM_SAVEPOINT_BLOCKSIZE)
+		*a++ = *b++;
 }

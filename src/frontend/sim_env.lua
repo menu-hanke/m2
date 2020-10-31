@@ -180,8 +180,8 @@ local function conf_env(conf)
 	return cenv
 end
 
-local function from_conf(conf)
-	local sim = require("sim").create()
+local function from_conf(conf, opt)
+	local sim = require("sim").create(opt)
 	local env = create(sim)
 
 	env:inject_env()

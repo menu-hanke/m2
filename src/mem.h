@@ -1,33 +1,38 @@
 #pragma once
 
-#include <stdint.h>
+#include "def.h"
+
 #include <stddef.h>
+#include <stdint.h>
 
 typedef struct region {
-	void *mem;
-	void *ptr;
+	uintptr_t ptr;
 	uintptr_t end;
+	uintptr_t mem;
 } region;
 
-typedef struct arena arena;
-typedef struct arena_ptr arena_ptr;
+typedef struct chunk {
+	struct chunk *prev, *next;
+	uintptr_t end;
+	char mem[];
+} chunk;
 
-#define REGION_RESET(r)    (r)->ptr = (r)->mem
-#define REGION_INIT(r,m,s)\
-	do { (r)->ptr = (r)->mem = (m); (r)->end = ((uintptr_t)(r)->mem) + (s); } while(0)
-#define REGION_SIZE(r)     ((r)->end - ((uintptr_t)(r)->mem))
-#define REGION_USED(r)     (((uintptr_t)(r)->ptr) - ((uintptr_t)(r)->mem))
+typedef struct arena {
+	struct chunk *chunk;
+	uintptr_t mem, end;
+} arena;
 
-void *mmap_probe_region(size_t size);
+void *vm_map_probe(size_t size);
+void vm_unmap(void *p, size_t size);
 
-void *region_alloc(struct region *region, size_t sz, size_t align) __attribute__((malloc));
-int region_rw(struct region *region);
-int region_ro(struct region *region);
+#define REG_RESET(r) do { (r)->ptr = (r)->mem; } while(0)
+void reg_init(region *r, void *mem, size_t size);
+void *reg_alloc(region *r, size_t sz, size_t align) __attribute__((malloc));
+void reg_ro(region *r);
+void reg_rw(region *r);
 
 arena *arena_create(size_t size);
 void arena_destroy(arena *arena);
-void *arena_alloc(arena *arena, size_t size, size_t align);
-void *arena_malloc(arena *arena, size_t size);
+void *arena_alloc(arena *arena, size_t size, size_t align) __attribute__((malloc));
+void *arena_malloc(arena *arena, size_t size) __attribute__((malloc));
 void arena_reset(arena *arena);
-arena_ptr *arena_save(arena *arena);
-void arena_restore(arena *arena, arena_ptr *to);

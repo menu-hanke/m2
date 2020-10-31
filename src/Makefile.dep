@@ -1,40 +1,43 @@
-grid.o: grid.c grid.h sim.h def.h
-mem.o: mem.c mem.h def.h
-sim.o: sim.c def.h mem.h sim.h
-vec.o: vec.c vec.h sim.h mem.h def.h
+grid.o: grid.c grid.h sim.h def.h conf.h
+mem2.o: mem2.c mem.h def.h
+mem.o: mem.c mem.h def.h conf.h
+sim.o: sim.c def.h mem.h sim.h conf.h
+vec.o: vec.c vec.h sim.h def.h conf.h
 vgrid.o: vgrid.c vgrid.h vec.h sim.h grid.h def.h
-vmath.o: vmath.c vmath.h def.h
-fhk/build.o: fhk/build.c fhk/fhk.h fhk/../mem.h fhk/graph.h fhk/def.h \
- fhk/../def.h
-fhk/co_libco.o: fhk/co_libco.c fhk/fhk.h fhk/../mem.h fhk/def.h \
+vmath.o: vmath.c vmath.h
+fhk/build.o: fhk/build.c fhk/fhk.h fhk/../mem.h fhk/../def.h fhk/graph.h \
+ fhk/def.h
+fhk/co_libco.o: fhk/co_libco.c fhk/fhk.h fhk/../mem.h fhk/../def.h fhk/def.h \
  fhk/co_libco.h
-fhk/debug.o: fhk/debug.c fhk/fhk.h fhk/../mem.h fhk/graph.h fhk/def.h
-fhk/reduce.o: fhk/reduce.c fhk/fhk.h fhk/../mem.h fhk/graph.h fhk/def.h \
- fhk/../def.h
-fhk/solve.o: fhk/solve.c fhk/fhk.h fhk/../mem.h fhk/graph.h fhk/def.h \
- fhk/co.h fhk/../def.h
+fhk/debug.o: fhk/debug.c fhk/fhk.h fhk/../mem.h fhk/../def.h fhk/graph.h \
+ fhk/def.h
+fhk/reduce.o: fhk/reduce.c fhk/fhk.h fhk/../mem.h fhk/../def.h fhk/graph.h \
+ fhk/def.h
+fhk/solve.o: fhk/solve.c fhk/fhk.h fhk/../mem.h fhk/../def.h fhk/graph.h \
+ fhk/def.h fhk/co.h
 model/conv.o: model/conv.c model/../def.h model/../mem.h model/model.h \
  model/../fhk/fhk.h model/conv.h
-model/mlib.o: model/mlib.c model/model.h model/../mem.h model/../fhk/fhk.h
+model/mlib.o: model/mlib.c model/model.h model/../mem.h model/../def.h \
+ model/../fhk/fhk.h
 model/model_Const.o: model/model_Const.c model/model_Const.h model/model.h \
- model/../mem.h model/../fhk/fhk.h model/../def.h
+ model/../mem.h model/../def.h model/../fhk/fhk.h
 model/model_Lua.o: model/model_Lua.c model/model.h model/../mem.h \
- model/../fhk/fhk.h model/conv.h model/model_Lua.h model/../def.h \
+ model/../def.h model/../fhk/fhk.h model/conv.h model/model_Lua.h \
  model/loader.lua.in
 model/model_R.o: model/model_R.c model/model_R.h model/mlib.h model/../def.h
 model/model_SimoC.o: model/model_SimoC.c model/model_SimoC.h model/mlib.h \
  model/../def.h
 frontend/fhk/driver.o: frontend/fhk/driver.c frontend/fhk/../../fhk/fhk.h \
- frontend/fhk/../../fhk/../mem.h frontend/fhk/../../model/conv.h \
- frontend/fhk/../../model/model.h frontend/fhk/../../def.h \
+ frontend/fhk/../../fhk/../mem.h frontend/fhk/../../fhk/../def.h \
+ frontend/fhk/../../model/conv.h frontend/fhk/../../model/model.h \
  frontend/fhk/driver.h
 frontend/fhk/mapping.o: frontend/fhk/mapping.c frontend/fhk/mapping.h \
  frontend/fhk/driver.h frontend/fhk/../../fhk/fhk.h \
- frontend/fhk/../../fhk/../mem.h frontend/fhk/../../model/model.h \
- frontend/fhk/../../model/conv.h
+ frontend/fhk/../../fhk/../mem.h frontend/fhk/../../fhk/../def.h \
+ frontend/fhk/../../model/model.h frontend/fhk/../../model/conv.h
 frontend/m2_cdef.lua: frontend/m2_cdef.lua.h frontend/../sim.h \
  frontend/../vec.h frontend/../grid.h frontend/../vgrid.h \
- frontend/../mem.h frontend/../vmath.h frontend/../def.h \
+ frontend/../mem.h frontend/../def.h frontend/../vmath.h \
  frontend/../model/all.h frontend/../model/model.h \
  frontend/../model/../fhk/fhk.h frontend/../model/conv.h \
  frontend/../model/model_Const.h frontend/../model/model_Lua.h \

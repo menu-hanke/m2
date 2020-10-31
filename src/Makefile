@@ -52,6 +52,7 @@ M2_C = $(M2_O:.o=.c)
 
 ifneq (,$(findstring Windows,$(OS)))
 	TARGET_ABI ?= Windows
+	CCDEF += -DM2_WINDOWS
 else
 	TARGET_ABI ?= sysv
 	TARGET_ARCH ?= $(shell uname -m)
@@ -130,7 +131,7 @@ frontend/m2_cdef.lua: frontend/m2_cdef.lua.h
 	echo ",0x00" >> $@
 
 clean:
-	$(RM) $(M2_EXECUTABLE) frontend/m2_cdef.lua model/*.in *.o */**.o
+	bash -O globstar -c 'rm -f $(M2_EXECUTABLE) frontend/m2_cdef.lua model/*.in *.o **/*.o'
 
 .PHONY: default valgrind debug ubsan dep clean
 
