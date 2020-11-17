@@ -1,17 +1,71 @@
-require "fhk" -- for metatypes
+local fhk = require "fhk" -- for metatypes
 local alloc = require "alloc" -- for malloc/free
 local misc = require "misc"
 local ffi = require "ffi"
 local C = ffi.C
 
--- TODO: non-double vars
+local def_mt = { __index={} }
 
-local __kind__ = {}
+local function def(g)
+	local d = setmetatable({
+		models = {}, -- [name] -> model
+		groups = {}, -- {group}
+		maps   = {}  -- [name] -> map
+	}, def_mt)
 
-local m_mt = { __index={[__kind__] = "model"} }
-local g_mt = { __index={[__kind__] = "group"} }
-local s_mt = { __index={[__kind__] = "map"} }
-local NA = {}
+	if g then
+		for _,a in ipairs(g) do
+			a(d)
+		end
+	end
+
+	return d
+end
+
+-- [name] -> {idx,size}
+function def_mt.__index:assign_groups()
+	local defgroup = {idx=#self.groups, size=1}
+	local groups = setmetatable({}, { __index = function(self, name)
+		self[name] = defgroup
+		return defgroup
+	end})
+
+	for i,g in ipairs(self.groups) do
+		local group = {idx=i-1, size=g.size or error("size missing from group definition")}
+		for _,name in ipairs(g) do
+			if rawget(groups, name) then
+				error(string.format("Name '%s' belongs to multiple groups", name))
+			end
+			groups[name] = group
+		end
+	end
+
+	return groups
+end
+
+---- models ----------------------------------------
+
+local m_mt = { __index={k=1, c=2} }
+
+---> nil    : default
+---> number : builtin
+---> string : usermap
+local function parsemap(p)
+	if p == "" then return end
+	if p == "@ident" then return C.FHKM_IDENT end
+	if p == "@space" then return C.FHKM_SPACE end
+	if type(p) == "string" then return p end
+	error(string.format("not a mapdef: %s", p))
+end
+
+-- edge  :: var[:subset]
+local function splitedges(s)
+	local r = {}
+	for name,p in s:gmatch("([^,:]+):?([^,]*)") do
+		table.insert(r, {name=name, map=parsemap(p)})
+	end
+	return r
+end
 
 local function tofunc(f)
 	if type(f) == "table" and #f > 0 then return function() return unpack(f) end end
@@ -19,18 +73,8 @@ local function tofunc(f)
 	return f -- hope it's something callable
 end
 
--- edge  :: var[:subset]
-local function splitedges(s)
-	local r = {}
-	for name, map in s:gmatch("([^,:]+):?([^,]*)") do
-		table.insert(r, {name=name, map=map})
-	end
-	return r
-end
-
--- model :: ep1,ep2,...epN->er1,er2,...,erN [@ name]
-local function m(conf)
-	local def = conf.def or conf[1]
+local function m(opt)
+	local def = opt.def or opt[1]
 	local p, r, name = def:gsub("%s", ""):match("^(.-)%->([^#]*)#?(.-)$")
 
 	if not p then
@@ -41,23 +85,11 @@ local function m(conf)
 		params  = splitedges(p),
 		returns = splitedges(r),
 		name    = (name ~= "") and name or def,
-		k       = conf.k or 1,
-		c       = conf.c or 2,
+		k       = opt.k,
+		c       = opt.c,
 		checks  = {},
-		f       = tofunc(conf.f or conf[2])
+		f       = tofunc(opt.f or opt[2])
 	}, m_mt)
-end
-
-local function g(def)
-	return setmetatable(def, g_mt)
-end
-
-local function s(def)
-	return setmetatable({
-		name = def[1],
-		map  = def[2],
-		inverse = def[3]
-	}, s_mt)
 end
 
 -- cmp :: edge[><]=num+penalty
@@ -68,80 +100,57 @@ function m_mt.__index:check(def)
 	if name then
 		table.insert(self.checks, {
 			name    = name,
-			map     = map,
-			op      = cmp == ">" and C.FHKC_GEF64 or C.FHKC_LEF64,
-			arg     = ffi.new("fhk_arg", {f64=tonumber(arg)}),
-			penalty = tonumber(penalty)
+			map     = parsemap(map),
+			cst     = ffi.new("fhk_cst", {
+				op = cmp == ">" and C.FHKC_GEF64 or C.FHKC_LEF64,
+				arg = { f64 = tonumber(arg) },
+				penalty = tonumber(penalty)
+			})
 		})
 
 		return self
 	end
 
-	-- this doesn't currently make sense because the test driver uses only doubles.
-	-- commented because i didn't commit it yet and i don't want to rewrite the pattern...
-	-- uncomment when test driver has proper type support.
-	--[[
-	local name, map, set, penalty = ds:match("([^:]+):?([^{]-){([%d%.,]+)}%+([einf%d%.]+)")
-	if name then
-		local mask = 0ULL
-		for x in set:gmatch("[%d%.]+") do
-			mask = bit.bor(mask, bit.lshift(1, tonumber(x)))
-		end
-
-		table.insert(self.checks, {
-			name    = name,
-			map     = map,
-			op      = C.FHKC_U8_MASK64,
-			arg     = ffi.new("fhk_arg", {u64=mask}),
-			penalty = penalty
-		})
-
-		return self
-	end
-	]]
+	-- TODO: non-double checks
 
 	error(string.format("syntax error (constraint): %s", def))
 end
 
---------------------------------------------------------------------------------
+function m_mt:__call(def)
+	if def.models[self.name] then
+		error(string.format("Duplicate model: %s", self.name))
+	end
+
+	def.models[self.name] = self
+end
+
+---- groups ----------------------------------------
+
+local function g(opt)
+	return function(def)
+		table.insert(def.groups, opt)
+	end
+end
+
+---- maps ----------------------------------------
+
+local function p(opt)
+	local name, map, inverse = unpack(opt)
+	return function(def)
+		def.maps[name] = {map, inverse}
+	end
+end
+
+---- testgraph ----------------------------------------
 
 local testgraph_mt = { __index={} }
 
-local function edgemap(m, edge, groups)
-	if edge.map == "" then
-		if groups[m.name] ~= groups[edge.name] then
-			error(string.format("can't have ident %s(#%d) -> %s(#%d)",
-				m.name, groups[m.name].idx, edge.name, groups[edge.name].idx))
-		end
-
-		return C.FHK_MAP_IDENT, ffi.new("fhk_arg", {u64=0})
-	end
-
-	if edge.map == "@space" then
-		return C.FHK_MAP_SPACE, ffi.new("fhk_arg", {u64=0})
-	end
-
-	return C.FHK_MAP_USER, ffi.new("fhk_arg", {p=ffi.cast("char *", edge.map)})
-end
-
-
-local function pass(g, fs)
-	for _,x in ipairs(g) do
-		local f = fs[x[__kind__]]
-		if f then f(x) end
-	end
-end
-
-local function wrapmodel(m)
-	local np = #m.params
-	local nr = #m.returns
-	local f  = m.f
-
+local function wrapmodf(f)
 	return function(cm)
 		local p = {}
 		local e = cm.edges+0
 
-		for i=1, np do
+		for i=1, cm.np do
 			local ptr = ffi.cast("double *", e.p)
 			p[i] = {}
 			for j=1, tonumber(e.n) do
@@ -152,6 +161,10 @@ local function wrapmodel(m)
 		end
 
 		local r = {f(unpack(p))}
+
+		if #r ~= cm.nr then
+			error(string.format("Expected %d return values, got %d", cm.nr, #r))
+		end
 
 		for i, ri in ipairs(r) do
 			local rp = ffi.cast("double *", e.p)
@@ -164,216 +177,176 @@ local function wrapmodel(m)
 	end
 end
 
-local function runsolver(solver, driver)
+local function shape_table(groups)
+	-- calculated back from the actual seen groups because of default groups etc.
+	local seen = {}
+	for _,g in pairs(groups) do
+		if not seen[g] then
+			seen[g] = true
+			table.insert(seen, g)
+		end
+	end
+
+	local stab = ffi.new("fhk_idx[?]", #seen)
+	for _,g in ipairs(seen) do
+		stab[g.idx] = g.size
+	end
+
+	return stab
+end
+
+local function testgraph(def)
+	local groups = def:assign_groups()
+	local D = ffi.gc(C.fhk_create_def(), C.fhk_destroy_def)
+	local sym_var, sym_mod = {}, {}
+
+	-- [name] -> idx
+	local vars = setmetatable({}, {
+		__index = function(self, name)
+			-- TODO: non-double
+			self[name] = D:add_var(groups[name].idx, ffi.sizeof("double"))
+			sym_var[self[name]] = name
+			return self[name]
+		end
+	})
+
+	-- [name|idx] -> map
+	local nmaps = 0
+	local maps = setmetatable({}, {
+		__index = function(self, name)
+			local map = {idx=nmaps, maps=def.maps[name]}
+			self[nmaps] = map
+			self[name] = map
+			nmaps = nmaps + 1
+			return map
+		end
+	})
+
+	local function map(p, from, to)
+		if not p then
+			if groups[from] ~= groups[to] then
+				error(string.format("Default map between groups (%s->%s), use an explicit @ident",
+					from, to))
+			end
+
+			return C.FHKM_IDENT
+		end
+		if type(p) == "string" then
+			return C.FHKM_USER + maps[p].idx
+		end
+		return p
+	end
+
+	-- [name|idx] -> {f,idx}
+	local models = {}
+
+	for name,mod in pairs(def.models) do
+		local idx = D:add_model(groups[name].idx, mod.k, mod.c)
+
+		for _,e in ipairs(mod.params) do
+			D:add_param(idx, vars[e.name], map(e.map, name, e.name))
+		end
+
+		for _,e in ipairs(mod.returns) do
+			D:add_return(idx, vars[e.name], map(e.map, name, e.name))
+		end
+
+		for _,e in ipairs(mod.checks) do
+			D:add_check(idx, vars[e.name], map(e.map, name, e.name), e.cst)
+		end
+
+		sym_mod[idx] = name
+		models[idx] = {f=wrapmodf(mod.f), idx=idx}
+		models[name] = models[idx]
+	end
+
+	local G = ffi.gc(D:build(), C.free)
+	-- +1 because the tables are 0-indexed
+	local dsym_var = ffi.new("const char *[?]", #sym_var+1, sym_var)
+	local dsym_mod = ffi.new("const char *[?]", #sym_mod+1, sym_mod)
+	G:set_dsym(dsym_var, dsym_mod)
+
+	return setmetatable({
+		G = G,
+		shape_table = shape_table(groups),
+		models = models,
+		vars = setmetatable(vars, nil),
+		maps = setmetatable(maps, nil),
+		syms = {
+			vars = sym_var,
+			models = sym_mod,
+			-- anchor these to prevent gc
+			dsym_var, dsym_mod
+		}
+	}, testgraph_mt)
+end
+
+function testgraph_mt.__index:driver_loop(S)
 	while true do
-		local status = C.fhk_continue(solver)
-		local code = status:code()
+		local status = S:continue()
+		local code, arg = fhk.status(status)
 
 		if code == C.FHK_OK then
 			return
 		end
 
 		if code == C.FHK_ERROR then
-			return status:A()
+			return fhk.fmt_error(arg.s_ei, self.syms)
 		end
 
 		if code == C.FHKS_SHAPE then
-			driver.shape(tonumber(status:X()))
-		elseif code == C.FHKS_MAPPING then
-			driver.map(ffi.string(status:Xudata().p), ffi.cast("struct fhks_mapping *", status:ABC()))
-		elseif code == C.FHKS_MAPPING_INVERSE then
-			driver.inverse(ffi.string(status:Xudata().p), ffi.cast("struct fhks_mapping *", status:ABC()))
-		elseif code == C.FHKS_COMPUTE_GIVEN then
-			driver.given(ffi.string(status:Xudata().p), tonumber(status:A()), tonumber(status:B()))
-		elseif code == C.FHKS_COMPUTE_MODEL then
-			driver.model(ffi.string(status:Xudata().p), ffi.cast("struct fhks_cmodel *", status:ABC()))
-		else
-			error(string.format("unhandled status: %d", code))
-		end
-	end
-end
-
-local function driver(models, maps)
-	return {
-		model = function(name, cmarg)
-			models[name](cmarg)
-		end,
-
-		map = function(name, mparg)
-			mparg.ss[0] = maps[name].map(tonumber(mparg.instance))
-		end,
-
-		inverse = function(name, mparg)
-			mparg.ss[0] = maps[name].inverse(tonumber(mparg.instance))
-		end
-	}
-end
-
-local function shapetable(groups)
-	local st = ffi.new("int16_t[?]", #groups)
-	for i,g in ipairs(groups) do
-		st[i-1] = g.size
-	end
-	return st
-end
-
-local testgraph_mt = { __index={} }
-
-local function testgraph(g)
-	-- [name vm] -> group
-	-- [index g] -> group
-	local gdefault
-	local groups = setmetatable({}, {
-		__index = function(self, name)
-			if type(name) ~= "string" then
-				return
-			end
-
-			-- everything that was not explicitly marked goes to a default group (of size 1)
-			if not gdefault then
-				gdefault = {idx = #self, size = 1}
-				table.insert(self, gdefault)
-			end
-
-			self[name] = gdefault
-			return self[name]
-		end
-	})
-
-	local maps = {}
-
-	pass(g, {
-		group = function(group)
-			local g = {
-				idx = #groups,
-				size = group.size or 1
-			}
-
-			table.insert(groups, g)
-
-			for _,name in ipairs(group) do
-				groups[name] = g
-			end
-		end,
-
-		map = function(map)
-			maps[map.name] = map
-		end
-	})
-
-	local def = C.fhk_create_def()
-	local dsym = { v = {}, m = {} }
-
-	local vars = setmetatable({}, {
-		__index = function(self, name)
-			self[name] = C.fhk_def_add_var(def, groups[name].idx, 8,
-				ffi.new("fhk_arg", {p=ffi.cast("char *", name)}))
-			dsym.v[self[name]] = name
-			return self[name]
-		end
-	})
-
-	local models = {}
-	local midx = {}
-
-	pass(g, {
-		model = function(m)
-			local M = C.fhk_def_add_model(def, groups[m.name].idx, m.k, m.c,
-				ffi.new("fhk_arg", {p=ffi.cast("char *", m.name)}))
-
-			midx[m.name] = M
-			dsym.m[M] = m.name
-
-			for _,p in ipairs(m.params) do
-				C.fhk_def_add_param(def, M, vars[p.name], edgemap(m, p, groups))
-			end
-
-			for _,r in ipairs(m.returns) do
-				C.fhk_def_add_return(def, M, vars[r.name], edgemap(m, r, groups))
-			end
-
-			for _,c in ipairs(m.checks) do
-				local map, arg = edgemap(m, c, groups)
-				C.fhk_def_add_check(def, M, vars[c.name], map, arg, c.op, c.arg, c.penalty)
-			end
-
-			models[m.name] = wrapmodel(m)
-		end
-	})
-
-	dsym.v = ffi.new("const char *[?]", #dsym.v+1, dsym.v)
-	dsym.m = ffi.new("const char *[?]", #dsym.m+1, dsym.m)
-	local G = ffi.gc(C.fhk_build_graph(def, nil), function()
-		C.free(G)
-		dsym = nil
-	end)
-	C.fhk_set_dsym(G, dsym.v, dsym.m)
-
-	C.fhk_destroy_def(def)
-
-	return setmetatable({
-		G       = G,
-		st      = shapetable(groups),
-		vidx    = setmetatable(vars, nil),
-		midx    = midx,
-		driver  = driver(models, maps)
-	}, testgraph_mt)
-end
-
-function testgraph_mt.__index:collectreq(req)
-	local creq = ffi.new("struct fhk_req[?]", #req)
-
-	for i,r in ipairs(req) do
-		creq[i-1].idx = self.vidx[r.name]
-		creq[i-1].ss = r.ss
-		creq[i-1].buf = nil
-	end
-
-	return creq
-end
-
-function testgraph_mt.__index:setshape(solver)
-	local status = C.fhkS_shape_table(solver, self.st)
-	assert(status:code() == C.FHK_OK)
-end
-
-function testgraph_mt.__index:setgiven(solver)
-	if self.given_values then
-		for name,vals in pairs(self.given_values) do
-			local status = C.fhkS_give_all(solver, self.vidx[name], vals)
-			assert(status:code() == C.FHK_OK)
+			assert(false) -- shape table should be pregiven
+		elseif code == C.FHKS_MAPCALL or code == C.FHKS_MAPCALLI then
+			local idx = code - C.FHKS_MAPCALL + 1 -- mapcall->1, mapcalli->2
+			local mp = arg.s_mapcall
+			mp.ss[0] = self.maps[mp.idx].maps[idx](mp.instance)
+		elseif code == C.FHKS_GVAL then
+			assert(false) -- should be pregiven
+		elseif code == C.FHKS_MODCALL then
+			local mc = arg.s_modcall
+			self.models[mc.idx].f(mc)
 		end
 	end
 end
 
 function testgraph_mt.__index:solve(num, req)
-	self.arena = C.arena_create(32000)
+	self.arena = C.arena_create(2^20)
 	local solver = C.fhk_create_solver(self.G, self.arena, num, req)
-	self:setshape(solver)
-	self:setgiven(solver)
-	local err = runsolver(solver, self.driver)
-	return solver, err
+	solver:shape_table(self.shape_table)
+
+	if self.given_values then
+		for name,vals in pairs(self.given_values) do
+			solver:give_all(self.vars[name], vals)
+		end
+	end
+
+	local err = self:driver_loop(solver)
+	if err then error(err) end
 end
 
 function testgraph_mt.__index:reduce()
-	self.arena = C.arena_create(32000)
+	self.arena = C.arena_create(2^20)
 	local flags = self.arena:new("uint8_t", self.G.nv)
 	ffi.fill(flags, self.G.nv)
 
 	if self.given_names then
 		for _, name in ipairs(self.given_names) do
-			flags[self.vidx[name]] = C.FHK_GIVEN
+			flags[self.vars[name]] = C.FHKR_GIVEN
 		end
 	end
 
 	for _, name in ipairs(self.roots) do
-		flags[self.vidx[name]] = bit.bor(flags[self.vidx[name]], C.FHK_ROOT)
+		flags[self.vars[name]] = bit.bor(flags[self.vars[name]], C.FHKR_ROOT)
 	end
 
-	return C.fhk_reduce(self.G, self.arena, flags, nil)
+	return self.G:reduce(self.arena, flags)
 end
 
--- user callbacks
+---- test callbacks ----------------------------------------
+
+function testgraph_mt.__index:root(vs)
+	self.roots = vs
+end
 
 function testgraph_mt.__index:given(vs)
 	if #vs > 0 then
@@ -397,27 +370,6 @@ function testgraph_mt.__index:given(vs)
 	end
 end
 
-function testgraph_mt.__index:root(vs)
-	self.roots = vs
-end
-
-local function ss(arena, ...)
-	local ranges = {...}
-	if #ranges == 0 then return 0 end
-
-	if #ranges == 1 then
-		local from, to = ranges[1][1], ranges[1][2]
-		return bit.lshift(1ULL, 48) + bit.lshift(to, 16) + from
-	end
-
-	local rp = ffi.cast("uint32_t *", C.arena_malloc(arena, 4*#ranges))
-	for i,r in ipairs(ranges) do
-		rp[i-1] = bit.lshift(r[2], 16) + r[1]
-	end
-
-	return bit.lshift(ffi.new("uint64_t", #ranges), 48) + ffi.cast("uintptr_t", rp)
-end
-
 function testgraph_mt.__index:solution(s)
 	local ns = 0
 	for _,_ in pairs(s) do ns = ns+1 end
@@ -426,8 +378,8 @@ function testgraph_mt.__index:solution(s)
 	local buf = {}
 	local i = 0
 	for name,val in pairs(s) do
-		req[i].idx = self.vidx[name]
-		req[i].ss = ss(nil, {0, #val})
+		req[i].idx = self.vars[name]
+		req[i].ss = fhk.space(#val)
 		buf[name] = ffi.new("double[?]", #val)
 		req[i].buf = buf[name]
 		i = i+1
@@ -457,12 +409,12 @@ function testgraph_mt.__index:subgraph(names)
 
 	-- names <= sub ?
 	for _,name in ipairs(names) do
-		if self.vidx[name] then
-			if sub.r_vars[self.vidx[name]] == C.FHK_SKIP then
+		if self.vars[name] then
+			if sub.r_vars[self.vars[name]] == C.FHKR_SKIP then
 				error(string.format("Variable '%s' not in subgraph", name))
 			end
 		else
-			if sub.r_models[self.midx[name]] == C.FHK_SKIP then
+			if sub.r_models[self.models[name].idx] == C.FHKR_SKIP then
 				error(string.format("Model '%s' not in subgraph", name))
 			end
 		end
@@ -470,36 +422,39 @@ function testgraph_mt.__index:subgraph(names)
 
 	local iv, im = {}, {}
 	for _,name in ipairs(names) do
-		if self.vidx[name] then iv[self.vidx[name]] = true end
-		if self.midx[name] then im[self.midx[name]] = true end
+		if self.vars[name] then iv[self.vars[name]] = true
+		elseif self.models[name] then im[self.models[name].idx] = true
+		else assert(false) end
 	end
 
 	-- sub <= names?
 	for i=0, self.G.nv-1 do
-		if sub.r_vars[i] ~= C.FHK_SKIP and not iv[i] then
+		if sub.r_vars[i] ~= C.FHKR_SKIP and not iv[i] then
 			error(string.format("Extra variable '%s' in subgraph", ffi.string(self.G.vars[i].udata.p)))
 		end
 	end
 
 	for i=0, self.G.nm-1 do
-		if sub.r_models[i] ~= C.FHK_SKIP and not im[i] then
+		if sub.r_models[i] ~= C.FHKR_SKIP and not im[i] then
 			error(string.format("Extra model '%s' in subgraph", ffi.string(self.G.models[i].udata.p)))
 		end
 	end
 end
 
+--------------------------------------------------------------------------------
+
 local function inject(env)
 	env.m = m
 	env.g = g
-	env.s = s
+	env.p = p
 	env.NA = NA
 	env.graph = function(g)
-		local t = testgraph(g)
+		local t = testgraph(def(g))
 		env.given = misc.delegate(t, t.given)
 		env.root = misc.delegate(t, t.root)
 		env.solution = misc.delegate(t, t.solution)
 		env.subgraph = misc.delegate(t, t.subgraph)
-		env.ss = function(...) return ss(t.arena, ...) end
+		env.set = function(idx) return fhk.subset(idx, t.arena) end
 	end
 	return env
 end

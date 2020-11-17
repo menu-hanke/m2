@@ -65,9 +65,9 @@ end)
 test_san_complex_parameter = _(function()
 	graph {
 		m { "a:even -> x", dot },
-		s { "even",
-			function() return ss({0, 1}, {2, 3}) end,
-			function(inst) return (ss%2==0) and ss({0, 3}) or ss() end
+		p { "even",
+			function() return set{0, 2} end,
+			function(inst) return (inst%2==0) and set{0} or set() end
 		},
 		g { "a", size=4 }
 	}
@@ -223,13 +223,13 @@ test_acy_set_computed_param = _(function()
 		m { "a:second->x", id },
 		m { "->a:first", 123 },
 		m { "->a:second", 456 },
-		s { "first",
-			function() return ss{0, 1} end,
-			function(inst) return inst == 0 and ss{0, 1} or ss() end
+		p { "first",
+			function() return set{0} end,
+			function(inst) return inst == 0 and set{0} or set{} end
 		},
-		s { "second",
-			function() return ss{1, 2} end,
-			function(inst) return inst == 1 and ss{0, 1} or ss() end
+		p { "second",
+			function() return set{1} end,
+			function(inst) return inst == 1 and set{0} or set{} end
 		},
 		g { "a", size=2 }
 	}

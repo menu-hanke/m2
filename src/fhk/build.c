@@ -7,37 +7,34 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdalign.h>
+#include <stdbool.h>
 #include <string.h>
 #include <math.h>
 #include <assert.h>
 
-#define MAX_EDGE 0xff
+#define MAP_INVAL ((fhk_map)(~0))
 
 struct def_model {
 	uint8_t nc, nc_alloc;
 	uint8_t np, np_alloc;
 	uint8_t nr, nr_alloc;
-	uint16_t group;
+	fhk_grp group;
 	struct fhk_check *checks;
 	fhk_edge *params;
 	fhk_edge *returns;
 	float k, c;
-	fhk_arg udata;
 };
 
 struct def_var {
-	uint16_t group;
+	fhk_grp group;
 	uint16_t size;
-	fhk_arg udata;
 };
 
 struct fhk_def {
-	uint16_t nv, nv_alloc;
-	uint16_t nm, nm_alloc;
-	uint16_t nu, nu_alloc;
+	fhk_idx nv, nv_alloc;
+	fhk_idx nm, nm_alloc;
 	struct def_var *vars;
 	struct def_model *models;
-	struct fhk_umap *umaps;
 };
 
 #define LIST_ADD(n, na, p) ({                               \
@@ -56,14 +53,12 @@ struct fhk_def {
 		*(p) = calloc((init), sizeof(**(p)));          \
 	} while(0)
 
-static xmap d_map(struct fhk_def *D, xinst mi, xinst xi, int map, fhk_arg udata);
-static xmap d_inverse(struct fhk_def *D, xinst mi, xmap map);
-static uint16_t d_intern_umap(struct fhk_def *D, xgrp gm, xgrp gv, fhk_arg udata);
+static fhk_map d_map(struct fhk_def *D, fhk_idx mi, fhk_idx xi, fhk_map map);
+static fhk_map d_inverse(struct fhk_def *D, fhk_idx xi, fhk_idx mi, fhk_map map);
 static void d_copy_data(struct fhk_def *D, struct fhk_graph *G);
 static void d_copy_links(void **p, struct fhk_def *D, struct fhk_graph *G);
 
-static void s_count_nodes(struct fhk_graph *G, struct fhk_subgraph *S, size_t *nv, size_t *nm,
-		size_t *nu);
+static void s_count_nodes(struct fhk_graph *G, struct fhk_subgraph *S, size_t *nv, size_t *nm);
 static void s_count_links(struct fhk_graph *G, struct fhk_subgraph *S, size_t *ne, size_t *nc);
 static void s_copy_data(struct fhk_graph *G, struct fhk_subgraph *S, struct fhk_graph *H);
 static void s_copy_links(void **p, struct fhk_graph *G, struct fhk_subgraph *S, struct fhk_graph *H);
@@ -73,24 +68,24 @@ static void s_copy_links(void **p, struct fhk_graph *G, struct fhk_subgraph *S, 
 	(((G)->dsym.v_names || (G)->dsym.m_names) ? (ALIGN(p, sizeof(void *)) - p) : 0)
 #define DSYM_SIZE(G, nv, nm)\
 	((G->dsym.v_names ? (nv)*sizeof(void *) : 0) + (G->dsym.m_names ? (nm)*sizeof(void *) : 0))
-static void s_copy_ds(const char **dest, const char **src, uint16_t *rt, size_t n);
+static void s_copy_ds(const char **dest, const char **src, fhk_idx *rt, size_t n);
 static void s_copy_dsyms(void **p, struct fhk_graph *G, struct fhk_subgraph *S, struct fhk_graph *H);
 #else
 #define DSYM_ALIGN(...) 0
 #define DSYM_SIZE(...)  0
 #endif
 
-static size_t g_alloc_size(size_t nv, size_t nm, size_t ne, size_t nc, size_t nu);
-static struct fhk_graph *g_alloc_base(void **p, uint16_t nv, uint16_t nm, uint16_t nu);
+static size_t g_alloc_size(size_t nv, size_t nm, size_t ne, size_t nc);
+static struct fhk_graph *g_alloc_base(void **p, fhk_idx nv, fhk_idx nm);
 static void g_compute_flags(struct fhk_graph *G);
 static void g_reorder_edges(struct fhk_graph *G);
 static void g_compute_ng(struct fhk_graph *G);
+static void g_compute_nu(struct fhk_graph *G);
 
 struct fhk_def *fhk_create_def(){
 	struct fhk_def *D = malloc(sizeof(*D));
 	LIST_PREALLOC(&D->nv, &D->nv_alloc, &D->vars, 32);
 	LIST_PREALLOC(&D->nm, &D->nm_alloc, &D->models, 32);
-	LIST_PREALLOC(&D->nu, &D->nu_alloc, &D->umaps, 32);
 	return D;
 }
 
@@ -107,7 +102,6 @@ void fhk_destroy_def(struct fhk_def *D){
 
 	free(D->vars);
 	free(D->models);
-	free(D->umaps);
 
 	free(D);
 }
@@ -115,7 +109,6 @@ void fhk_destroy_def(struct fhk_def *D){
 void fhk_reset_def(struct fhk_def *D){
 	D->nv = 0;
 	D->nm = 0;
-	D->nu = 0;
 }
 
 size_t fhk_graph_size(struct fhk_def *D){
@@ -127,7 +120,7 @@ size_t fhk_graph_size(struct fhk_def *D){
 		nc += dm->nc;
 	}
 
-	return g_alloc_size(D->nv, D->nm, ne, nc, D->nu);
+	return g_alloc_size(D->nv, D->nm, ne, nc);
 }
 
 struct fhk_graph *fhk_build_graph(struct fhk_def *D, void *p){
@@ -138,7 +131,7 @@ struct fhk_graph *fhk_build_graph(struct fhk_def *D, void *p){
 	void *_mem = p;
 #endif
 
-	struct fhk_graph *G = g_alloc_base(&p, D->nv, D->nm, D->nu);
+	struct fhk_graph *G = g_alloc_base(&p, D->nv, D->nm);
 #ifdef FHK_DEBUG
 	memset(&G->dsym, 0, sizeof(G->dsym));
 #endif
@@ -148,6 +141,7 @@ struct fhk_graph *fhk_build_graph(struct fhk_def *D, void *p){
 	g_compute_flags(G);
 	g_reorder_edges(G);
 	g_compute_ng(G);
+	g_compute_nu(G);
 
 #ifdef FHK_DEBUG
 	assert(p == ALIGN(_mem, 8) + fhk_graph_size(D));
@@ -156,7 +150,12 @@ struct fhk_graph *fhk_build_graph(struct fhk_def *D, void *p){
 	return G;
 }
 
-uint16_t fhk_def_add_model(struct fhk_def *D, uint16_t group, float k, float c, fhk_arg udata){
+int fhk_def_add_model(struct fhk_def *D, fhk_idx *idx, fhk_grp group, float k, float c){
+	if(D->nm == G_MAXIDX)
+		return FHKDE_IDX;
+
+	*idx = D->nm;
+
 	struct def_model *dm = LIST_ADD(&D->nm, &D->nm_alloc, &D->models);
 
 	if(dm->np_alloc) dm->np = 0;
@@ -170,63 +169,113 @@ uint16_t fhk_def_add_model(struct fhk_def *D, uint16_t group, float k, float c, 
 	dm->group = group;
 	dm->k = k;
 	dm->c = c;
-	dm->udata = udata;
 
-	return D->nm-1;
+	return FHK_OK;
 }
 
-uint16_t fhk_def_add_var(struct fhk_def *D, uint16_t group, uint16_t size, fhk_arg udata){
+int fhk_def_add_var(struct fhk_def *D, fhk_idx *idx, fhk_grp group, uint16_t size){
+	if(D->nv == G_MAXIDX)
+		return FHKDE_IDX;
+
+	*idx = D->nv;
+
 	struct def_var *dv = LIST_ADD(&D->nv, &D->nv_alloc, &D->vars);
 	dv->group = group;
 	dv->size = size;
-	dv->udata = udata;
 
-	return D->nv-1;
+	return FHK_OK;
 }
 
-void fhk_def_add_param(struct fhk_def *D, uint16_t model, uint16_t var, int map, fhk_arg arg){
+int fhk_def_add_param(struct fhk_def *D, fhk_idx model, fhk_idx var, fhk_map map){
+	if(model >= D->nm || var >= D->nv)
+		return FHKDE_INVAL;
+
 	struct def_model *dm = &D->models[model];
-	fhk_edge *e = LIST_ADD(&dm->np, &dm->np_alloc, &dm->params);
-	e->idx = var;
-	e->map = d_map(D, model, var, map, arg);
-	e->edge_param = dm->np-1; // for param links this is the definition edge index
+	
+	if(dm->np == G_MAXEDGE)
+		return FHKDE_IDX;
+
+	map = d_map(D, model, var, map);
+	if(map == MAP_INVAL)
+		return FHKDE_INVAL;
+
+	*LIST_ADD(&dm->np, &dm->np_alloc, &dm->params) = (fhk_edge){
+		.idx = var,
+		.map = map,
+		.edge_param = dm->np-1 // for param links this is the definition edge index
+	};
+
+	return FHK_OK;
 }
 
-void fhk_def_add_return(struct fhk_def *D, uint16_t model, uint16_t var, int map, fhk_arg arg){
+int fhk_def_add_return(struct fhk_def *D, fhk_idx model, fhk_idx var, fhk_map map){
+	if(model >= D->nm || var >= D->nv)
+		return FHKDE_INVAL;
+
 	struct def_model *dm = &D->models[model];
-	fhk_edge *e = LIST_ADD(&dm->nr, &dm->nr_alloc, &dm->returns);
-	e->idx = var;
-	e->map = d_map(D, model, var, map, arg);
+
+	if(dm->nr == G_MAXEDGE)
+		return FHKDE_IDX;
+
+	map = d_map(D, model, var, map);
+	if(map == MAP_INVAL)
+		return FHKDE_INVAL;
+
+	*LIST_ADD(&dm->nr, &dm->nr_alloc, &dm->returns) = (fhk_edge){
+		.idx = var,
+		.map = map,
+		.edge_param = 0
+	};
+
+	return FHK_OK;
 }
 
-void fhk_def_add_check(fhk_def *D, uint16_t model, uint16_t var, int map, fhk_arg arg,
-		int op, fhk_arg oparg, float penalty){
+int fhk_def_add_check(struct fhk_def *D, fhk_idx model, fhk_idx var, fhk_map map,
+		struct fhk_cst *cst){
+
+	if(model >= D->nm || var >= D->nv)
+		return FHKDE_INVAL;
 
 	struct def_model *dm = &D->models[model];
-	struct fhk_check *c = LIST_ADD(&dm->nc, &dm->nc_alloc, &dm->checks);
-	c->edge.idx = var;
-	c->edge.map = d_map(D, model, var, map, arg);
-	c->op = op;
-	c->arg = oparg;
-	c->penalty = penalty;
+
+	if(dm->nc == G_MAXEDGE)
+		return FHKDE_IDX;
+
+	map = d_map(D, model, var, map);
+	if(map == MAP_INVAL)
+		return FHKDE_INVAL;
+
+	if(cst->op >= FHKC__NUM)
+		return FHKDE_INVAL;
+
+	*LIST_ADD(&dm->nc, &dm->nc_alloc, &dm->checks) = (struct fhk_check){
+		.edge = {
+			.idx = var,
+			.map = map,
+			.edge_param = 0
+		},
+		.cst = *cst
+	};
+
+	return FHK_OK;
 }
 
 size_t fhk_subgraph_size(struct fhk_graph *G, struct fhk_subgraph *S){
-	size_t nm, nv, nu, ne, nc;
-	s_count_nodes(G, S, &nv, &nm, &nu);
+	size_t nm, nv, ne, nc;
+	s_count_nodes(G, S, &nv, &nm);
 	s_count_links(G, S, &ne, &nc);
-	size_t as = g_alloc_size(nv, nm, ne, nc, nu);
+	size_t as = g_alloc_size(nv, nm, ne, nc);
 	return as + DSYM_ALIGN(G, as) + DSYM_SIZE(G, nv, nm);
 }
 
 struct fhk_graph *fhk_build_subgraph(struct fhk_graph *G, struct fhk_subgraph *S, void *p){
-	size_t nv, nm, nu;
-	s_count_nodes(G, S, &nv, &nm, &nu);
+	size_t nv, nm;
+	s_count_nodes(G, S, &nv, &nm);
 
 	if(!p){
 		size_t ne, nc;
 		s_count_links(G, S, &ne, &nc);
-		size_t as = g_alloc_size(nv, nm, ne, nc, nu);
+		size_t as = g_alloc_size(nv, nm, ne, nc);
 		p = malloc(as + DSYM_ALIGN(G, as) + DSYM_SIZE(G, nv, nm));
 	}
 
@@ -234,7 +283,7 @@ struct fhk_graph *fhk_build_subgraph(struct fhk_graph *G, struct fhk_subgraph *S
 	void *_mem = p;
 #endif
 
-	struct fhk_graph *H = g_alloc_base(&p, nv, nm, nu);
+	struct fhk_graph *H = g_alloc_base(&p, nv, nm);
 
 	// this could technically be smaller but it doesn't matter
 	H->ng = G->ng;
@@ -248,6 +297,11 @@ struct fhk_graph *fhk_build_subgraph(struct fhk_graph *G, struct fhk_subgraph *S
 	// non-given vars might have turned to given, so this needs to be recomputed
 	g_reorder_edges(H);
 
+	// some umaps might have been deleted so we may have H->nu < G->nu.
+	// this would work without the recomputation (similar to ng), but it makes the solver
+	// allocate less memory for umap caches
+	g_compute_nu(H);
+
 #ifdef FHK_DEBUG
 	assert(p == ALIGN(_mem, 8) + fhk_subgraph_size(G, S));
 #endif
@@ -255,40 +309,32 @@ struct fhk_graph *fhk_build_subgraph(struct fhk_graph *G, struct fhk_subgraph *S
 	return H;
 }
 
-static xmap d_map(struct fhk_def *D, xinst mi, xinst xi, int map, fhk_arg udata){
-	xmap m = TAG_MAP(map);
+static fhk_map d_map(struct fhk_def *D, fhk_idx mi, fhk_idx xi, fhk_map map){
+	switch(FHK_MAP_TAG(map)){
+		case FHK_MAP_TAG(FHKM_USER):
+			if(map >= G_MAXIDX)
+				return MAP_INVAL;
+			return map | GROUP_UMAP(D->models[mi].group);
 
-	switch(map){
-		case FHK_MAP_USER: m |= d_intern_umap(D, D->models[mi].group, D->vars[xi].group, udata); break;
-		case FHK_MAP_SPACE: m |= D->vars[xi].group; break;
-		// TODO RANGE
+		case FHK_MAP_TAG(FHKM_SPACE):
+			return map | D->vars[xi].group;
+
+		default:
+			return map;
 	}
-
-	return m;
 }
 
-static xmap d_inverse(struct fhk_def *D, xinst mi, xmap map){
-	switch(MAP_TAG(map)){
-		case FHK_MAP_USER: map |= UMAP_INVERSE; break;
-		case FHK_MAP_SPACE: map = TAG_MAP(FHK_MAP_SPACE) | D->models[mi].group; break;
-		// TODO RANGE
+static fhk_map d_inverse(struct fhk_def *D, fhk_idx xi, fhk_idx mi, fhk_map map){
+	switch(FHK_MAP_TAG(map)){
+		case FHK_MAP_TAG(FHKM_USER):
+			return FHKM_USER | UMAP_INVERSE | GROUP_UMAP(D->vars[xi].group) | (map & UMAP_INDEX);
+
+		case FHK_MAP_TAG(FHKM_SPACE):
+			return FHKM_SPACE | D->models[mi].group;
+
+		default:
+			return map;
 	}
-
-	return map;
-}
-
-static uint16_t d_intern_umap(struct fhk_def *D, xgrp gm, xgrp gv, fhk_arg udata){
-	struct fhk_umap umap = {.group={gm, gv}, .udata=udata};
-
-	// there won't be too many of these so a linear search is fine.
-	// this works because umaps is calloc'd so the padding bytes are zero.
-	for(size_t i=0;i<D->nu;i++){
-		if(!memcmp(&D->umaps[i], &umap, sizeof(umap)))
-			return i;
-	}
-
-	*LIST_ADD(&D->nu, &D->nu_alloc, &D->umaps) = umap;
-	return D->nu-1;
 }
 
 static void d_copy_data(struct fhk_def *D, struct fhk_graph *G){
@@ -298,7 +344,6 @@ static void d_copy_data(struct fhk_def *D, struct fhk_graph *G){
 
 		x->group = dx->group;
 		x->size = dx->size;
-		x->udata = dx->udata;
 	}
 
 	for(size_t i=0;i<G->nm;i++){
@@ -308,7 +353,6 @@ static void d_copy_data(struct fhk_def *D, struct fhk_graph *G){
 		m->group = dm->group;
 		m->k = dm->k;
 		m->c = dm->c;
-		m->udata = dm->udata;
 
 		// precompute inverse
 		//     cost  = c*S + k
@@ -322,8 +366,6 @@ static void d_copy_data(struct fhk_def *D, struct fhk_graph *G){
 		m->ki = -m->k/m->c;
 		m->ci = 1/m->c;
 	}
-
-	memcpy(G->umaps, D->umaps, D->nu * sizeof(*D->umaps));
 }
 
 static void d_copy_links(void **p, struct fhk_def *D, struct fhk_graph *G){
@@ -465,7 +507,7 @@ static void d_copy_links(void **p, struct fhk_def *D, struct fhk_graph *G){
 			struct fhk_var *x = &G->vars[dm->params[j].idx];
 			x->fwd_models[x->n_fwd++] = (fhk_edge){
 				.idx = i,
-				.map = d_inverse(D, i, dm->params[j].map)
+				.map = d_inverse(D, j, i, dm->params[j].map)
 			};
 		}
 
@@ -474,38 +516,34 @@ static void d_copy_links(void **p, struct fhk_def *D, struct fhk_graph *G){
 			x->models[x->n_mod++] = (fhk_edge){
 				.idx = i,
 				.edge_param = j,
-				.map = d_inverse(D, i, dm->returns[j].map)
+				.map = d_inverse(D, j, i, dm->returns[j].map)
 			};
 		}
 	}
 }
 
-static void s_count_nodes(struct fhk_graph *G, struct fhk_subgraph *S, size_t *nv, size_t *nm,
-		size_t *nu){
+static void s_count_nodes(struct fhk_graph *G, struct fhk_subgraph *S, size_t *nv, size_t *nm){
+	size_t _nv = 0, _nm = 0;
 
-	size_t _nv = 0, _nm = 0, _nu = 0;
-
-	for(size_t i=0;i<G->nv;i++) _nv += !(S->r_vars[i] == FHK_SKIP);
-	for(size_t i=0;i<G->nm;i++) _nm += !(S->r_models[i] == FHK_SKIP);
-	for(size_t i=0;i<G->nu;i++) _nu += !(S->r_maps[i] == FHK_SKIP);
+	for(size_t i=0;i<G->nv;i++) _nv += !(S->r_vars[i] == FHKR_SKIP);
+	for(size_t i=0;i<G->nm;i++) _nm += !(S->r_models[i] == FHKR_SKIP);
 
 	*nv = _nv;
 	*nm = _nm;
-	*nu = _nu;
 }
 
 static void s_count_links(struct fhk_graph *G, struct fhk_subgraph *S, size_t *ne, size_t *nc){
 	size_t _ne = 0, _nc = 0;
 
 	for(size_t i=0;i<G->nm;i++){
-		if(S->r_models[i] == FHK_SKIP)
+		if(S->r_models[i] == FHKR_SKIP)
 			continue;
 
 		struct fhk_model *m = &G->models[i];
 
-		for(size_t j=0;j<m->n_param;j++) ne += !(S->r_vars[m->params[j].idx] == FHK_SKIP);
-		for(size_t j=0;j<m->n_return;j++) ne += !(S->r_vars[m->returns[j].idx] == FHK_SKIP);
-		for(size_t j=0;j<m->n_check;j++) nc += !(S->r_vars[m->checks[j].edge.idx] == FHK_SKIP);
+		for(size_t j=0;j<m->n_param;j++) ne += !(S->r_vars[m->params[j].idx] == FHKR_SKIP);
+		for(size_t j=0;j<m->n_return;j++) ne += !(S->r_vars[m->returns[j].idx] == FHKR_SKIP);
+		for(size_t j=0;j<m->n_check;j++) nc += !(S->r_vars[m->checks[j].edge.idx] == FHKR_SKIP);
 	}
 
 	*ne = 2 * _ne;
@@ -517,18 +555,13 @@ static void s_copy_data(struct fhk_graph *G, struct fhk_subgraph *S, struct fhk_
 	// !!! this overwrites link data         !!!
 	
 	for(size_t i=0;i<G->nv;i++){
-		if(S->r_vars[i] != FHK_SKIP)
+		if(S->r_vars[i] != FHKR_SKIP)
 			memcpy(&H->vars[S->r_vars[i]], &G->vars[i], sizeof(*G->vars));
 	}
 
 	for(size_t i=0;i<G->nm;i++){
-		if(S->r_models[i] != FHK_SKIP)
+		if(S->r_models[i] != FHKR_SKIP)
 			memcpy(&H->models[S->r_models[i]], &G->models[i], sizeof(*G->models));
-	}
-
-	for(size_t i=0;i<G->nu;i++){
-		if(S->r_maps[i] != FHK_SKIP)
-			memcpy(&H->umaps[S->r_maps[i]], &G->umaps[i], sizeof(*G->umaps));
 	}
 }
 
@@ -555,7 +588,7 @@ static void s_copy_links(void **p, struct fhk_graph *G, struct fhk_subgraph *S, 
 		_mH->params = *p;                                                  \
 		for(size_t _i=0;_i<_mG->n_param;_i++){                             \
 			fhk_edge _e = _mG->params[_i];                                 \
-			if(S->r_vars[_e.idx] == FHK_SKIP)                              \
+			if(S->r_vars[_e.idx] == FHKR_SKIP)                             \
 				continue;                                                  \
 			_e.idx = S->r_vars[_e.idx];                                    \
 			_mH->params[_mH->n_param++] = _e;                              \
@@ -568,7 +601,7 @@ static void s_copy_links(void **p, struct fhk_graph *G, struct fhk_subgraph *S, 
 		_mH->checks = *p;                                                  \
 		for(size_t _i=0;_i<_mG->n_check;_i++){                             \
 			struct fhk_check *_c = &_mG->checks[_i];                       \
-			if(S->r_vars[_c->edge.idx] == FHK_SKIP)                        \
+			if(S->r_vars[_c->edge.idx] == FHKR_SKIP)                       \
 				continue;                                                  \
 			_mH->checks[_mH->n_check] = *_c;                               \
 			_mH->checks[_mH->n_check].edge.idx = S->r_vars[_c->edge.idx];  \
@@ -588,7 +621,7 @@ static void s_copy_links(void **p, struct fhk_graph *G, struct fhk_subgraph *S, 
 		_mH->returns = *p;                                                 \
 		for(size_t _i=0;_i<_mG->n_return;_i++){                            \
 			fhk_edge _e = _mG->returns[_i];                                \
-			if(S->r_vars[_e.idx] == FHK_SKIP)                              \
+			if(S->r_vars[_e.idx] == FHKR_SKIP)                             \
 				continue;                                                  \
 			_e.idx = S->r_vars[_e.idx];                                    \
 			_mH->returns[_mH->n_return++] = _e;                            \
@@ -598,7 +631,7 @@ static void s_copy_links(void **p, struct fhk_graph *G, struct fhk_subgraph *S, 
 
 #define copyv(_vm, _nvm, _mv, _mvcopy)                                     \
 	for(size_t i=0;i<G->nv;i++){                                           \
-		if(S->r_vars[i] == FHK_SKIP)                                       \
+		if(S->r_vars[i] == FHKR_SKIP)                                      \
 			continue;                                                      \
 		                                                                   \
 		struct fhk_var *xG = &G->vars[i];                                  \
@@ -608,7 +641,7 @@ static void s_copy_links(void **p, struct fhk_graph *G, struct fhk_subgraph *S, 
 		                                                                   \
 		for(size_t j=0;j<xG->_nvm;j++){                                    \
 			xidx miG = xG->_vm[j].idx;                                     \
-			if(S->r_models[miG] == FHK_SKIP)                               \
+			if(S->r_models[miG] == FHKR_SKIP)                              \
 				continue;                                                  \
 			xH->_vm[xH->_nvm++] = xG->_vm[j];                              \
 		}                                                                  \
@@ -629,7 +662,7 @@ static void s_copy_links(void **p, struct fhk_graph *G, struct fhk_subgraph *S, 
 
 	// remaining
 	for(size_t i=0;i<G->nm;i++){
-		if(S->r_models[i] == FHK_SKIP)
+		if(S->r_models[i] == FHKR_SKIP)
 			continue;
 
 		struct fhk_model *mG = &G->models[i];
@@ -644,34 +677,13 @@ static void s_copy_links(void **p, struct fhk_graph *G, struct fhk_subgraph *S, 
 #undef copymbw
 #undef copymr
 #undef copyv
-
-	// fix umap indices
-
-#define fixumap(_map)                                                  \
-	if(UNLIKELY(MAP_TAG(_map) == FHK_MAP_USER))                        \
-		_map = (_map & ~UMAP_INDEX) | S->r_maps[_map & UMAP_INDEX];
-
-	for(size_t i=0;i<H->nv;i++){
-		struct fhk_var *x = &H->vars[i];
-		for(size_t j=0;j<x->n_mod;j++) fixumap(x->models[j].map);
-		for(size_t j=0;j<x->n_fwd;j++) fixumap(x->fwd_models[j].map);
-	}
-
-	for(size_t i=0;i<H->nm;i++){
-		struct fhk_model *m = &H->models[i];
-		for(size_t j=0;j<m->n_param;j++)  fixumap(m->params[j].map);
-		for(size_t j=0;j<m->n_check;j++)  fixumap(m->checks[j].edge.map);
-		for(size_t j=0;j<m->n_return;j++) fixumap(m->returns[j].map);
-	}
-
-#undef fixumap
 }
 
-#ifdef FHK_DEBUG
+#if FHK_DEBUG
 
-static void s_copy_ds(const char **dest, const char **src, uint16_t *rt, size_t n){
+static void s_copy_ds(const char **dest, const char **src, fhk_idx *rt, size_t n){
 	for(size_t i=0;i<n;i++){
-		if(rt[i] == FHK_SKIP)
+		if(rt[i] == FHKR_SKIP)
 			continue;
 		dest[rt[i]] = src[i];
 	}
@@ -700,7 +712,7 @@ static void s_copy_dsyms(void **p, struct fhk_graph *G, struct fhk_subgraph *S, 
 
 #endif
 
-static size_t g_alloc_size(size_t nv, size_t nm, size_t ne, size_t nc, size_t nu){
+static size_t g_alloc_size(size_t nv, size_t nm, size_t ne, size_t nc){
 	// this assumes no padding between allocs.
 	// everything is aligned to 8 so np.
 	// note that you must also count reverse edges in ne.
@@ -708,11 +720,10 @@ static size_t g_alloc_size(size_t nv, size_t nm, size_t ne, size_t nc, size_t nu
 		+ nv * sizeof(struct fhk_var)
 		+ nm * sizeof(struct fhk_model)
 		+ ne * sizeof(fhk_edge)
-		+ nc * sizeof(struct fhk_check)
-		+ nu * sizeof(struct fhk_umap);
+		+ nc * sizeof(struct fhk_check);
 }
 
-static struct fhk_graph *g_alloc_base(void **p, uint16_t nv, uint16_t nm, uint16_t nu){
+static struct fhk_graph *g_alloc_base(void **p, fhk_idx nv, fhk_idx nm){
 	*p = ALIGN(*p, alignof(struct fhk_graph));
 
 	struct fhk_graph *G = *p;
@@ -720,16 +731,12 @@ static struct fhk_graph *g_alloc_base(void **p, uint16_t nv, uint16_t nm, uint16
 
 	G->nv = nv;
 	G->nm = nm;
-	G->nu = nu;
 
 	G->vars = *p;
 	*p += nv * sizeof(*G->vars);
 
 	G->models = *p;
 	*p += nm * sizeof(*G->models);
-
-	G->umaps = *p;
-	*p += nu * sizeof(*G->umaps);
 
 	return G;
 }
@@ -739,7 +746,7 @@ static void g_compute_flags(struct fhk_graph *G){
 		struct fhk_model *m = &G->models[i];
 		m->flags = 0;
 
-		if(m->n_return == 1 && MAP_TAG(m->returns[0].map) == FHK_MAP_IDENT)
+		if(m->n_return == 1 && FHK_MAP_TAG(m->returns[0].map) == FHKM_IDENT)
 			m->flags |= M_NORETBUF;
 	}
 }
@@ -780,10 +787,26 @@ static void g_reorder_edges(struct fhk_graph *G){
 }
 
 static void g_compute_ng(struct fhk_graph *G){
-	size_t maxg = 0;
+	int32_t maxg = -1;
 	
-	for(size_t i=0;i<G->nv;i++) maxg = maxg > G->vars[i].group ? maxg : G->vars[i].group;
-	for(size_t i=0;i<G->nm;i++) maxg = maxg > G->models[i].group ? maxg : G->models[i].group;
+	for(size_t i=0;i<G->nv;i++) maxg = max(maxg, G->vars[i].group);
+	for(size_t i=0;i<G->nm;i++) maxg = max(maxg, G->models[i].group);
 
 	G->ng = maxg+1;
+}
+
+static void g_compute_nu(struct fhk_graph *G){
+	int32_t maxu = -1;
+
+#define checku(map) if((FHK_MAP_TAG(map) == FHKM_USER)) maxu = max(maxu, ((int32_t)(map) & UMAP_INDEX))
+	// it's enough to only check m->v links, inverse maps have same index set
+	for(size_t i=0;i<G->nm;i++){
+		struct fhk_model *m = &G->models[i];
+		for(size_t j=0;j<m->n_param;j++)  checku(m->params[j].map);
+		for(size_t j=0;j<m->n_return;j++) checku(m->returns[j].map);
+		for(size_t j=0;j<m->n_check;j++)  checku(m->checks[j].edge.map);
+	}
+#undef checku
+
+	G->nu = maxu+1;
 }

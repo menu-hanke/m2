@@ -10,45 +10,44 @@
 static __thread fhk_solver *solver;
 
 fhk_status fhk_continue(fhk_solver *S){
-	fhk_co *co = (fhk_co *) S;
+	fhk_co *C = (fhk_co *) S;
 
-	if(!co->co)
+	if(!C->co)
 		return co->status;
 
-	co->caller = co_active();
+	C->caller = co_active();
 	solver = S;
-	co_switch(co->co);
+	co_switch(C->co);
 
 	if(co->destroy){
-		co_delete(co->co);
-		co->co = NULL;
+		co_delete(C->co);
+		C->co = NULL;
 	}
 
-	return co->status;
+	return C->status;
 }
 
-void fhkJ_yield(fhk_solver *S, fhk_status s){
-	fhk_co *co = (fhk_co *) S;
-	co->status = s;
-	co_switch(co->caller);
+void fhkJ_yield(fhk_co *C, fhk_status s){
+	C->status = s;
+	co_switch(C->caller);
 }
 
-static void S_start(){
-	fhk_co *co = (fhk_co *) solver;
+static void C_start(){
+	fhk_co *C = (fhk_co *) solver;
 	co->fp(solver);
 }
 
-void fhk_co_init(fhk_co *co, void *fp){
-	co->fp = fp;
-	co->co = co_create(FHK_CO_STACK, S_start);
-	co->destroy = false;
+void fhk_co_init(fhk_co *C, void *fp){
+	C->fp = fp;
+	C->co = co_create(FHK_CO_STACK, C_start);
+	C->destroy = false;
 }
 
-void fhk_co_done(fhk_co *co){
-	if(co->co == co_active()){
-		co->destroy = true;
+void fhk_co_done(fhk_co *C){
+	if(C->co == co_active()){
+		C->destroy = true;
 	}else{
-		co_delete(co->co);
-		co->co = NULL;
+		co_delete(C->co);
+		C->co = NULL;
 	}
 }

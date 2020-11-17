@@ -192,10 +192,6 @@ end
 function branch_mt.__index:can_merge(e)
 	if e.event.kind == "forced" then return false end
 	
-	print("merge?", self[1].event.name, e.event.name, e.i, self.all_blocked_by[e.i], bitset.subset(self.mask, e.blocked_by))
-	print("[1]", self[1].blocked_by.words[0])
-	print("all", self.all_blocked_by.words[0])
-
 	if not self.all_blocked_by[e.i] then return false end
 	if not bitset.subset(self.mask, e.blocked_by) then return false end
 

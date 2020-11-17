@@ -61,7 +61,7 @@ function gmod_mt.__index:add_check(target, subset, constraint, name)
 	table.insert(self.checks, {
 		target     = target or error(string.format("%s: missing check target")),
 		subset     = subset,
-		constraint = constraint or error(string.format("%s: missing check constraint (%s)", self.name, target)),
+		create_constraint = constraint or error(string.format("%s: missing check constraint (%s)", self.name, target)),
 		name       = name,
 		penalty    = math.huge -- TODO
 	})
@@ -96,7 +96,7 @@ end
 function gdef_mt.__index:set_constraint(val, inverse)
 	val = type(val) ~= "table" and {val} or val
 
-	return function(typ)
+	return function(cst, typ)
 		local mask = 0ULL
 
 		for i,v in ipairs(val) do
@@ -112,31 +112,25 @@ function gdef_mt.__index:set_constraint(val, inverse)
 		end
 
 		if typ == C.MT_UINT8 then
-			return C.FHKC_U8_MASK64, ffi.new("fhk_arg", {u64=mask})
+			cst:set_u8_mask64(mask)
+		else
+			error(string.format("set constraint isn't applicable to %s", conv.nameof(typ)))
 		end
-
-		error(string.format("set constraint isn't applicable to %s", conv.nameof(typ)))
 	end
 end
-
-local fp_cmp = {
-	[tonumber(C.MT_FLOAT)] = "f32",
-	[tonumber(C.MT_DOUBLE)] = "f64",
-	["f>="] = C.FHKC_GEF32,
-	["f<="] = C.FHKC_LEF32,
-	["d>="] = C.FHKC_GEF64,
-	["d<="] = C.FHKC_LEF64
-}
 
 function gdef_mt.__index:fp_constraint(x, cmp)
 	if cmp == "<" or cmp == ">" then
 		error("TODO (use nextafter and ge/le constraint)")
 	end
 
-	return function(typ)
-		local arg = ffi.new("fhk_arg")
-		arg[fp_cmp[typ]] = x
-		return fp_cmp[conv.nameof(typ) .. cmp], arg
+	return function(cst, typ)
+		if typ == C.MT_FLOAT then
+			cst:set_cmp_fp32(cmp, x)
+		else
+			assert(typ == C.MT_DOUBLE)
+			cst:set_cmp_fp64(cmp, x)
+		end
 	end
 end
 

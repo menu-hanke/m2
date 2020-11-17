@@ -1,13 +1,9 @@
 #pragma once
 
+#include "fhk.h"
+
 #include <stdint.h>
 #include <assert.h>
-
-// edge maps
-#define MAP_TAG(map) ((map)>>30)
-#define TAG_MAP(tag) ((tag)<<30)
-#define UMAP_INVERSE (1 << 29)
-#define UMAP_INDEX   0xffff
 
 // model flags
 #define M_NORETBUF 0x1
@@ -17,6 +13,26 @@
 //       for graph algorithms use the edge ordering.
 #define V_GIVEN(x)    ((x)->n_mod == 0)
 #define V_COMPUTED(x) (!V_GIVEN(x))
+
+// graph size
+#define G_GRPBITS    13
+#define G_MAXGRP     ((1 << G_GROUP_BITS) - 1)
+#define G_IDXBITS    16
+// 0xffff is reserved for missing shape / exclusive range end
+#define G_MAXIDX     0xfffe
+#define G_MAXINST    0xfffe
+#define G_MAXEDGE    0xff
+
+static_assert(8*sizeof(fhk_grp) >= G_GRPBITS);
+static_assert(8*sizeof(fhk_idx) >= G_IDXBITS);
+static_assert((1<<8*sizeof(fhk_inst)) > G_MAXINST);
+static_assert(8*sizeof(fhk_map) == (2 + 1 + G_GRPBITS + G_IDXBITS));
+
+#define UMAP_INVERSE    (1 << 29)
+#define UMAP_INDEX      0xffff
+#define UMAP_GROUP(map) (((map)>>16) & 0x1fff)
+#define GROUP_UMAP(grp) ((grp)<<16)
+#define SMAP_GROUP      0xffff
 
 // these are just markers to make the code easier to read
 typedef uint64_t xgrp;   // group

@@ -37,8 +37,6 @@ fhkJ_yield:
 	mov %rbx, 0x30(%rdi)
 	mov %rbp, 0x38(%rdi)
 
-	// 128-bit return fhk_status goes in rax:rdx
-	// second parameter s is in rsi:rdx, so only rdx already has the correct value
 	mov %rsi, %rax
 
 	pop %rbp

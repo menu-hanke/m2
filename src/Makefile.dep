@@ -1,5 +1,4 @@
 grid.o: grid.c grid.h sim.h def.h conf.h
-mem2.o: mem2.c mem.h def.h
 mem.o: mem.c mem.h def.h conf.h
 sim.o: sim.c def.h mem.h sim.h conf.h
 vec.o: vec.c vec.h sim.h def.h conf.h
@@ -16,14 +15,12 @@ fhk/reduce.o: fhk/reduce.c fhk/fhk.h fhk/../mem.h fhk/../def.h fhk/graph.h \
 fhk/solve.o: fhk/solve.c fhk/fhk.h fhk/../mem.h fhk/../def.h fhk/graph.h \
  fhk/def.h fhk/co.h
 model/conv.o: model/conv.c model/../def.h model/../mem.h model/model.h \
- model/../fhk/fhk.h model/conv.h
-model/mlib.o: model/mlib.c model/model.h model/../mem.h model/../def.h \
- model/../fhk/fhk.h
+ model/conv.h
+model/mlib.o: model/mlib.c model/model.h model/../mem.h model/../def.h
 model/model_Const.o: model/model_Const.c model/model_Const.h model/model.h \
- model/../mem.h model/../def.h model/../fhk/fhk.h
+ model/../mem.h model/../def.h
 model/model_Lua.o: model/model_Lua.c model/model.h model/../mem.h \
- model/../def.h model/../fhk/fhk.h model/conv.h model/model_Lua.h \
- model/loader.lua.in
+ model/../def.h model/conv.h model/model_Lua.h model/loader.lua.in
 model/model_R.o: model/model_R.c model/model_R.h model/mlib.h model/../def.h
 model/model_SimoC.o: model/model_SimoC.c model/model_SimoC.h model/mlib.h \
  model/../def.h
@@ -31,14 +28,10 @@ frontend/fhk/driver.o: frontend/fhk/driver.c frontend/fhk/../../fhk/fhk.h \
  frontend/fhk/../../fhk/../mem.h frontend/fhk/../../fhk/../def.h \
  frontend/fhk/../../model/conv.h frontend/fhk/../../model/model.h \
  frontend/fhk/driver.h
-frontend/fhk/mapping.o: frontend/fhk/mapping.c frontend/fhk/mapping.h \
- frontend/fhk/driver.h frontend/fhk/../../fhk/fhk.h \
- frontend/fhk/../../fhk/../mem.h frontend/fhk/../../fhk/../def.h \
- frontend/fhk/../../model/model.h frontend/fhk/../../model/conv.h
 frontend/m2_cdef.lua: frontend/m2_cdef.lua.h frontend/../sim.h \
  frontend/../vec.h frontend/../grid.h frontend/../vgrid.h \
  frontend/../mem.h frontend/../def.h frontend/../vmath.h \
  frontend/../model/all.h frontend/../model/model.h \
- frontend/../model/../fhk/fhk.h frontend/../model/conv.h \
- frontend/../model/model_Const.h frontend/../model/model_Lua.h \
- frontend/../fhk/graph.h frontend/fhk/driver.h frontend/fhk/mapping.h
+ frontend/../model/conv.h frontend/../model/model_Const.h \
+ frontend/../model/model_Lua.h frontend/../fhk/fhk.h \
+ frontend/../fhk/graph.h frontend/fhk/driver.h

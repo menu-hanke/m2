@@ -15,5 +15,4 @@ require("ffi").cdef [[
 #include "../fhk/graph.h"
 
 #include "fhk/driver.h"
-#include "fhk/mapping.h"
 ]]

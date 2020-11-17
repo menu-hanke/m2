@@ -6,174 +6,198 @@
 
 #include <assert.h>
 #include <stdlib.h>
-#include <stdalign.h>
 
-#define UD_ISLUA(ud)      ((ud) & 1)
-#define UD_CPTR(ud)       ((void *)((ud) & 0xffffffffffff))
-#define UD_CARGOFFSET(ud) ((ud) >> 48)
+// this ensures that an fhk_modcall can be cast as mcall_s, ie. no conversions are required
+// between fhk/mcall modcalls
+static_assert(
+		offsetof(fhk_modcall, np) == offsetof(mcall_s, np)
+		&& offsetof(fhk_modcall, nr) == offsetof(mcall_s, nr)
+		&& offsetof(fhk_modcall, edges) == offsetof(mcall_s, edges)
+		&& offsetof(fhk_mcedge, p) == offsetof(mcall_edge, p)
+		&& offsetof(fhk_mcedge, n) == offsetof(mcall_edge, n)
+);
 
-enum {
-	VAR_CB   = 0,
-	VAR_LUA  = 1,
-	VAR_REFK = 2,
-	VAR_REFX = 3
-};
+static_assert(FHKS_MAPCALLI == (FHKS_MAPCALL|1));
+#define IS_INVERSE(p) ((p) & 1)
 
-int fhkD_continue(fhk_solver *S, void *udata, arena *ar, union fhkD_status *stat){
-	for(;;){
-		fhk_status status = fhk_continue(S);
+#define D_DEF(S, D, s, a, U) fhk_solver *S, fhkD_driver *D, fhkD_status *s, arena *a, void *U
 
-		switch(FHK_CODE(status)){
+static int32_t d_mapcall(D_DEF(S, D, status, A, U), fhk_mapcall *mp, bool mp_inverse);
+static int32_t d_gval(D_DEF(S, D, status, A, U), fhk_idx xi, fhk_inst x_inst);
+static int32_t d_modcall(D_DEF(S, D, status, A, U), fhk_modcall *mc);
+static int32_t d_mcall(D_DEF(S, D, status, A, U), fhkD_model *dm, fhk_modcall *mc);
+static int32_t d_vrefa(D_DEF(S, D, status, A, U), fhk_idx xi, void *ref);
 
-			case FHK_OK:
-			case FHKS_SHAPE:
-				return FHK_CODE(status);
+int32_t fhkD_continue(D_DEF(S, D, status, A, U)){
+	fhk_status fs = fhk_continue(S);
+	fhk_sarg a = FHK_ARG(fs);
 
-			case FHK_ERROR:
-				stat->efhk.error = FHK_A(status);
-				stat->efhk.flags = FHK_B(status);
-				stat->efhk.ei = (struct fhk_ei *) FHK_X(status);
-				return FHKD_EFHK;
+	switch(FHK_CODE(fs)){
 
-			case FHKS_MAPPING:
-			case FHKS_MAPPING_INVERSE:
-				{
-					struct fhks_mapping *sm = (struct fhks_mapping *) FHK_ABC(status);
-					uint64_t x = FHK_X(status);
+		case FHK_OK:
+			return FHKD_OK;
 
-					if(UNLIKELY(UD_ISLUA(x))){
-						stat->interrupt.handle = x >> (16*FHK_CODE(status));
-						stat->interrupt.instance = sm->instance;
-						stat->interrupt.map_ss = sm->ss;
-						return FHK_CODE(status);
-					}
+		case FHKS_SHAPE:
+			// TODO: currently this expects that the shape table is given
+			assert(!"TODO");
+			return FHKDE_FHK;
 
-					struct fhkD_cmap *cm = UD_CPTR(x);
-					fhkD_cmap_f fp = cm->fp[FHK_CODE(status) & 1];
-					*sm->ss = fp(cm, udata + UD_CARGOFFSET(x), sm->instance);
-					continue;
-				}
+		case FHKS_MAPCALL:
+		case FHKS_MAPCALLI:
+			return d_mapcall(S, D, status, A, U, a.s_mapcall, IS_INVERSE(fs));
 
-			case FHKS_COMPUTE_GIVEN:
-				{
-					uint64_t x = FHK_X(status);
-					int xi = FHK_A(status);
-					int inst = FHK_B(status);
+		case FHKS_GVAL:
+			return d_gval(S, D, status, A, U, a.s_gval.idx, a.s_gval.instance);
 
-					switch(x & 0x3){
-						case VAR_CB:
-							{
-								struct fhkD_cvar *cv = UD_CPTR(x);
-								cv->fp(S, cv, udata + UD_CARGOFFSET(x), xi, inst);
-								continue;
-							}
+		case FHKS_MODCALL:
+			return d_modcall(S, D, status, A, U, a.s_modcall);
 
-						case VAR_LUA:
-							stat->interrupt.handle = x >> 16;
-							stat->interrupt.instance = inst;
-							stat->interrupt.xi = xi;
-							return FHKS_COMPUTE_GIVEN;
-
-						case VAR_REFK:
-							{
-								void *p = (void *) (x >> 16);
-								uint64_t offset = (x & 0xffff) >> 2;
-								if(offset != (0xffff >> 2))
-									p = *((void **) p) + offset;
-								fhkS_give_all(S, xi, p);
-								continue;
-							}
-
-						case VAR_REFX:
-							{
-								void *p = udata + ((x & 0xffff) >> 2);
-								x >>= 16;
-								for(; x; x>>=16)
-									p = *((void **) p) + (x & 0x7fff);
-								fhkS_give_all(S, xi, p);
-								continue;
-							}
-					}
-
-					// "warning: this statement may fall through"
-					//     - gcc, 2020
-					__builtin_unreachable();
-				}
-
-			case FHKS_COMPUTE_MODEL:
-				{
-					uint64_t x = FHK_X(status);
-					struct fhks_cmodel *mcall = (struct fhks_cmodel *) FHK_ABC(status);
-					struct fhkD_cmodel *cm = UD_CPTR(x);
-
-					// need to convert?
-					if(UNLIKELY(cm->gsig)){
-						arena ap = *ar;
-
-						for(size_t i=0;i<mcall->np;i++){
-							if(cm->gsig[i] != cm->msig[i]){
-								mcall_edge *e = mcall->edges+i;
-								void *mv = arena_alloc(&ap,
-										e->n * MT_SIZEOF(cm->msig[i]),
-										MT_SIZEOF(cm->msig[i])
-								);
-
-								int res = mt_cconv(mv, cm->msig[i], e->p, cm->gsig[i], e->n);
-
-								// this shouldn't happen because all conversions produced by the
-								// autoconverter are valid.
-								if(UNLIKELY(res))
-									return FHKD_ECONV;
-
-								e->p = mv;
-							}
-						}
-
-						// if we need to convert return values, reserve them now too
-						for(size_t i=mcall->np;i<mcall->np+mcall->nr;i++){
-							if(cm->gsig[i] != cm->msig[i]){
-								mcall_edge *e = mcall->edges+i;
-								// alloc extra space in the start to store the original pointer
-								void **buf = arena_alloc(&ap,
-										sizeof(void *) + e->n*MT_SIZEOF(cm->msig[i]),
-										alignof(void *)
-								);
-								buf[0] = e->p;
-								e->p = buf+1;
-							}
-						}
-					}
-
-					int res = cm->fp(cm->model, mcall);
-
-					if(UNLIKELY(res)){
-						stat->emod.error = res;
-						return FHKD_EMOD;
-					}
-
-					// if we stored return values in a temp buffer, read them back now
-					if(UNLIKELY(cm->gsig)){
-						for(size_t i=mcall->np;i<mcall->np+mcall->nr;i++){
-							if(cm->gsig[i] != cm->msig[i]){
-								mcall_edge *e = mcall->edges+i;
-								void *buf = *(((void **) e->p)-1);
-								int res = mt_cconv(buf, cm->msig[i], e->p, cm->gsig[i], e->n);
-
-								// shouldn't happen
-								if(UNLIKELY(res))
-									return FHKD_ECONV;
-
-								e->p = buf;
-							}
-						}
-					}
-
-					continue;
-				}
-		}
-
-		assert(!"invalid return");
-		__builtin_unreachable();
+		case FHK_ERROR:
+			status->e_status = fs;
+			return FHKDE_FHK;
 	}
 
+	UNREACHABLE();
+}
+
+static int32_t d_mapcall(D_DEF(S, D, status, A, U), fhk_mapcall *mp, bool mp_inverse){
+	fhkD_map *dm = &D->d_maps[mp->idx];
+
+	switch(dm->tag){
+		case FHKDP_FP:
+			assert(!"TODO");
+			break;
+
+		case FHKDP_LUA:
+			status->p_handle = dm->l_handle[mp_inverse];
+			status->p_inst = mp->instance;
+			status->p_ss = mp->ss;
+			return FHKDL_MAP;
+
+		default:
+			UNREACHABLE();
+	}
+
+	return fhkD_continue(S, D, status, A, U);
+}
+
+static int32_t d_gval(D_DEF(S, D, status, A, U), fhk_idx xi, fhk_inst x_inst){
+	fhkD_given *gv = &D->d_vars[xi];
+
+	switch(gv->tag){
+		case FHKDV_FP:
+			gv->fp(S, gv->fp_arg, xi, x_inst);
+			break;
+
+		case FHKDV_LUA:
+			status->v_handle = gv->l_handle;
+			status->v_inst = x_inst;
+			return FHKDL_VAR;
+
+		case FHKDV_REFK:
+			return d_vrefa(S, D, status, A, U, xi, D->d_vars[xi].rk_ref);
+
+		case FHKDV_REFU:
+			return d_vrefa(S, D, status, A, U, xi, U + D->d_vars[xi].ru_udata);
+
+		default:
+			UNREACHABLE();
+	}
+
+	return fhkD_continue(S, D, status, A, U);
+}
+
+static int32_t d_modcall(D_DEF(S, D, status, A, U), fhk_modcall *mc){
+	fhkD_model *dm = &D->d_models[mc->idx];
+
+	switch(dm->tag){
+		case FHKDM_FP:
+			assert(!"TODO");
+			break;
+
+		case FHKDM_MCALL:
+			return d_mcall(S, D, status, A, U, dm, mc);
+
+		case FHKDM_LUA:
+			assert(!"TODO");
+			break;
+
+		default:
+			UNREACHABLE();
+	}
+
+	return fhkD_continue(S, D, status, A, U);
+}
+
+static int32_t d_mcall(D_DEF(S, D, status, A, U), fhkD_model *dm, fhk_modcall *mc){
+	// convert sig?
+	if(UNLIKELY(dm->m_nconv > 0)){
+		arena a = *A;
+
+		// convert parameters
+		for(size_t i=0;i<dm->m_npconv;i++){
+			fhkD_conv *c = &dm->m_conv[i];
+			fhk_mcedge *e = &mc->edges[c->ei];
+			void *p = arena_alloc(&a, e->n * MT_SIZEOF(c->to), MT_SIZEOF(c->to));
+			int r = mt_cconv(p, c->to, e->p, c->from, e->n);
+
+			// this shouldn't happen because all conversions produced by the
+			// autoconverter are valid.
+			if(UNLIKELY(r))
+				return FHKDE_CONV;
+
+			e->p = p;
+		}
+
+		// reserve space for converted return values
+		for(size_t i=dm->m_npconv;i<dm->m_nconv;i++){
+			fhkD_conv *c = &dm->m_conv[i];
+			fhk_mcedge *e = &mc->edges[c->ei];
+
+			// we need to write back to the original pointer so store it just before
+			// the allocation
+			void **buf = arena_malloc(&a, sizeof(void *) + e->n*MT_SIZEOF(c->from));
+			*buf = e->p;
+			e->p = buf+1;
+		}
+	}
+
+	int r = dm->m_fp(dm->m_model, (mcall_s *) mc);
+	
+	if(UNLIKELY(r)){
+		status->e_mstatus = r;
+		return FHKDE_MOD;
+	}
+
+	// need to convert returns?
+	if(UNLIKELY(dm->m_npconv > dm->m_nconv)){
+		for(size_t i=dm->m_npconv;i<dm->m_nconv;i++){
+			fhkD_conv *c = &dm->m_conv[i];
+			fhk_mcedge *e = &mc->edges[c->ei];
+			void *buf = *(((void **) e->p) - 1);
+			int r = mt_cconv(buf, c->to, e->p, c->from, e->n);
+
+			// shouldn't happen
+			if(UNLIKELY(r))
+				return FHKDE_CONV;
+
+			e->p = buf;
+		}
+	}
+
+	return fhkD_continue(S, D, status, A, U);
+}
+
+static int32_t d_vrefa(D_DEF(S, D, status, A, U), fhk_idx xi, void *ref){
+	fhkD_given *gv = &D->d_vars[xi];
+
+	for(uint16_t i=0;i<4;i++){
+		if(i >= gv->r_num)
+			break;
+
+		ref = *((void **)ref) + gv->r_off[i];
+	}
+
+	fhkS_give_all(S, xi, ref);
+	return fhkD_continue(S, D, status, A, U);
 }

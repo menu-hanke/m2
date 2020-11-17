@@ -1,7 +1,3 @@
-#include "fhk.h"
-
-static_assert(sizeof(fhk_status) == 16);
-
 typedef struct fhk_co {
 	void *rip;    // 0x00
 	void *rsp;    // 0x08  
@@ -14,8 +10,12 @@ typedef struct fhk_co {
 	void *co_rsp; // 0x40
 } fhk_co;
 
-#define fhk_co_init(co, stack, sz, fp) do {  \
+#define fhk_co_jmp(co, fp) do {              \
 		(co)->rip = (void*)(fp);             \
+	} while(0)
+
+#define fhk_co_init(co, stack, sz, fp) do {  \
+		fhk_co_jmp(co, fp);                  \
 		(co)->rsp = (void*)(stack) + (sz);   \
 	} while(0)
 

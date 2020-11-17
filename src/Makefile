@@ -47,7 +47,7 @@ M2_LIBS       = $(LUAJIT_LIB)
 
 M2_O = sim.o mem.o grid.o vec.o vmath.o vgrid.o\
 	   fhk/solve.o fhk/build.o fhk/reduce.o fhk/debug.o\
-	   frontend/main.o frontend/fhk/driver.o frontend/fhk/mapping.o
+	   frontend/main.o frontend/fhk/driver.o
 M2_C = $(M2_O:.o=.c)
 
 ifneq (,$(findstring Windows,$(OS)))

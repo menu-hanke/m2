@@ -9,5 +9,5 @@ typedef struct {
 	bool destroy;
 } fhk_co;
 
-void fhk_co_init(fhk_co *co, void *fp);
-void fhk_co_done(fhk_co *co);
+void fhk_co_init(fhk_co *C, void *fp);
+void fhk_co_done(fhk_co *C);

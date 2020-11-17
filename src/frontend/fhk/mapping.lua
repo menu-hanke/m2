@@ -1,4 +1,3 @@
-local driver = require "fhk.driver"
 local conv = require "model.conv"
 local code = require "code"
 local reflect = require "lib.reflect"
@@ -140,13 +139,13 @@ function struct_mapper_mt.__index:map_var(name)
 	local create
 	if type(self.inst) == "cdata" then
 		local ptr = ffi.cast("uint8_t *", self.inst) + field.offset
-		create = function()
-			return driver.refk(ptr)  ---> ptr
+		create = function(dv)
+			dv:set_vrefk(ptr)  ---> ptr
 		end
 	else
 		local offset = field.offset
-		create = function(gen)
-			return driver.refx(self:ref_gen(gen), offset)   ---> *udata + offset
+		create = function(dv, gen)
+			dv:set_vrefu(self:ref_gen(gen), offset)   ---> *udata + offset
 		end
 	end
 
@@ -195,13 +194,13 @@ function array_mapper_mt.__index:map_var(name)
 	local create
 
 	if type(obj) ~= "cdata" or obj == ct then -- it's a type
-		create = function(gen)
-			return driver.refx(self:ref_gen(gen, name))      ---> udata
+		create = function(dv, gen)
+			dv:set_vrefk(self:ref_gen(gen, name))     ---> udata
 		end
 	else -- it's cdata
 		refct = refct.element_type
-		create = function()
-			return driver.refk(ffi.cast("void *", obj))      ---> obj
+		create = function(dv)
+			dv:set_vrefk(ffi.cast("void *", obj))       ---> obj
 		end
 	end
 
@@ -238,29 +237,30 @@ function soa_mapper_mt.__index:map_var(name)
 	local create
 	if type(self.inst) == "cdata" then
 		local ptr = ffi.cast("uint8_t *", self.inst) + field.offset  ---> &inst->band
-		create = function()
-			return driver.refk(ptr, 0)      ---> *ptr
+		create = function(dv)
+			dv:set_vrefk(ptr, 0)     ---> *ptr
 		end
 	else
 		local offset = field.offset
-		create = function(gen)
-			return driver.refx(self:ref_gen(gen), offset, 0)       ---> *(*udata + offset)
+		create = function(dv, gen)
+			dv:set_vrefu(self:ref_gen(gen), offset, 0)       ---> *(*udata + offset)
 		end
 	end
 
 	return conv.fromctype(field.type.element_type), create
 end
 
+local soa_ctp = ffi.typeof("struct vec *")
 function soa_mapper_mt.__index:shape_func()
 	if type(self.inst) == "cdata" then
-		local inst = ffi.cast("struct vec *", self.inst)
+		local inst = ffi.cast(soa_ctp, self.inst)
 		return function()
 			return inst.n_used
 		end
 	else
 		local inst = self.inst
 		return function(state)
-			return ffi.cast("struct vec *", state[inst]).n_used
+			return ffi.cast(soa_ctp, state[inst]).n_used
 		end
 	end
 end
@@ -320,9 +320,9 @@ local function match_edges(rules)
 	end
 end
 
-local function space() return C.FHK_MAP_SPACE, true end
-local function only() return C.FHK_MAP_SPACE, false end
-local function ident() return C.FHK_MAP_IDENT, false end
+local function space() return C.FHKM_SPACE, true end
+local function only() return C.FHKM_SPACE, false end
+local function ident() return C.FHKM_IDENT, false end
 
 local builtin_maps = {
 	all   = space,

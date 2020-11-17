@@ -34,13 +34,7 @@ typedef union {
 #define covf(x)     (x)[2]
 #define has_covf(x) (covf(x) == COST_OVERFLOW)
 
-#define is_nonempty(map) (MAP_TAG(map) == FHK_MAP_IDENT || MAP_TAG(map) == FHK_MAP_SPACE)
-
-enum {
-	C_CHAIN = 0,
-	C_MARK  = 1,
-	C_BOUND = 2
-};
+#define is_nonempty(map) (FHK_MAP_TAG(map) != FHK_MAP_TAG(FHKM_USER))
 
 struct vstate {
 	bool given;
@@ -77,7 +71,6 @@ static void r_selectm(struct fhk_reducer *restrict R, xidx mi);
 
 static void r_addv(struct fhk_reducer *R, xidx xi);
 static void r_addm(struct fhk_reducer *R, xidx mi);
-static void r_addmap(struct fhk_reducer *R, xmap map);
 
 static void r_fail(struct fhk_reducer *R, xidx xi);
 
@@ -94,12 +87,12 @@ struct fhk_subgraph *fhk_reduce(struct fhk_graph *G, arena *arena, uint8_t *v_fl
 	size_t nv = G->nv;
 
 	for(size_t i=0;i<nv;i++){
-		if(v_flags[i] & FHK_GIVEN)
+		if(v_flags[i] & FHKR_GIVEN)
 			R->v_ss[i].given = true;
 	}
 
 	for(size_t i=0;i<nv;i++){
-		if(v_flags[i] & FHK_ROOT)
+		if(v_flags[i] & FHKR_ROOT)
 			r_selectv(R, i);
 	}
 
@@ -117,7 +110,6 @@ static struct fhk_reducer *r_create(struct fhk_graph *G, arena *arena){
 
 	R->sub.r_vars = arena_alloc(arena, G->nv * sizeof(*R->sub.r_vars), alignof(*R->sub.r_vars));
 	R->sub.r_models = arena_alloc(arena, G->nm * sizeof(*R->sub.r_models), alignof(*R->sub.r_models));
-	R->sub.r_maps = arena_alloc(arena, G->nu * sizeof(*R->sub.r_maps), alignof(*R->sub.r_maps));
 
 	R->v_ss = arena_alloc(arena, G->nv * sizeof(*R->v_ss), alignof(*R->v_ss));
 	R->m_ss = arena_alloc(arena, G->nm * sizeof(*R->m_ss), alignof(*R->m_ss));
@@ -125,7 +117,6 @@ static struct fhk_reducer *r_create(struct fhk_graph *G, arena *arena){
 	// 0xffff -> skip
 	memset(R->sub.r_vars, 0xff, G->nv*sizeof(*R->sub.r_vars));
 	memset(R->sub.r_models, 0xff, G->nm*sizeof(*R->sub.r_models));
-	memset(R->sub.r_maps, 0xff, G->nu*sizeof(*R->sub.r_maps));
 	memset(R->v_ss, 0, G->nv*sizeof(*R->v_ss));
 	memset(R->m_ss, 0, G->nm*sizeof(*R->m_ss));
 
@@ -299,7 +290,7 @@ static f2_128 r_searchm(struct fhk_reducer *restrict R, xidx mi, float beta){
 		// as search roots
 		float S_check = 0;
 		for(size_t i=0;i<m->n_check;i++)
-			S_check += m->checks[i].penalty;
+			S_check += m->checks[i].cst.penalty;
 
 		high(bound) += m->c * S_check;
 		ms->done = true;
@@ -372,7 +363,6 @@ static void r_selectv(struct fhk_reducer *restrict R, xidx xi){
 		if(low(bounds[i].f32) < beta){
 			havemin |= high(bounds[i].f32) == beta;
 			fhk_edge e = x->models[i];
-			r_addmap(R, e.map);
 			r_selectm(R, e.idx);
 		}
 	} while(++i < x->n_mod);
@@ -389,7 +379,6 @@ static void r_selectv(struct fhk_reducer *restrict R, xidx xi){
 		if(low(bounds[i].f32) == beta){
 			assert(high(bounds[i].f32) == beta);
 			fhk_edge e = x->models[i];
-			r_addmap(R, e.map);
 			r_selectm(R, e.idx);
 			return;
 		}
@@ -414,13 +403,11 @@ static void r_selectm(struct fhk_reducer *restrict R, xidx mi){
 
 	for(size_t i=0;i<m->n_param;i++){
 		fhk_edge e = m->params[i];
-		r_addmap(R, e.map);
 		r_selectv(R, e.idx);
 	}
 
 	for(size_t i=0;i<m->n_check;i++){
 		fhk_edge e = m->checks[i].edge;
-		r_addmap(R, e.map);
 		r_selectv(R, e.idx);
 	}
 
@@ -434,29 +421,18 @@ static void r_selectm(struct fhk_reducer *restrict R, xidx mi){
 	// given because this model is included.
 	for(size_t i=0;i<m->n_return;i++){
 		fhk_edge e = m->returns[i];
-		r_addmap(R, e.map);
 		r_addv(R, e.idx); // no chain, just include it
 	}
 }
 
 static void r_addv(struct fhk_reducer *R, xidx xi){
-	if(LIKELY(R->sub.r_vars[xi] == FHK_SKIP))
+	if(LIKELY(R->sub.r_vars[xi] == FHKR_SKIP))
 		R->sub.r_vars[xi] = R->s_nv++;
 }
 
 static void r_addm(struct fhk_reducer *R, xidx mi){
-	if(LIKELY(R->sub.r_models[mi] == FHK_SKIP))
+	if(LIKELY(R->sub.r_models[mi] == FHKR_SKIP))
 		R->sub.r_models[mi] = R->s_nm++;
-}
-
-static void r_addmap(struct fhk_reducer *R, xmap map){
-	if(LIKELY(MAP_TAG(map) != FHK_MAP_USER))
-		return;
-
-	// this also automatically includes the inverse (which is what we want),
-	// because they have the same data
-	if(UNLIKELY(R->sub.r_maps[map & UMAP_INDEX] == FHK_SKIP))
-		R->sub.r_maps[map & UMAP_INDEX] = R->s_nu++;
 }
 
 static void r_fail(struct fhk_reducer *R, xidx xi){
