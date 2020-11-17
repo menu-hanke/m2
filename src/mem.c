@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdalign.h>
+#include <assert.h>
 
 static void *bump(uintptr_t *p, size_t size, size_t align, uintptr_t end);
 
