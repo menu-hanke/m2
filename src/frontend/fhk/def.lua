@@ -213,8 +213,6 @@ local gdef_func = setmetatable({
 		end
 	end,
 
-	coeffs = function() return function() end end, -- TODO
-
 	set = function(def)
 		return modifier(function(x)
 			x.subset = def

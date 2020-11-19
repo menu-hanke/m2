@@ -69,7 +69,7 @@ end
 
 local newspe = { Spe.manty, Spe.kuusi, Spe.rauduskoivu, Spe.hieskoivu, Spe.haapa }
 
-local function ingrowth(fma, fku, fra, fhi, fhle)
+local function ingrowth(fma, fku, fra, fhi, fle)
 	local newf = { fma, fku, fra, fhi, fle }
 
 	local nnew = 0
@@ -107,8 +107,6 @@ local function natproc()
 	local newf, f = trees:newband("f")
 	vmath.mul(f, sol.tree__f, #trees, newf)
 
-	update_ba()
-
 	-- synty
 	ingrowth(
 		sol.plot__f_manty_[0],
@@ -117,6 +115,8 @@ local function natproc()
 		sol.plot__f_hieskoivu_[0],
 		sol.plot__f_leppa_[0]
 	)
+
+	update_ba()
 end
 
 --------------------------------------------------------------------------------
@@ -146,7 +146,3 @@ m2.on("grow", function(step)
 	plot_d.step = step
 	natproc()
 end)
-
-return {
-	trees = trees
-}
