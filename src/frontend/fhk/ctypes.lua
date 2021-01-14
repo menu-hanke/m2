@@ -2,17 +2,7 @@ local ffi = require "ffi"
 local C = ffi.C
 local bor, band, lshift, rshift = bit.bor, bit.band, bit.lshift, bit.rshift
 
-local function status_code(status)
-	return tonumber(band(status, 0xffff))
-end
-
-local function status_arg(status)
-	return ffi.new("fhk_sarg", {u64=rshift(status, 16)})
-end
-
-local function status(s)
-	return status_code(s), status_arg(s)
-end
+---- ffi metatypes ----------------------------------------
 
 local deferror = {
 	[C.FHKDE_MEM]   = "failed to allocate memory",
@@ -119,8 +109,23 @@ ffi.metatype("struct fhk_subgraph", {
 	}
 })
 
+---- Subsets ----------------------------------------
+-- Pure Lua versions of subset functions in fhk/solve.c
+-- the subset format is documented in fhk/solve.c
+
+-- ss1 subsets (subsets that contain exactly one range)
+
 local function ss1(from, to)
 	return bor(lshift(to, 16), from)
+end
+
+local function unss1(ss)
+	return band(ss, 0xffff), band(rshift(ss, 16), 0xffff)
+end
+
+local function ss1_len(range)
+	local from, to = unss1(range)
+	return to - from
 end
 
 local function space(n)
@@ -128,27 +133,63 @@ local function space(n)
 	return lshift(n, 16)
 end
 
--- pure lua versions of RANGE_LEN and ss_size_nonempty/ss_complex_size
-local function range_len(range)
-	return band(rshift(range, 16), 0xffff) - band(range, 0xffff)
+-- complex subsets (collections of multiple ranges)
+
+local complex_bit = 2^48
+
+local function ss_is1(ss)
+	return ss < complex_bit
 end
 
 -- this doesn't handle fast singletons (which is an fhk internal detail), ie. all ranges
 -- must have a valid end
 local function ss_size(ss)
-	local n = tonumber(rshift(ss, 49))
-	if n == 0 then
-		return range_len(ss)
+
+	-- Note: you can't check (ss>>49) here because if ss is a lua number, then luajit
+	-- will perform the bit op as 32 bit (ie. it will end up doing ((uint32_t)ss) >> 17)
+	if ss_is1(ss) then
+		return ss1_len(ss)
 	end
+
+	local n = tonumber(rshift(ss, 49))
+	assert(n > 0)
 
 	local l = 0
 	local p = ffi.cast("uint32_t *", band(ss, 0xffffffffffffULL))
 	for i=0, n-1 do
-		l = l + range_len(p[i])
+		l = l + ss1_len(p[i])
 	end
 
 	return l
 end
+
+local function _yield_ss1(ss)
+	local from, to = unss1(ss)
+	for i=tonumber(from), tonumber(to)-1 do
+		coroutine.yield(i)
+	end
+end
+
+-- this will not be compiled, only use it for testing/setup code
+local function ss_iter(ss)
+	return coroutine.wrap(function()
+		if ss_is1(ss) then
+			_yield_ss1(ss)
+			return
+		end
+
+		local n = tonumber(rshift(ss, 49))
+		assert(n > 0)
+
+		local p = ffi.cast("uint32_t *", band(ss, 0xffffffffffffULL))
+		for i=0, n-1 do
+			_yield_ss1(p[i])
+		end
+	end)
+end
+
+-- utility to build sets from Lua numbers.
+-- This is slow and causes allocations, do not use in perf sensitive code.
 
 local setbuilder_mt = { __index = {} }
 
@@ -193,6 +234,20 @@ function setbuilder_mt.__index:to_subset(arena)
 	end
 
 	return bor(lshift(ffi.cast("uint64_t", #self-1), 49) + lshift(1ULL, 48), ffi.cast("uintptr_t", p)), p
+end
+
+---- Statuses ----------------------------------------
+
+local function status_code(status)
+	return tonumber(band(status, 0xffff))
+end
+
+local function status_arg(status)
+	return ffi.new("fhk_sarg", {u64=rshift(status, 16)})
+end
+
+local function status(s)
+	return status_code(s), status_arg(s)
 end
 
 local ecode = {
@@ -257,6 +312,7 @@ return {
 	ss1         = ss1,
 	space       = space,
 	ss_size     = ss_size,
+	ss_iter     = ss_iter,
 	ss_builder  = ss_builder,
 	subset      = subset,
 	fmt_error   = fmt_error

@@ -9,6 +9,7 @@ return {
 	ss1         = ctypes.ss1,
 	space       = ctypes.space,
 	ss_size     = ctypes.ss_size,
+	ss_iter     = ctypes.ss_iter,
 	ss_builder  = ctypes.ss_builder,
 	subset      = ctypes.subset,
 	fmt_error   = ctypes.fmt_error,

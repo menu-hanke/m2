@@ -1,5 +1,5 @@
 local fhk = require "fhk" -- for metatypes
-local alloc = require "alloc" -- for malloc/free
+local alloc = require "alloc"
 local misc = require "misc"
 local ffi = require "ffi"
 local C = ffi.C
@@ -22,7 +22,7 @@ local function def(g)
 	return d
 end
 
--- [name] -> {idx,size}
+-- [name] -> { idx, size }
 function def_mt.__index:assign_groups()
 	local defgroup = {idx=#self.groups, size=1}
 	local groups = setmetatable({}, { __index = function(self, name)
@@ -30,8 +30,8 @@ function def_mt.__index:assign_groups()
 		return defgroup
 	end})
 
-	for i,g in ipairs(self.groups) do
-		local group = {idx=i-1, size=g.size or error("size missing from group definition")}
+	for i,g in misc.ipairs0(self.groups) do
+		local group = {idx=i, size=g.size or error("size missing from group definition")}
 		for _,name in ipairs(g) do
 			if rawget(groups, name) then
 				error(string.format("Name '%s' belongs to multiple groups", name))
@@ -260,7 +260,8 @@ local function testgraph(def)
 		models[name] = models[idx]
 	end
 
-	local G = ffi.gc(D:build(), C.free)
+	local arena = alloc.arena(2^20)
+	local G = ffi.cast("fhk_graph *", D:build(arena:malloc(D:size())))
 	-- +1 because the tables are 0-indexed
 	local dsym_var = ffi.new("const char *[?]", #sym_var+1, sym_var)
 	local dsym_mod = ffi.new("const char *[?]", #sym_mod+1, sym_mod)
@@ -268,6 +269,7 @@ local function testgraph(def)
 
 	return setmetatable({
 		G = G,
+		arena = arena,
 		shape_table = shape_table(groups),
 		models = models,
 		vars = setmetatable(vars, nil),
@@ -301,7 +303,9 @@ function testgraph_mt.__index:driver_loop(S)
 			local mp = arg.s_mapcall
 			mp.ss[0] = self.maps[mp.idx].maps[idx](mp.instance)
 		elseif code == C.FHKS_GVAL then
-			assert(false) -- should be pregiven
+			local gv = arg.s_gval
+			error(string.format("solver tried to evaluate non-given variable: %s:%d",
+				self.syms.vars[gv.idx], gv.instance))
 		elseif code == C.FHKS_MODCALL then
 			local mc = arg.s_modcall
 			self.models[mc.idx].f(mc)
@@ -310,13 +314,15 @@ function testgraph_mt.__index:driver_loop(S)
 end
 
 function testgraph_mt.__index:solve(num, req)
-	self.arena = C.arena_create(2^20)
 	local solver = C.fhk_create_solver(self.G, self.arena, num, req)
 	solver:shape_table(self.shape_table)
 
 	if self.given_values then
-		for name,vals in pairs(self.given_values) do
-			solver:give_all(self.vars[name], vals)
+		for _,v in ipairs(self.given_values) do
+			local xi = self.vars[v.name]
+			for idx, inst in misc.enumerate(fhk.ss_iter(v.ss)) do
+				solver:give(xi, inst, v.buf+idx)
+			end
 		end
 	end
 
@@ -325,7 +331,6 @@ function testgraph_mt.__index:solve(num, req)
 end
 
 function testgraph_mt.__index:reduce()
-	self.arena = C.arena_create(2^20)
 	local flags = self.arena:new("uint8_t", self.G.nv)
 	ffi.fill(flags, self.G.nv)
 
@@ -345,58 +350,74 @@ end
 ---- test callbacks ----------------------------------------
 
 function testgraph_mt.__index:root(vs)
+	assert(not self.roots)
 	self.roots = vs
 end
 
+function testgraph_mt.__index:vsubset(def)
+	if type(def) ~= "table" then
+		def = {def}
+	end
+
+	local idx, values = {}, {}
+	-- `def` may contain holes, so `pairs` must be used here
+	for i,v in pairs(def) do
+		table.insert(idx, i-1)
+		table.insert(values, v)
+	end
+
+	local ss = fhk.subset(idx, self.arena)
+	local buf = self.arena:new("double", #values)
+	for i,v in misc.ipairs0(values) do
+		buf[i] = v
+	end
+
+	return ss, buf
+end
+
+function testgraph_mt.__index:fixed_subspace(vs)
+	local fixed = {}
+
+	for name,def in pairs(vs) do
+		local ss, buf = self:vsubset(def)
+		table.insert(fixed, { name=name, ss=ss, buf=buf })
+	end
+
+	return fixed
+end
+
+-- given { "name1", "name2", ... }             -> mark as FHKR_GIVEN (leaf) for reduce()
+-- given { name1={...}, name2={...}, ... }     -> give values for leaf variable (can be a partial
+--                                                subset, missing values abort search)
 function testgraph_mt.__index:given(vs)
 	if #vs > 0 then
 		self.given_names = vs
 	else
-		local given = {}
-		for name,val in pairs(vs) do
-			if type(val) == "number" then
-				val = {val}
-			end
-
-			local buf = ffi.new("double[?]", #val)
-			for i,v in ipairs(val) do
-				buf[i-1] = v
-			end
-
-			given[name] = buf
-		end
-
-		self.given_values = given
+		self.given_values = self:fixed_subspace(vs)
 	end
 end
 
-function testgraph_mt.__index:solution(s)
-	local ns = 0
-	for _,_ in pairs(s) do ns = ns+1 end
+function testgraph_mt.__index:solution(vs)
+	local solution = self:fixed_subspace(vs)
 
-	local req = ffi.new("struct fhk_req[?]", ns)
-	local buf = {}
-	local i = 0
-	for name,val in pairs(s) do
-		req[i].idx = self.vars[name]
-		req[i].ss = fhk.space(#val)
-		buf[name] = ffi.new("double[?]", #val)
-		req[i].buf = buf[name]
-		i = i+1
+	local req = self.arena:new("struct fhk_req", #solution)
+	for i,v in misc.ipairs0(solution) do
+		req[i].idx = self.vars[v.name]
+		req[i].ss = v.ss
+		req[i].buf = self.arena:new("double", fhk.ss_size(v.ss))
 	end
 
-	local solver, err = self:solve(ns, req)
+	local solver, err = self:solve(#solution, req)
 
-	if err then
-		error(string.format("solver was not supposed to fail, but error was: %d", err))
-	end
+	for i,v in misc.ipairs0(solution) do
+		local r_buf = ffi.cast("double *", req[i].buf)
+		for idx,inst in misc.enumerate(fhk.ss_iter(v.ss)) do
+			local rv = r_buf[idx]
+			local sv = v.buf[idx]
 
-	for name,val in pairs(s) do
-		local b = buf[name]
-		for i,v in ipairs(val) do
-			if v ~= NA and b[i-1] ~= v then
+			if rv ~= sv then
 				error(string.format("wrong solution: %s:%d -- got %f, expected %f",
-					name, i-1, b[i-1], v))
+					v.name, inst, rv, sv))
 			end
 		end
 	end
@@ -447,7 +468,6 @@ local function inject(env)
 	env.m = m
 	env.g = g
 	env.p = p
-	env.NA = NA
 	env.graph = function(g)
 		local t = testgraph(def(g))
 		env.given = misc.delegate(t, t.given)

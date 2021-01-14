@@ -140,6 +140,16 @@ test_tech_large_graph = _(function()
 	graph(ms)
 end)
 
+test_tech_offset_collect_ss1 = _(function()
+	graph {
+		m { "a -> x # M", id },
+		g { "a", "x", "M", size=3 }
+	}
+
+	given { a = {1, 2, 3} }
+	solution { x = {nil, 2, 3} }
+end)
+
 ---- acyclic graphs ----------------------------------------
 
 test_acy_bound_retry = _(function()

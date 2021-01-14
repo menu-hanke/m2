@@ -363,6 +363,9 @@ void fhkS_give(struct fhk_solver *S, fhk_idx xi, fhk_inst inst, void *vp){
 	// this can't yield because of the assumption that shape table entry for x->group exists.
 	bm_set(S_var_gs(S, xi), inst);
 	memcpy(S_var_vp(S, xi)+inst*x->size, vp, x->size);
+
+	dv("%s:%u -- given value @ %p -> %p\n",
+			fhk_Dvar(&S->G, xi), inst, vp, S_var_vp(S, xi)+inst*x->size);
 }
 
 void fhkS_give_all(struct fhk_solver *S, fhk_idx xi, void *vp){
@@ -1462,7 +1465,7 @@ static void ss_complex_collect(void *dest, void *src, size_t sz, fhk_subset ss){
 
 static void ss_collect(void *dest, void *src, size_t sz, fhk_subset ss){
 	if(LIKELY(SS_IS1(ss))){
-		memcpy(dest, src, sz*SS_LEN1(ss));
+		memcpy(dest, src+sz*SS_INDEX(ss), sz*SS_LEN1(ss));
 		return;
 	}
 
@@ -1513,11 +1516,11 @@ static ssp *ssp_alloc(struct fhk_solver *S, size_t n, ssp init){
 }
 
 static void bm_set(uint64_t *b, xinst inst){
-	b[inst >> 6] |= (1ULL << (inst & ~0x3f));
+	b[inst >> 6] |= (1ULL << (inst & 0x3f));
 }
 
 static bool bm_isset(uint64_t *b, xinst inst){
-	return !!(b[inst >> 6] & (1ULL << (inst & ~0x3f)));
+	return !!(b[inst >> 6] & (1ULL << (inst & 0x3f)));
 }
 
 // 0 \in [from, to) ?
