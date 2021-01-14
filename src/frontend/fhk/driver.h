@@ -129,9 +129,6 @@ enum {
 };
 
 typedef union fhkD_status {
-	// FHKDE_MOD
-	int e_mstatus;
-
 	// FHKDE_FHK
 	fhk_status e_status;
 

@@ -10,7 +10,7 @@ local fhkD_status = ffi.metatype("fhkD_status", {
 		fmt_error = function(self, ecode, syms)
 			if ecode == C.FHKDE_CONV then return "type conversion error" end
 			if ecode == C.FHKDE_MOD then
-				return string.format("model call error (%d): %s", self.e_mstatus, model.error())
+				return string.format("model call error: %s", model.error())
 			end
 			if ecode == C.FHKDE_FHK then
 				return string.format("fhk failed: %s", ctypes.fmt_error(

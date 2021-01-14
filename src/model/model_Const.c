@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <stddef.h>
 #include <stdalign.h>
+#include <stdbool.h>
 #include <string.h>
 
 struct mod_Const {
@@ -38,11 +39,11 @@ struct mod_Const *mod_Const_create(size_t num, size_t *nr, void **rv){
 	return M;
 }
 
-int mod_Const_call(struct mod_Const *M, mcall_s *mc){
+bool mod_Const_call(struct mod_Const *M, mcall_s *mc){
 	mcall_edge *e = mc->edges + mc->np;
 	for(size_t i=0;i<mc->nr;i++,e++)
 		memcpy(e->p, M->bufs[i].mem, M->bufs[i].size);
-	return MCALL_OK;
+	return true;
 }
 
 void mod_Const_destroy(struct mod_Const *M){

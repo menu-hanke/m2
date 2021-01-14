@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <assert.h>
 
 typedef uint8_t mt_type;
 
@@ -15,6 +16,13 @@ struct mt_sig {
 #define MT_SIG_VA_SIZE(sig) (((sig)->np + (sig)->nr)*sizeof(mt_type))
 
 #define MT_SIZEOF(t)   (1 << ((t) & 0b11))
+
+// log2(x) where x \in {1,2,4,8}
+// written this way to make it a compile time constant
+#define MT_SIZEFLAG(s) ({    \
+		_Static_assert((s) == 1 || (s) == 2 || (s) == 4 || (s) == 8);  \
+		((!!((s)&0xa)) | ((!!((s)&0xc))<<1));                          \
+	})
 
 enum { //          zfuss
 	MT_SINT8   = 0b00000,

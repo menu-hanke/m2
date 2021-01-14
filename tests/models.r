@@ -1,19 +1,14 @@
-axb <- function(a, x, b){
-	a*x + b
-}
+id       <- function(x){ x }
+id2      <- function(x,y) { list(x,y) }
+ret1     <- function(){ 1 }
+ret2list <- function(){ list(1,2) }
+ret2vec  <- function(){ c(1,2) }
+not      <- function(x){ !x }
+nop      <- function(){  }
+na       <- function(){ NA }
+navec    <- function(){ c(1, NA, 3) }
+clos     <- function(){ function(){} }
 
-axby <- function(x, y, a=1, b=2){
-	a*x + b*y
-}
-
-is7 <- function(x){
-	as.double(x == 7)
-}
-
-ret12 <- function(){
-	c(1, 2)
-}
-
-crash <- function(){
-	stop("")
+runtime_error <- function(){
+	stop("error")
 }

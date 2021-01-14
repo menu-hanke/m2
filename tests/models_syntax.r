@@ -1,0 +1,3 @@
+fail <- function(){
+	syntax error
+}

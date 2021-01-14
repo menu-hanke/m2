@@ -9,7 +9,11 @@ require("ffi").cdef [[
 #include "../mem.h"
 #include "../vmath.h"
 
-#include "../model/all.h"
+#include "../model/model.h"
+#include "../model/conv.h"
+#include "../model/model_Const.h"
+#include "../model/model_Lua.h"
+#include "../model/model_R.h"
 
 #include "../fhk/fhk.h"
 #include "../fhk/graph.h"

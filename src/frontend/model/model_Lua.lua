@@ -2,7 +2,7 @@ local ffi = require "ffi"
 local C = ffi.C
 
 if not pcall(function() return C.mod_Lua_create end) then
-	error("No Lua model support. You can enable it by setting MODEL_LANG in Makefile.")
+	return {}
 end
 
 ffi.metatype("mod_Lua", {

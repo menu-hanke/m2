@@ -74,11 +74,11 @@ ifneq (,$(findstring Lua,$(MODEL_LANG)))
 	MODEL_O += model/model_Lua.o
 endif
 
-# ifneq (,$(findstring R,$(MODEL_LANG)))
-# 	MODEL_O += model/model_R.o
-# 	M2_LIBS += $(R_LIB)
-# endif
-# 
+ifneq (,$(findstring R,$(MODEL_LANG)))
+	MODEL_O += model/model_R.o
+	M2_LIBS += $(R_LIB)
+endif
+ 
 # ifneq (,$(findstring SimoC,$(MODEL_LANG)))
 # 	MODEL_O += model/model_SimoC.o
 # 	M2_LIBS += $(LIBFFI_LIB) -ldl
@@ -128,6 +128,11 @@ frontend/m2_cdef.lua: frontend/m2_cdef.lua.h
 	$(CC) $(CCDEF) $(CCDEBUG) -P -E -nostdinc - <$< 2>/dev/null\
 		| xxd -i\
 		> $@
+	echo ",0x00" >> $@
+
+# cat to prevent xxd from generating names
+%.in: %
+	cat $< | xxd -i > $@
 	echo ",0x00" >> $@
 
 clean:

@@ -5,14 +5,14 @@ local conv = require "model.conv"
 local ffi = require "ffi"
 local C = ffi.C
 
-local SLOW_TESTS = true
+local SLOW_TESTS = os.getenv("M2_SLOW_TESTS") == "on"
 
 test_parse_sig = function()
 	local function ok(s) return tostring(model.parse_sig(s)) == s end
 	assert(ok "u8u16u32u64i8i16i32i64>fdz")
 	assert(ok "U8U16U32U64I8I16I32I64>FDZ" )
 	assert(ok ">")
-	assert(not ok "<")
+	assert(fails(function() model.parse_sig "<" end))
 end
 
 test_cconv = function()
@@ -81,14 +81,14 @@ if models.Lua then
 	test_Lua_set              = models.Lua("D>D", "models", "id")          :call({1,2,3}) :result({1,2,3})
 	test_Lua_mixed_multiret   = models.Lua("dD>dD", "models", "id")        :call(1,{2,3}) :result(1,{2,3})
 
-	test_Lua_ret_too_few      = models.Lua("d>dd", "models", "id")         :call(1)       :fails(C.MCALL_RUNTIME_ERROR)
-	test_Lua_ret_set_too_few  = models.Lua("D>D", "models", "id")          :call({1})     :fails(C.MCALL_RUNTIME_ERROR, 2)
-	test_Lua_ret_notset       = models.Lua("d>D", "models", "id")          :call(1)       :fails(C.MCALL_RUNTIME_ERROR)
-	test_Lua_ret_notsingle    = models.Lua("D>d", "models", "id")          :call({1})     :fails(C.MCALL_RUNTIME_ERROR)
-	test_Lua_runtime_error    = models.Lua("", "models", "runtime_error")  :call()        :fails(C.MCALL_RUNTIME_ERROR)
-	test_Lua_missing_func     = models.Lua("", "models", "missing")        :call()        :fails(C.MCALL_RUNTIME_ERROR)
-	test_Lua_missing_module   = models.Lua("", "models_missing", "func")   :call()        :fails(C.MCALL_RUNTIME_ERROR)
-	test_Lua_invalid_syntax   = models.Lua("", "models_syntax", "fail")    :call()        :fails(C.MCALL_RUNTIME_ERROR)
+	test_Lua_ret_too_few      = models.Lua("d>dd", "models", "id")         :call(1)       :fails()
+	test_Lua_ret_set_too_few  = models.Lua("D>D", "models", "id")          :call({1})     :fails(2)
+	test_Lua_ret_notset       = models.Lua("d>D", "models", "id")          :call(1)       :fails()
+	test_Lua_ret_notsingle    = models.Lua("D>d", "models", "id")          :call({1})     :fails()
+	test_Lua_runtime_error    = models.Lua("", "models", "runtime_error")  :call()        :fails()
+	test_Lua_missing_func     = models.Lua("", "models", "missing")        :call()        :fails()
+	test_Lua_missing_module   = models.Lua("", "models_missing", "func")   :call()        :fails()
+	test_Lua_invalid_syntax   = models.Lua("", "models_syntax", "fail")    :call()        :fails()
 
 	test_Lua_bytecode         = models.LuaJIT("d>d", function(x) return x+1 end)
 	                                                                       :call(1)       :result(2)
@@ -101,4 +101,33 @@ if models.Lua then
 	end
 
 	-- TODO calibrate tests
+end
+
+if models.R then
+
+	test_R_ident              = models.R("d>d", "models.r", "id")          :call(1)       :result(1)
+	test_R_noparam            = models.R(">d", "models.r", "ret1")         :call()        :result(1)
+	test_R_scalar_list_multiret = models.R(">dd", "models.r", "ret2list")  :call()        :result(1, 2)
+	test_R_scalar_vector_multiret = models.R(">dd", "models.r", "ret2vec") :call()        :result(1, 2)
+	test_R_single_vector_ret  = models.R(">D", "models.r", "ret2vec")      :call()        :result({1, 2})
+	test_R_mixed_multiret     = models.R("dD>dD", "models.r", "id2")       :call(1,{2,3}) :result(1,{2,3})
+	test_R_logical            = models.R("z>z", "models.r", "not")         :call(true)    :result(false)
+
+	test_R_noreturn           = models.R(">d", "models.r", "nop")          :call()        :fails()
+	test_R_NAreturn           = models.R(">d", "models.r", "na")           :call()        :fails()
+	test_R_NAvec              = models.R(">D", "models.r", "navec")        :call()        :fails()
+	test_R_wrongtype          = models.R(">z", "models.r", "clos")         :call()        :fails()
+	test_R_retvs_too_few      = models.R("d>dd", "models.r", "id")         :call(1)       :fails()
+	test_R_retvs_too_many     = models.R("dd>d", "models.r", "id2")        :call(1,2)     :fails()
+	test_R_retvv_too_few      = models.R("D>D", "models.r", "id")          :call({1})     :fails(2)
+	test_R_retvv_too_many     = models.R("D>D", "models.r", "id")          :call({1,2})   :fails()
+	test_R_retlv_too_few      = models.R("D>DD", "models.r", "id")         :call({1})     :fails()
+	test_R_retlv_too_many     = models.R("DD>D", "models.r", "id2")        :call({1},{2}) :fails()
+	test_R_retlv_too_few_e    = models.R("dD>dD", "models.r", "id2")       :call(1,{2})   :fails(1, 2)
+	test_R_retlv_too_many_e   = models.R("dD>dD", "models.r", "id2")       :call(1,{2,3}) :fails()
+	test_R_runtime_error      = models.R("", "models.r", "runtime_error")  :call()        :fails()
+	test_R_missing_func       = models.R("", "models.r", "missing")        :call()        :fails()
+	test_R_missing_file       = models.R("", "models_missing.r", "func")   :create_fails()
+	test_R_invalid_syntax     = models.R("", "models_syntax.r", "fail")    :create_fails()
+
 end

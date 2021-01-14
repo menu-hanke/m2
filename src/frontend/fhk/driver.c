@@ -162,12 +162,8 @@ static int32_t d_mcall(D_DEF(S, D, status, A, U), fhkD_model *dm, fhk_modcall *m
 		}
 	}
 
-	int r = dm->m_fp(dm->m_model, (mcall_s *) mc);
-	
-	if(UNLIKELY(r)){
-		status->e_mstatus = r;
+	if(!dm->m_fp(dm->m_model, (mcall_s *) mc))
 		return FHKDE_MOD;
-	}
 
 	// need to convert returns?
 	if(UNLIKELY(dm->m_npconv > dm->m_nconv)){

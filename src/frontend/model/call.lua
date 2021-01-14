@@ -18,7 +18,10 @@ local function parse_sig(s)
 	local mts = ffi.gc(ffi.cast("struct mt_sig *", mts_p), C.free)
 	mts.np = npnr[0]
 	mts.nr = npnr[1]
-	C.mt_sig_parse(s, mts.typ)
+	if C.mt_sig_parse(s, mts.typ) ~= 0 then
+		error(string.format("invalid signature: %s", s))
+	end
+
 	return mts
 end
 
@@ -53,7 +56,10 @@ local function prepare(arena, sig, e)
 end
 
 local function call(mp, mcs, sig)
-	local res = mp:call(mcs)
+	local ok = mp:call(mcs)
+	if not ok then
+		return false
+	end
 
 	local rv = {}
 
@@ -70,7 +76,7 @@ local function call(mp, mcs, sig)
 		end
 	end
 
-	return res, rv
+	return true, rv
 end
 
 return {

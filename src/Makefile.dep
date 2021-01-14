@@ -21,7 +21,8 @@ model/model_Const.o: model/model_Const.c model/model_Const.h model/model.h \
  model/../mem.h model/../def.h
 model/model_Lua.o: model/model_Lua.c model/model.h model/../mem.h \
  model/../def.h model/conv.h model/model_Lua.h model/loader.lua.in
-model/model_R.o: model/model_R.c model/model_R.h model/mlib.h model/../def.h
+model/model_R.o: model/model_R.c model/model.h model/../mem.h model/../def.h \
+ model/conv.h model/model_R.h model/loader.r.in
 model/model_SimoC.o: model/model_SimoC.c model/model_SimoC.h model/mlib.h \
  model/../def.h
 frontend/fhk/driver.o: frontend/fhk/driver.c frontend/fhk/../../fhk/fhk.h \
@@ -31,7 +32,7 @@ frontend/fhk/driver.o: frontend/fhk/driver.c frontend/fhk/../../fhk/fhk.h \
 frontend/m2_cdef.lua: frontend/m2_cdef.lua.h frontend/../sim.h \
  frontend/../vec.h frontend/../grid.h frontend/../vgrid.h \
  frontend/../mem.h frontend/../def.h frontend/../vmath.h \
- frontend/../model/all.h frontend/../model/model.h \
- frontend/../model/conv.h frontend/../model/model_Const.h \
- frontend/../model/model_Lua.h frontend/../fhk/fhk.h \
+ frontend/../model/model.h frontend/../model/conv.h \
+ frontend/../model/model_Const.h frontend/../model/model_Lua.h \
+ frontend/../model/model_R.h frontend/../fhk/fhk.h \
  frontend/../fhk/graph.h frontend/fhk/driver.h

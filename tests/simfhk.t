@@ -537,3 +537,20 @@ end, function()
 		assert(fails(solver))
 	end)
 end)
+
+test_R_impl = _(function()
+	derive ("g#x" *as "double") {
+		impl.R("models.r", "ret1")
+	}
+end, function()
+	local solver = m2.fhk.subgraph()
+		:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+		:given(m2.fhk.group("g", m2.fhk.fixed_size(1)))
+		:solve("g#x")
+		:create()
+	
+	m2.on("test", function()
+		local solution = solver()
+		assert(solution.g_x[0] == 1)
+	end)
+end)

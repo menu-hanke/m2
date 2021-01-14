@@ -1,20 +1,16 @@
 #pragma once
 
-#include "mlib.h"
+#include "model.h"
+#include "conv.h"
 
-enum mod_R_calib_mode {
-	MOD_R_EXPAND,
-	MOD_R_PASS_VECTOR
-	/* MOD_R_PASS_MATRIX ? */
-};
+#include <stdint.h>
+#include <stdbool.h>
 
-struct mod_R_def {
-	MODEL_INIT_DEF;
-	const char *fname;
-	const char *func;
-	unsigned n_coef;
-	enum mod_R_calib_mode mode;
-	/* coef matrix dimensions, if using matrix ? */
-};
+typedef struct mod_R mod_R;
 
-model *mod_R_create(struct mod_R_def *def);
+uint64_t mod_R_types();
+mod_R *mod_R_create(const char *file, const char *func, struct mt_sig *sig);
+// void mod_R_calibrate(mod_R *m, size_t n_co, double *co); // TODO
+bool mod_R_call(mod_R *m, mcall_s *mc);
+void mod_R_destroy(mod_R *m);
+void mod_R_cleanup();

@@ -17,21 +17,10 @@ end
 
 local mcall_mt = {
 	__index = {
-		_fails = function(self, err, rd)
-			local res = self(rd)
-
-			if res ~= err then
-				error(string.format("Model call should have failed with %d, got %d instead",
-					err, res))
-			end
-
-			return true
-		end,
-
-		fails = function(self, err, ...)
+		fails = function(self, ...)
 			local rd = rdef(self._sig, ...)
 			return function()
-				assert(self:_fails(err, rd))
+				assert(not self(rd))
 			end
 		end,
 
@@ -41,10 +30,10 @@ local mcall_mt = {
 				resdef[i] = type(r) == "table" and #r or 1
 			end
 
-			local res, rv = self(resdef)
+			local ok, rv = self(resdef)
 
-			if res ~= C.MCALL_OK then
-				error(string.format("Model call failed: %s\n%s", res, ffi.string(C.model_error())))
+			if not ok then
+				error(string.format("Model call failed:\n%s", ffi.string(C.model_error())))
 			end
 
 			for i, r in ipairs(result) do
@@ -108,14 +97,20 @@ local def_proxy = {
 				_sig  = self._sig,
 				_args = {...}
 			}, mcall_mt)
+		end,
+
+		create_fails = function(self)
+			return function()
+				assert(not pcall(function() return self._def:create(self._sig) end))
+			end
 		end
 	}
 }
 
 local mod_proxy = setmetatable({}, {
 	__index = function(self, name)
-		local ok, module = pcall(model.lang, name)
-		self[name] = ok and function(s, ...)
+		local module = model.lang(name)
+		self[name] = (module.def ~= nil) and function(s, ...)
 			local sig = model.parse_sig(s)
 			return setmetatable({
 				_sig = sig,

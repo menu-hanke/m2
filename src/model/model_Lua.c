@@ -70,7 +70,7 @@ void mod_Lua_calibrate(mod_Lua *M, size_t n_co, double *co){
 	assert(!"TODO");
 }
 
-int mod_Lua_call(mod_Lua *M, mcall_s *mc){
+bool mod_Lua_call(mod_Lua *M, mcall_s *mc){
 	lua_State *L = global_L;
 	lua_getfield(L, LUA_REGISTRYINDEX, K_MODELS);
 	lua_rawgeti(L, -1, TOHANDLE(M));
@@ -81,11 +81,11 @@ int mod_Lua_call(mod_Lua *M, mcall_s *mc){
 	if(UNLIKELY(res)){
 		model_errf("Lua error (%d): %s", res, lua_tostring(L, -1));
 		lua_pop(L, 2);
-		return MCALL_RUNTIME_ERROR;
+		return false;
 	}
 
 	lua_pop(L, 1);
-	return MCALL_OK;
+	return true;
 }
 
 void mod_Lua_destroy(mod_Lua *M){
