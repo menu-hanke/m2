@@ -26,9 +26,6 @@ local function bootstrap(path)
 	require("sim_env").init_sandbox(old_path, old_loaded)
 end
 
-local function help()
-end
-
 local function main(args)
 	local misc = require "misc"
 	local cli = require "cli"

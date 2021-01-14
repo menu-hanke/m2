@@ -1,13 +1,3 @@
-local function split(str)
-	local ret = {}
-
-	for s in str:gmatch("[^,]+") do
-		table.insert(ret, s)
-	end
-
-	return ret
-end
-
 local function readjson(fname)
 	local decode = require "json.decode"
 	local fp = io.open(fname)
@@ -45,7 +35,6 @@ local function dofile_env(env, fname)
 end
 
 return {
-	split      = split,
 	readjson   = readjson,
 	delegate   = delegate,
 	merge      = merge,
