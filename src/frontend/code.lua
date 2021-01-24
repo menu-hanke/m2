@@ -1,4 +1,4 @@
-local log = require("log").logger
+local cli = require "cli"
 
 local code_mt = { __index={} }
 
@@ -27,7 +27,7 @@ end
 function code_mt.__index:compile(env, name)
 	name = name or "=(code)"
 	local src = tostring(self)
-	log:debug("[code] %s\n%s", name, src)
+	cli.debug("[code] %s\n%s", name, src)
 	local f, err = load(src, name, t, env)
 	if not f then
 		error(string.format("Compile failed: %s", err))

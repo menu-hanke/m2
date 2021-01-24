@@ -61,14 +61,17 @@ else
 	-- we are inside m2:
 	-- $m2 tap -t $test
 	local cli = require "cli"
+
+	local flags, help = cli.def(function(opt)
+		opt { "-t", "tests", help="test files", multiple=true }
+		opt { "-r", "run", help="tests to run", set=true }
+	end)
+
 	return {
-		cli_main = {
+		cli = {
 			main = main,
-			usage = "[-t tests]... [-r run]...",
-			flags = {
-				cli.opt("-t", "tests", "multiple"),
-				cli.opt("-r", "run", "map")
-			}
+			help = "[options]\n\n"..help,
+			flags = flags
 		}
 	}
 end

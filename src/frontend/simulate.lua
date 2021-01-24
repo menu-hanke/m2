@@ -1,7 +1,6 @@
 local misc = require "misc"
 local cli = require "cli"
 local sim_env = require "sim_env"
-local log = require("log").logger
 
 local DEFAULT_FRAMES = 16
 local DEFAULT_RSIZE  = 20
@@ -24,7 +23,7 @@ local function main(args)
 			sim:savepoint()
 			local fp = sim:fp()
 			for i,v in ipairs(data) do
-				log:verbose("[%s] %d/%d", args.input, i, #data)
+				cli.verbose("[%s] %d/%d", args.input, i, #data)
 				sim:enter()
 				env:event("sim:setup", v)
 				insn()
@@ -39,28 +38,19 @@ local function main(args)
 	end
 end
 
+local flags, help = cli.def(function(opt)
+	opt { "<instructions>", help="instruction file" }
+	opt { "-F", "nframes", help=string.format("allocate {nframes} frames (default: %d)", DEFAULT_FRAMES) }
+	opt { "-R", "rsize", help=string.format("allocate 2^{rsize}-sized regions (default: 2^%d)", DEFAULT_RSIZE) }
+	opt { "-i", "input", help="input file" }
+	opt { "-c", "config", help="config file" }
+	opt { "-s", "script", help="additional scripts", multiple=true }
+end)
+
 return {
-	cli_main = {
+	cli = {
 		main = main,
-		usage = string.format([[[instructions] [options]...
-
-    Arguments:
-        instructions     Instruction file
-
-    Options:
-        -F nframes       Allocate {nframes} frames (default: %d)
-        -R rsize         Allocate 2^{rsize}-sized regions (default: 2^%d)
-        -i input         Input file
-        -c config        Config file
-        -s script        Additional scripts
-]], DEFAULT_FRAMES, DEFAULT_RSIZE),
-		flags = {
-			cli.positional("instr"),
-			cli.opt("-F", "nframes"),
-			cli.opt("-R", "rsize"),
-			cli.opt("-i", "input"),
-			cli.opt("-c", "config"),
-			cli.opt("-s", "scripts", "multiple")
-		}
+		help = "[instructions] [options]...\n\n"..help,
+		flags = flags
 	}
 }

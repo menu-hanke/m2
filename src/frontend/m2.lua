@@ -26,47 +26,68 @@ local function bootstrap(path)
 	require("sim_env").init_sandbox(old_path, old_loaded)
 end
 
+local function jit_cmd(stream)
+	-- -j<module>=<args>
+	local module, args = stream.token:match("-j(%w+)=?(.*)")
+	if not module then
+		return
+	end
+
+	stream()
+
+	local argv = {}
+	for s in args:gmatch("[^,]+") do
+		table.insert(argv, s)
+	end
+
+	require("jit."..module).start(unpack(argv))
+end
+
 local function main(args)
 	local misc = require "misc"
 	local cli = require "cli"
 
-	local flags = {
+	local cmd_name, cmd
+	local flags = cli.combine {
 		cli.flag("-v", "verbose"),
 		cli.flag("-q", "quiet"),
 		cli.flag("-h", "help"),
-		function(a) -- -j<module>=<args>
-			local module, args = a:match("-j(%w+)=?(.*)")
-			if module then
-				require("jit."..module).start(unpack(misc.split(args or "")))
-				return true
+		jit_cmd,
+
+		function(stream, result) -- subcommand, this must be last
+			if not cmd then
+				cmd_name = stream()
+				cmd = require(cmd_name).cli
+				if not cmd then
+					error(string.format("Module '%s' loaded but it doesn't export `cli`", cmd_name))
+				end
+				return
+			end
+
+			if cmd.flags then
+				return cmd.flags(stream, result)
 			end
 		end
 	}
 
-	local cmd = args[2]
-	local ok, sub = pcall(function() return require(cmd).cli_main end)
-	if not ok then
-		print("Usage: m2 <subcommand> [options]...")
-		print("Global options:")
-		print("  -v/-q   Verbose/quiet")
-		print("  -jcmd   Pass <cmd> to luajit")
+	local args = cli.parse(flags, args, 2)
 
-		if cmd then
-			print("\nIf you meant to run a subcommand, this is the load error:")
-			print(sub)
-		end
-
-		return 1
+	if cmd and args.help then
+		print(string.format("usage: m2 %s %s", cmd_name, cmd.help))
+		return 0
 	end
 
-	local opt = cli.parse(append(flags, sub.flags or {}), args, 3)
-	if opt.help then
-		print(string.format("Usage: m2 %s %s", cmd, sub.usage))
-		return 1
+	if (not cmd) or args.help then
+		print("usage: m2 <subcommand> [options]...")
+		print("\nglobal options:")
+		print("  -v/-q   verbose/quiet")
+		print("  -jcmd   pass <cmd> to luajit")
+		return 0
 	end
 
-	require("log").logger:setlevel((opt.quiet or 0) - (opt.verbose or 0))
-	sub.main(opt)
+	cli.install_logger((args.quiet or 0) - (args.verbose or 0))
+	cmd.main(args)
+
 	return 0
 end
 

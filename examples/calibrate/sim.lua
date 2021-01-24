@@ -51,12 +51,15 @@ local subgraph = fhk.subgraph()
 		{ "=>plot",      fhk.only }
 	})
 
-local solve_np = subgraph
-	:solve("tree#+dbh") -- kasvu
-	:solve("tree#*f") -- lupo
-	:solve({"plot#+f[manty]", "plot#+f[kuusi]", "plot#+f[rauduskoivu]", "plot#+f[hieskoivu]",
-		"plot#+f[leppa]"}) -- synty
-	:create()
+local solve_np = m2.fhk.solver(
+	subgraph,
+	{
+		"tree#+dbh", -- kasvu
+		"tree#*f", -- lupo
+		"plot#+f[manty]", "plot#+f[kuusi]", "plot#+f[rauduskoivu]", "plot#+f[hieskoivu]",
+		"plot#+f[leppa]" -- synty
+	}
+)
 
 --------------------------------------------------------------------------------
 
