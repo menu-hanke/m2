@@ -640,7 +640,7 @@ function solver_mt.__index:compile(G, static_alloc, runtime_alloc)
 		-- by making non-alnums underscores and prepending an underscore if it starts with a number.
 		-- eg. 7tree#h becomes _7tree_h.
 		-- if we get conflicts, oh well, could append more underscores but better to just let it error.
-		local name = v.name:gsub("[^%w]", "_"):gsub("^([^%a_])", "_%1")
+		local name = v.alias or v.name:gsub("[^%w]", "_"):gsub("^([^%a_])", "_%1")
 		mangled[i] = name
 		fields[i] = string.format("$ *%s;", name)
 		types[i] = v.ctype
@@ -919,7 +919,7 @@ function solver_mt.__index:solve(var, opt)
 
 	table.insert(self, {
 		name   = var,
-		alias  = opt.as,
+		alias  = opt.alias,
 
 		-- if you want a custom subset.
 		-- cdata -> always use this constant subset
