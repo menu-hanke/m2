@@ -267,6 +267,7 @@ end
 
 -- aux mappings --------------------
 
+-- fixed mapper: does nothing but provides a shape
 local fixed_mapper_mt = { __index={} }
 
 local function fixed_size(size)
@@ -277,6 +278,39 @@ end
 
 function fixed_mapper_mt.__index:shape_func()
 	return self.shapef
+end
+
+-- translate mapper: proxies a mapper with different names, useful for mappers with name
+-- restrictions (ctype mappers) and generated code
+local translate_mapper_mt = { __index={} }
+
+local function translate_mapper(translate, mapper)
+	local tf = type(translate) == "table"
+		and function(name) return translate[name] end
+		or translate
+	
+	return setmetatable({
+		translate = tf,
+		mapper    = mapper
+	}, translate_mapper_mt)
+end
+
+function translate_mapper_mt.__index:shape_func(...)
+	return self.mapper:shape_func(...)
+end
+
+function translate_mapper_mt.__index:map_model(name)
+	name = self.translate(name)
+	if name then
+		return self.mapper:map_model(name)
+	end
+end
+
+function translate_mapper_mt.__index:map_var(name)
+	name = self.translate(name)
+	if name then
+		return self.mapper:map_var(name)
+	end
 end
 
 -- virtual mapper --------------------
@@ -343,9 +377,12 @@ return {
 	array_mapper     = array_mapper,
 	soa_mapper       = soa_mapper,
 	fixed_size       = fixed_size,
+	translate_mapper = translate_mapper,
+	groupof          = groupof,
 	match_edges      = match_edges,
 	space            = space,
 	only             = only,
 	ident            = ident,
+	builtin_maps     = builtin_maps,
 	builtin_map_edge = builtin_map_edge
 }
