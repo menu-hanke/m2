@@ -175,11 +175,11 @@ function mapping_mt.__index:map_edges(model, edges)
 		local map, is_set = self.subgraph:map_edge(model, e.target, e.subset)
 
 		if not map then
-			map, is_set = mapping.builtin_map_edge(mod, e.target, e.subset)
+			map, is_set = mapping.builtin_map_edge(model, e.target, e.subset)
 		end
 
 		if not map then
-			error(string.format("unmapped edge %s=>%s : %s", mod.name, e.target, e.subset))
+			error(string.format("unmapped edge %s=>%s : %s", model.name, e.target, e.subset))
 		end
 
 		table.insert(mapped, {
