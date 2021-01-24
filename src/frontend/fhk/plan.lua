@@ -890,7 +890,7 @@ function subgraph_mt.__index:include(graph)
 	return self
 end
 
-function subgraph_mt.__index:solve(...)
+function subgraph_mt.__index:solver()
 	if self._graph then
 		error("Common subgraph has already been selected; can't define a new solver")
 	end
@@ -898,7 +898,11 @@ function subgraph_mt.__index:solve(...)
 	local solver = setmetatable({}, solver_mt)
 	table.insert(self._solvers, solver)
 
-	return solver:solve(...)
+	return solver
+end
+
+function subgraph_mt.__index:solve(...)
+	return self:solver():solve(...)
 end
 
 -- solve(var, {...})
