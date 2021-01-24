@@ -411,17 +411,32 @@ static void r_selectm(struct fhk_reducer *restrict R, xidx mi){
 		r_selectv(R, e.idx);
 	}
 
-	// technically the algorithm doesn't need all return values. however, they must be included
-	// for technical reasons because the model caller expects to write all returns. this isn't
-	// a problem since 99% of models return a single value, and most of the time either all
-	// or none return values of multi return models will be used.
+	// this loop guarantees that:
+	// * no return value of a model is given
+	// * all return values of an included model will be included
 	//
-	// we don't need to select chains for returns (unless needed by something else), just
-	// make sure they will be included in the subgraph. they also won't be wrongly treated as
-	// given because this model is included.
+	// this allows the solver to work with the definition that given <=> no models.
+	// all returns should be included so that the caller doesn't need to do filtering
+	// before copying the return values to solver memory (and in 99% of cases you really
+	// want -- or at least can't prove that you don't want -- all return values).
+	//
+	// note that this will not force chain selection for the returns. this is ok
+	// because if there is any possibility that a result is needed then it will have
+	// a chain selected later.
+	//
+	// imo, this is not a bug/problem of the solver. the user is telling the solver that
+	// (say) x is given, but also that it should try to compute x using (say) M.
+	// the "workaround" is make a version of the model that returns only the computed
+	// variables. this is also the faster (in the computational sense) than special-casing
+	// one-way return-edges in the solver or model caller.
 	for(size_t i=0;i<m->n_return;i++){
 		fhk_edge e = m->returns[i];
-		r_addv(R, e.idx); // no chain, just include it
+		if(R->v_ss[e.idx].given){
+			dv("%s -- given variable but computing model included in graph: %s. failing.\n",
+					fhk_Dvar(&R->G, e.idx), fhk_Dmodel(&R->G, mi));
+			r_fail(R, e.idx);
+		}
+		r_addv(R, e.idx);
 	}
 }
 

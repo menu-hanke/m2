@@ -463,7 +463,7 @@ local function build_subgraph(m_vars, m_models, types, static_alloc, dsyms)
 
 	local S, fxi = G:reduce(scratch, r_flags)
 	if not S then
-		error(string.format("Can't select subgraph: '%s' was not pruned", m_vars[fxi+1].name))
+		error(string.format("inconsistent subgraph: '%s' was not pruned", m_vars[fxi+1].name))
 	end
 
 	-- step 3. build the subgraph
