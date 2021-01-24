@@ -1,5 +1,6 @@
 local ctypes = require "fhk.ctypes"
 local simfhk = require "fhk.simfhk"
+local fhkdbg = require "fhk.debugger"
 local def = require "fhk.def"
 
 return {
@@ -18,5 +19,7 @@ return {
 	env         = def.env,
 	read        = def.read,
 
-	inject      = simfhk.inject
+	inject      = simfhk.inject,
+
+	cli         = fhkdbg.cli
 }

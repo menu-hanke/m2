@@ -248,5 +248,6 @@ local function inject(env)
 end
 
 return {
-	inject = inject
+	inject      = inject,
+	ctfrombands = ctfrombands
 }
