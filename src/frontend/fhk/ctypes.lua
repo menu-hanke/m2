@@ -292,10 +292,10 @@ local function fmt_error(ei, syms)
 	for _,tv in ipairs({{ei.tag1, ei.v1}, {ei.tag2, ei.v2}}) do
 		local t, v = tv[1], tv[2]
 		if t > 0 then
-			if t == C.FHKEI_V and syms and syms.vars and syms.vars[v] then
-				v = syms.vars[v]
-			elseif t == C.FHKEI_M and syms and syms.models and syms.models[m] then
-				v = syms.models[v]
+			if t == C.FHKEI_V and syms and syms.var and syms.var[v] then
+				v = syms.var[v]
+			elseif t == C.FHKEI_M and syms and syms.model and syms.model[m] then
+				v = syms.model[v]
 			end
 
 			table.insert(info, string.format("%s: %s", etag[t], v))

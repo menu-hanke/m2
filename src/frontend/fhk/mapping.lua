@@ -120,16 +120,15 @@ local function struct_mapper(ctype, inst)
 	}, struct_mapper_mt)
 end
 
-function struct_mapper_mt.__index:ref_gen(gen)
-	if not gen[self] then
-		gen[self] = gen:reserve(ffi.typeof("void *"))
+function struct_mapper_mt.__index:ref_umem(umem)
+	if not umem[self] then
 		local inst = self.inst
-		gen:init(function(state, _, ptr)
-			ptr[0] = state[inst]       ---> ctype *
-		end, gen[self])
+		umem[self] = umem:scalar(ffi.typeof("void *"), function(state)
+			return state[inst]       ---> ctype *
+		end)
 	end
 
-	return gen[self]
+	return umem[self]
 end
 
 function struct_mapper_mt.__index:map_var(name)
@@ -144,8 +143,11 @@ function struct_mapper_mt.__index:map_var(name)
 		end
 	else
 		local offset = field.offset
-		create = function(dv, gen)
-			dv:set_vrefu(self:ref_gen(gen), offset)   ---> *udata + offset
+		create = function(dv, umem)
+			local field = self:ref_umem(umem)
+			umem:on_ctype(function(ctype)
+				dv:set_vrefu(ffi.offsetof(ctype, field), offset)   ---> *udata + offset
+			end)
 		end
 	end
 
@@ -158,7 +160,7 @@ function struct_mapper_mt.__index:shape_func()
 end
 
 -- plain array mapper --------------------
--- TODO TESTIT
+-- TODO TESTS
 
 local array_mapper_mt = { __index={} }
 
@@ -166,20 +168,18 @@ local function array_mapper(objs)
 	return setmetatable({objs = objs}, array_mapper_mt)
 end
 
-function array_mapper_mt.__index:ref_gen(gen, name)
+function array_mapper_mt.__index:ref_umem(umem, name)
 	-- this could technically be called multiple times if multiple variables resolve
 	-- to the same name (think aliases etc.)
 
-	if not gen[self] then
-		gen[self] = {}
+	if not umem[self] then
+		umem[self] = {}
 	end
 
-	if not gen[self][name] then
-		local ud = gen:reseve(ffi.typeof("void *"))
-		gen:init(function(state, _, ptr)
-			ptr[0] = state[name]       ---> obj *
-		end, ud)
-		gen[self][name] = ud
+	if not umem[self][name] then
+		umem[self][name] = umem:scalar(ffi.typeof("void *", function(state)
+			return state[name]    ---> obj *
+		end))
 	end
 
 	return gen[self][name]
@@ -194,8 +194,11 @@ function array_mapper_mt.__index:map_var(name)
 	local create
 
 	if type(obj) ~= "cdata" or obj == ct then -- it's a type
-		create = function(dv, gen)
-			dv:set_vrefk(self:ref_gen(gen, name))     ---> udata
+		create = function(dv, umem)
+			local field = self:ref_umem(umem, name)
+			umem:on_ctype(function(ctype)
+				dv:set_vrefu(ffi.offset(ctype, field))     ---> udata
+			end)
 		end
 	else -- it's cdata
 		refct = refct.element_type
@@ -218,16 +221,15 @@ local function soa_mapper(ctype, inst)
 	}, soa_mapper_mt)
 end
 
-function soa_mapper_mt.__index:ref_gen(gen)
-	if not gen[self] then
-		gen[self] = gen:reserve(ffi.typeof("void *"))
+function soa_mapper_mt.__index:ref_umem(umem)
+	if not umem[self] then
 		local inst = self.inst
-		gen:init(function(state, _, ptr)
-			ptr[0] = state[inst]       ---> struct vec *
-		end, gen[self])
+		umem[self] = umem:scalar(ffi.typeof("void *"), function(state)
+			return state[inst]   ---> struct vec *
+		end)
 	end
 
-	return gen[self]
+	return umem[self]
 end
 
 function soa_mapper_mt.__index:map_var(name)
@@ -242,8 +244,11 @@ function soa_mapper_mt.__index:map_var(name)
 		end
 	else
 		local offset = field.offset
-		create = function(dv, gen)
-			dv:set_vrefu(self:ref_gen(gen), offset, 0)       ---> *(*udata + offset)
+		create = function(dv, umem)
+			local field = self:ref_umem(umem)
+			umem:on_ctype(function(ctype)
+				dv:set_vrefu(ffi.offsetof(ctype, field), offset, 0) ---> *(*udata + offset)
+			end)
 		end
 	end
 

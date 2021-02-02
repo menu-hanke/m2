@@ -1,20 +1,25 @@
+-- this module is the Lua counterpart/"glue" for driver.c/h.
+-- the idea is to generate a lua function that will setup the necessary state
+-- (see driver.h and mapping.lua) and jump to fhkD_continue.
+
 require "fhk.ctypes"
 local code = require "code"
-local model = require "model"
 local ctypes = require "fhk.ctypes"
 local ffi = require "ffi"
 local C = ffi.C
 
-local fhkD_status = ffi.metatype("fhkD_status", {
+---- status ----------------------------------------
+
+local fhkD_status_ct = ffi.metatype("fhkD_status", {
 	__index = {
-		fmt_error = function(self, ecode, syms)
+		fmt_error = function(self, ecode, symbols)
 			if ecode == C.FHKDE_CONV then return "type conversion error" end
 			if ecode == C.FHKDE_MOD then
-				return string.format("model call error: %s", model.error())
+				return string.format("model call error: %s", require("model").error())
 			end
 			if ecode == C.FHKDE_FHK then
 				return string.format("fhk failed: %s", ctypes.fmt_error(
-					ctypes.status_arg(self.e_status).s_ei, syms))
+					ctypes.status_arg(self.e_status).s_ei, symbols))
 			end
 
 			assert(false)
@@ -22,166 +27,216 @@ local fhkD_status = ffi.metatype("fhkD_status", {
 	}
 })
 
-local fhkD_status_p = ffi.typeof("fhkD_status *")
+-- Note: a global status will not cause a race condition. the status will be immediately
+-- handled after solver return, so it doesn't matter if a recursive call/virtual overwrites it.
+local g_status = fhkD_status_ct()
 
-local dvgen_mt = { __index={} }
+---- driver loop ----------------------------------------
 
-local function compile_shapeinit(shapefs)
-	if not shapefs[0] then
-		return function() end
-	end
+local dvbuild_mt = { __index={} }
+local umem_mt = { __index={} }
 
-	local out = code.new()
-	local ng = #shapefs+1 -- 0-indexed
-
-	for i=0, ng-1 do
-		out:emitf("local group%d_shapef = shapefs[%d]", i, i)
-	end
-
-	out:emitf([[
-		local ffi = ffi
-		local C = ffi.C
-
-		return function(state, arena)
-			local shape = ffi.cast("int16_t *", C.arena_alloc(arena, %d, %d))
-	]], ng*ffi.sizeof("fhk_idx"), ffi.alignof("fhk_idx"))
-
-	for i=0, ng-1 do
-		out:emitf("shape[%d] = group%d_shapef(state)", i, i)
-	end
-
-	out:emit([[
-			return shape
-		end
-	]])
-
-	return out:compile({ffi=ffi, shapefs=shapefs}, string.format("=(shapeinit@%p)", shapefs))()
-end
-
-local function drivergen()
+local function builder()
 	return setmetatable({
-		inits        = {},
-		udata_offset = 0,
-		udata_align  = 1
-	}, dvgen_mt)
+		givens       = {},
+		models       = {},
+		s_given      = 0,
+		s_models     = 0
+	}, dvbuild_mt)
 end
 
-function dvgen_mt.__index:reserve(ctype)
-	local offset = self.udata_offset
-	offset = offset + (-offset%ffi.alignof(ctype))
-	self.udata_offset = offset + ffi.sizeof(ctype)
-	self.udata_align = math.max(self.udata_align, ffi.alignof(ctype))
-	return {offset=offset, ctype=ctype}
+local function umem()
+	return setmetatable({
+		fields          = {},
+		ctype_callbacks = {}
+	}, umem_mt)
 end
 
-function dvgen_mt.__index:init(f, ...)
-	table.insert(self.inits, {f=f, ud={...}})
+function dvbuild_mt.__index:given(idx, create)
+	self.givens[idx] = create
+	self.s_given = math.max(self.s_given, idx+1)
 end
 
-local function create_driver(D, syms)
-	return function(solver, umem, arena)
-		local status = ffi.cast(fhkD_status_p, C.arena_alloc(arena,
-			ffi.sizeof(fhkD_status), ffi.alignof(fhkD_status)))
+function dvbuild_mt.__index:model(idx, create)
+	self.models[idx] = create
+	self.s_models = math.max(self.s_models, idx+1)
+end
 
-		while true do
-			local s = C.fhkD_continue(solver, D, status, arena, umem)
+function dvbuild_mt.__index:create_driver(alloc)
+	local umem = umem()
 
-			if s == C.FHKD_OK then
-				return
-			end
-
-			if s < 0 then
-				return status:fmt_error(s, syms)
-			end
-
-			-- TODO: FHKDL_* virtuals
-			assert(false)
+	local d_vars = ffi.cast("fhkD_given *",
+		alloc(ffi.sizeof("fhkD_given")*self.s_given, ffi.alignof("fhkD_given")))
+	
+	for i=0, self.s_given-1 do
+		if self.givens[i] then
+			self.givens[i](d_vars+i, umem)
 		end
 	end
+
+	local d_models = ffi.cast("fhkD_model *",
+		alloc(ffi.sizeof("fhkD_model")*self.s_models, ffi.alignof("fhkD_model")))
+	
+	for i=0, self.s_models-1 do
+		if self.models[i] then
+			self.models[i](d_models+i, umem)
+		end
+	end
+
+	local D = ffi.cast("fhkD_driver *",
+		alloc(ffi.sizeof("fhkD_driver"), ffi.alignof("fhkD_driver")))
+	
+	
+	D.d_vars = d_vars
+	D.d_models = d_models
+	D.d_maps = nil -- TODO
+
+	return D, umem
 end
 
-function dvgen_mt.__index:compile(D, syms)
+function umem_mt.__index:scalar(ctype, init)
+	local name = string.format("_%d", #self.fields)
+	table.insert(self.fields, {
+		ctype = ctype,
+		init  = init,
+		name  = name
+	})
+	return name
+end
+
+function umem_mt.__index:on_ctype(f)
+	table.insert(self.ctype_callbacks, f)
+end
+
+function umem_mt.__index:ctype()
+	if self._ctype then
+		return self._ctype
+	end
+
+	table.sort(self.fields, function(a, b)
+		return ffi.sizeof(a.ctype) > ffi.sizeof(b.ctype)
+	end)
+
+	local ctypes, fields = {}, {}
+	for _,f in ipairs(self.fields) do
+		table.insert(ctypes, f.ctype)
+		table.insert(fields, string.format("$ %s;", f.name))
+	end
+
+	self._ctype = ffi.typeof(
+		string.format("struct { %s }", table.concat(fields, " ")),
+		unpack(ctypes)
+	)
+
+	for _,f in ipairs(self.ctype_callbacks) do
+		f(self._ctype)
+	end
+
+	return self._ctype
+end
+
+-- opt:
+--     alloc : alloc(size, align) -- note the memory must outlive the driver function
+--     loop  : loop -- loop function
+--
+-- this generates a function that inits umem and hands control to the driver loop.
+-- note: this is per-subgraph, not per-solver.
+-- note: the solver must have a shape table set when entering the generated function, this function
+--       will error if the solver requests shape.
+function dvbuild_mt.__index:compile(opt)
+	local D, umem = self:create_driver(opt.alloc)
 	local caller = code.new()
 
 	caller:emit([[
-		local ffi = ffi
-		local C = ffi.C
-		local driver = driver
-		local cast = ffi.cast
-		local uint8_p = ffi.typeof "uint8_t *"
+		local ffi = require "ffi"
+		local C, cast = ffi.C, ffi.cast
+		local driver, symbols, loop, g_status = driver, symbols, loop, g_status
+		local umem_ctp = ffi.typeof("$*", umem:ctype())
 	]])
 
-	for i,f in ipairs(self.inits) do
-		caller:emitf("local init%d_f = inits[%d].f", i, i)
-		for j,_ in ipairs(f.ud) do
-			caller:emitf("local init%d_ct%d = ffi.typeof('$ *', inits[%d].ud[%d].ctype)", i, j, i, j)
+	for i=1, #umem.fields do
+		caller:emitf("local __init_%d = umem.fields[%d].init", i, i)
+	end
+
+	local uct = umem:ctype()
+	caller:emitf([[
+		return function(state, solver, arena)
+			local u = cast(umem_ctp, C.arena_alloc(arena, %d, %d))
+	]], ffi.sizeof(uct), ffi.alignof(uct))
+
+	for i,field in ipairs(umem.fields) do
+		caller:emitf("u.%s = __init_%d(state)", field.name, i)
+	end
+
+	-- TODO: FHKDL_* virtual callbacks
+	caller:emitf([[
+		while true do
+			local code = %s(solver, driver, g_status, arena, u)
+
+			if code == C.FHK_OK then
+				return
+			end
+
+			if code < 0 then
+				return g_status:fmt_error(code, symbols)
+			end
+
+			assert(false)
 		end
 	end
-
-	caller:emit("return function(state, solver, arena)")
-	if self.udata_offset > 0 then
-		caller:emitf("local udata = cast(uint8_p, C.arena_alloc(arena, %d, %d))",
-			self.udata_offset, self.udata_align)
-	else
-		caller:emit("local udata = nil")
-	end
-
-	for i,f in ipairs(self.inits) do
-		local args = { "state", "arena" }
-		for j,u in ipairs(f.ud) do
-			table.insert(args, string.format("cast(init%d_ct%d, udata+%d)", i, j, u.offset))
-		end
-		caller:emitf("init%d_f(%s)", i, table.concat(args, ", "))
-	end
-
-	caller:emit("return driver(solver, udata, arena)")
-	caller:emit("end")
+	]], opt.loop and "loop" or "C.fhkD_continue")
 
 	return caller:compile({
-		ffi    = ffi,
-		inits  = self.inits,
-		driver = create_driver(D, syms)
-	}, string.format("=(driver@%p)", self))()
+		require  = require,
+		loop     = opt.loop,
+		symbols  = opt.symbols,
+		driver   = D,
+		umem     = umem,
+		g_status = g_status
+	}, string.format("=(driverinit@%p)", self))()
 end
 
-local function mcall_conv(gsig, msig, alloc)
+---- models calls ----------------------------------------
+
+local function conv(g_sig, m_sig, alloc)
 	local convs = {}
 
-	for i=0, gsig.np-1 do
-		if gsig.typ[i] ~= msig.typ[i] then
-			table.insert(convs, {ei=i, from=gsig.typ[i], to=msig.typ[i]})
+	for i=0, g_sig.np-1 do
+		if g_sig.typ[i] ~= m_sig.typ[i] then
+			table.insert(convs, {ei=i, from=g_sig.typ[i], to=m_sig.typ[i]})
 		end
 	end
 
 	local np = #convs
 
-	for i=gsig.np, gsig.np+gsig.nr-1 do
-		if gsig.typ[i] ~= msig.typ[i] then
-			table.insert(convs, {ei=i, from=msig.typ[i], to=gsig.typ[i]})
+	for i=g_sig.np, g_sig.np+g_sig.nr-1 do
+		if g_sig.typ[i] ~= m_sig.typ[i] then
+			table.insert(convs, {ei=i, from=m_sig.typ[i], to=g_sig.typ[i]})
 		end
 	end
 
 	local n = #convs
+	local mconv = nil
 
-	local mconv = ffi.cast("fhkD_conv *",
-		alloc(n * ffi.sizeof("fhkD_conv"), ffi.alignof("fhkD_conv")))
-	
-	for i,c in ipairs(convs) do
-		mconv[i-1].ei = c.ei
-		mconv[i-1].from = c.from
-		mconv[i-1].to = c.to
+	if n > 0 then
+		mconv = ffi.cast("fhkD_conv *",
+			alloc(n * ffi.sizeof("fhkD_conv"), ffi.alignof("fhkD_conv")))
+		
+		for i,c in ipairs(convs) do
+			mconv[i-1].ei = c.ei
+			mconv[i-1].from = c.from
+			mconv[i-1].to = c.to
+		end
 	end
 
 	return mconv, np, n
 end
 
----- models calls ----------------------------------------
-
 local function mcall(dm, model, conv, np, n)
 	dm.tag = C.FHKDM_MCALL
-	dm.m_npconv = np
-	dm.m_nconv = n
-	dm.m_conv = conv
+	dm.m_npconv = np or 0
+	dm.m_nconv = n or 0
+	dm.m_conv = conv or nil
 	dm.m_fp = model.call
 	dm.m_model = model
 	return dm
@@ -210,9 +265,9 @@ local function vrefk(dv, p, ...)
 	return vref(dv, ...)
 end
 
-local function vrefu(dv, ud, ...)
+local function vrefu(dv, offset, ...)
 	dv.tag = C.FHKDV_REFU
-	dv.ru_udata = ud.offset
+	dv.ru_udata = offset
 	return vref(dv, ...)
 end
 
@@ -226,9 +281,8 @@ ffi.metatype("fhkD_given", {
 --------------------------------------------------------------------------------
 
 return {
-	compile_shapeinit = compile_shapeinit,
-	gen               = drivergen,
-	mcall_conv        = mcall_conv,
+	builder           = builder,
+	conv              = conv,
 	mcall             = mcall,
 	vrefk             = vrefk,
 	vrefu             = vrefu

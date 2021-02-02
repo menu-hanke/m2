@@ -8,7 +8,7 @@ local function inject(env, def)
 	local p = plan.create()
 
 	env.m2.on("env:prepare", function()
-		p:finalize(def, {
+		p:compile(def, {
 			static_alloc = env.sim:allocator("static"),
 			runtime_alloc = env.sim:allocator("frame")
 		})
@@ -21,6 +21,8 @@ local function inject(env, def)
 	-- don't use misc.delegate here so `p` and `def` won't be kept alive
 	env.m2.fhk = {
 		subgraph       = function(...) return p:subgraph(...) end,
+		add_solver     = function(...) return p:add_solver(...) end,
+		solver         = function(...) return p:solver(...) end,
 		copylabels     = function(...) return def:copylabels(...) end,
 		group          = mapping.parallel_group,
 		struct_mapper  = mapping.struct_mapper,

@@ -1,6 +1,7 @@
 local fhk_ct = require "fhk.ctypes"
 local driver = require "fhk.driver"
 local mapping = require "fhk.mapping"
+local sym = require "fhk.sym"
 local conv = require "model.conv"
 local code = require "code"
 local alloc = require "alloc"
@@ -9,17 +10,12 @@ local ffi = require "ffi"
 local C = ffi.C
 
 local plan_mt = { __index={} }
+local compiler_mt = { __index={} }
 local subgraph_mt = { __index={} }
 local solver_mt = { __index={} }
 local mapping_mt = { __index={} }
+local solver_mapping_mt = { __index={} }
 local typing_mt = { __index={} }
-local dsyms_mt = { __index={} }
-
-local function plan()
-	return setmetatable({
-		subgraphs = {}
-	}, plan_mt)
-end
 
 -- given:     name -> group, type, create
 -- computed:  name -> group
@@ -31,7 +27,7 @@ function subgraph_mt.__index:map_var(name)
 		local g,t,c = i:map_var(name)
 		if g then
 			group, typ, create = group
-				and error(string.format("Mapping conflict: '%s' is mapped by %s and %s", name, g, group))
+				and error(string.format("mapping conflict: '%s' is mapped by %s and %s", name, g, group))
 				or g, t, c
 		end
 	end
@@ -40,7 +36,7 @@ function subgraph_mt.__index:map_var(name)
 		local t,c = g:map_var(name)
 		if t then
 			group, typ, create = group
-				and error(string.format("Mapping conflict: '%s' is mapped by %s and %s", name, g, group))
+				and error(string.format("mapping conflict: '%s' is mapped by %s and %s", name, g, group))
 				or g, t ~= true and t or nil, c
 		end
 	end
@@ -57,7 +53,7 @@ function subgraph_mt.__index:map_model(name)
 		local g = i:map_model(name)
 		if g then
 			group = group
-				and error(string.format("Mapping conflict: '%s' is mapped by %s and %s", name, g, group))
+				and error(string.format("mapping conflict: '%s' is mapped by %s and %s", name, g, group))
 				or g
 		end
 	end
@@ -65,7 +61,7 @@ function subgraph_mt.__index:map_model(name)
 	for _,g in ipairs(self._groups) do
 		if g:map_model(name) then
 			group = group
-				and error(string.format("Mapping conflict: '%s' is mapped by %s and %s", name, g, group))
+				and error(string.format("mapping conflict: '%s' is mapped by %s and %s", name, g, group))
 				or g
 		end
 	end
@@ -83,7 +79,7 @@ function subgraph_mt.__index:map_edge(model, vname, subset)
 		local o,s,c = i:map_edge(model, vname, subset)
 		if o then
 			op, set, create = op
-				and error(string.format("Mapping conflict: multiple maps for this edge: %s->%s",
+				and error(string.format("mapping conflict: multiple maps for this edge: %s->%s",
 					model.name, vname))
 				or o,s,c
 		end
@@ -93,7 +89,7 @@ function subgraph_mt.__index:map_edge(model, vname, subset)
 		local o,s,c = e(model, vname, subset)
 		if o then
 			op, set, create = op
-				and error(string.format("Mapping conflict: multiple maps for this edge: %s->%s",
+				and error(string.format("mapping conflict: multiple maps for this edge: %s->%s",
 					model.name, vname))
 				or o,s,c
 		end
@@ -103,10 +99,6 @@ function subgraph_mt.__index:map_edge(model, vname, subset)
 end
 
 function subgraph_mt.__index:roots()
-	if self._roots then
-		return self._roots
-	end
-
 	local roots = {}
 	for _,s in ipairs(self._solvers) do
 		for _,v in ipairs(s) do
@@ -114,7 +106,6 @@ function subgraph_mt.__index:roots()
 		end
 	end
 
-	self._roots = roots
 	return roots
 end
 
@@ -204,67 +195,52 @@ function mapping_mt.__index:sort()
 end
 
 -- note: only includes models for which group and all edges are mapped
-function mapping_mt.__index:include_models(models, create)
-	for name, mod in pairs(models) do
-		local group = self.subgraph:map_model(name)
+function mapping_mt.__index:define_model(name, model)
+	local group = self.subgraph:map_model(name)
 
-		if group then
-			local params = self:map_edges(mod, mod.params)
-			local checks = params and self:map_edges(mod, mod.checks)
-			local returns = checks and self:map_edges(mod, mod.returns)
+	if group then
+		local params = self:map_edges(model, model.params)
+		local checks = params and self:map_edges(model, model.checks)
+		local returns = checks and self:map_edges(model, model.returns)
 
-			if returns then
-				table.insert(self.models, {
-					group   = group,
-					model   = mod,
-					params  = params,
-					checks  = checks,
-					returns = returns,
-					create  = create
-				})
-			end
+		if returns then
+			table.insert(self.models, {
+				group   = group,
+				model   = model,
+				params  = params,
+				checks  = checks,
+				returns = returns
+			})
 		end
 	end
 end
 
-function mapping_mt.__index:include_roots(roots)
-	for _,r in ipairs(roots) do
-		local v = self:var(r.name)
+function mapping_mt.__index:add_root(r)
+	local v = self:var(r.name)
 
-		if not v then
-			error(string.format("Root var '%s' is not mapped", r.name))
-		end
-
-		if v.typeid then
-			if not r.tm:has(v.typeid) then
-				error(string.format("Type conflict: you mapped '%s' as %s but solve it as %s",
-					r.name, v.typeid, r.tm))
-			end
-		end
-
-		v.tm = r.tm
-		v.root = true
+	if not v then
+		error(string.format("Root var '%s' is not mapped", r.name))
 	end
+
+	if v.typeid then
+		if not r.tm:has(v.typeid) then
+			error(string.format("Type conflict: you mapped '%s' as %s but solve it as %s",
+				r.name, v.typeid, r.tm))
+		end
+	end
+
+	v.tm = r.tm
+	v.root = true
 end
 
-function subgraph_mt.__index:mapping(def, create_mod)
-	local mp = subgraph_mapping(self)
-	mp:include_models(def.models, create_mod)
-	-- TODO: mp:include_models(virtuals, create_virtual_mod)
-	mp:include_roots(self:roots())
-	mp:sort()
-	return mp.vars, mp.models
-end
-
--- models, vars : returned by subgraph:mapping()
-local function typing(vars, models)
+local function typing(mapping)
 	local typ = setmetatable({
-		vars    = vars,
-		models  = models,
+		vars    = mapping.vars,
+		models  = mapping.models,
 		_typeof = {}
 	}, typing_mt)
 
-	for _,var in ipairs(vars) do
+	for _,var in ipairs(mapping.vars) do
 		if var then
 			typ._typeof[var.name] = var.typeid -- may be nil
 		end
@@ -311,7 +287,7 @@ function typing_mt.__index:typeof(name)
 			:intersect(link.astype)
 
 		if not mm:isuniq() then
-			error(string.format("Can't determine unique return type for '%s'."
+			error(string.format("can't determine unique return type for '%s'."
 				.. "\n* return types -> %s"
 				.. "\n* edge mask -> %s"
 				.. "\n* possibilites -> %s",
@@ -327,7 +303,7 @@ function typing_mt.__index:typeof(name)
 
 	local ty = mask:uniq()
 	if not ty then
-		error(string.format("Conflicting types for '%s'", name))
+		error(string.format("conflicting types for '%s'", name))
 	end
 
 	self._typeof[name] = ty
@@ -400,7 +376,109 @@ local function indexer()
 	})
 end
 
-local function build_subgraph(m_vars, m_models, types, static_alloc, dsyms)
+-- aux structure to help emit solvers (solver here meaning a lua function that calls
+-- into a driver that actually calls into fhk).
+--
+-- the hierarchy goes something like this:
+--     compiler: all subgraphs here will share:
+--         * debug symbols
+--         * models (actual model callers)
+--         * virtuals
+--         * memory pools
+--
+--         -> subgraph: all solvers of this subgraph will share:
+--             * subgraph, ie. the fhk_graph structure (obviously)
+--             * driver+mappings
+--             * shape table
+--
+local function compiler(def, opt)
+	return setmetatable({
+		def             = def,
+		loop            = opt.loop,
+		static_alloc    = opt.static_alloc,
+		runtime_alloc   = opt.runtime_alloc
+	}, compiler_mt)
+end
+
+function compiler_mt.__index:sym(name)
+	if not self.syms then
+		self.syms = {}
+	end
+
+	local sym = self.syms[name]
+	if not sym then
+		sym = self.static_alloc(#name+1, 1)
+		ffi.copy(sym, name)
+		self.syms[name] = sym
+	end
+
+	return sym
+end
+
+function compiler_mt.__index:pool()
+	if self._pool then
+		return self._pool.obtain, self._pool.release
+	end
+
+	local pool = {}
+
+	self._pool = {
+		obtain = function()
+			local arena = pool[#pool]
+			if arena then
+				pool[#pool] = nil
+				return arena
+			end
+
+			return alloc.arena(2^20)
+		end,
+
+		release = function(arena)
+			pool[#pool+1] = arena
+		end
+	}
+
+	return self:pool()
+end
+
+function compiler_mt.__index:map_syms(G, mapping, index, alloc)
+	local vsym = ffi.cast("const char **", alloc(ffi.sizeof("void *")*G.nv, ffi.alignof("void *")))
+	local msym = ffi.cast("const char **", alloc(ffi.sizeof("void *")*G.nm, ffi.alignof("void *")))
+
+	for _,v in ipairs(mapping.vars) do
+		local idx = index(v)
+		if idx then
+			vsym[idx] = self:sym(v.name)
+		end
+	end
+
+	for _,m in ipairs(mapping.models) do
+		local idx = index(m)
+		if idx then
+			msym[idx] = self:sym(m.model.name)
+		end
+	end
+
+	G:set_dsym(vsym, msym)
+end
+
+function compiler_mt.__index:mapping(subgraph)
+	local mapping = subgraph_mapping(subgraph)
+
+	-- this includes virtuals (injected in def)
+	for name, mod in pairs(self.def.models) do
+		mapping:define_model(name, mod)
+	end
+
+	for _,var in pairs(subgraph:roots()) do
+		mapping:add_root(var)
+	end
+
+	mapping:sort()
+	return mapping
+end
+
+function compiler_mt.__index:build_subgraph(mapping, types)
 	local scratch = alloc.arena()
 	local D = ffi.gc(C.fhk_create_def(), C.fhk_destroy_def)
 
@@ -409,11 +487,11 @@ local function build_subgraph(m_vars, m_models, types, static_alloc, dsyms)
 
 	local sup_g = indexer()
 
-	for _,v in ipairs(m_vars) do
+	for _,v in ipairs(mapping.vars) do
 		v.sup_idx = D:add_var(sup_g[v.group], 0)
 	end
 
-	for _,m in ipairs(m_models) do
+	for _,m in ipairs(mapping.models) do
 		local idx = D:add_model(sup_g[m.group], m.model.k, m.model.c)
 		m.sup_idx = idx -- for dsym
 
@@ -445,16 +523,14 @@ local function build_subgraph(m_vars, m_models, types, static_alloc, dsyms)
 
 	-- this is done to have debug output in fhk_reduce().
 	-- ok to copy it in scratch space, it lives only for the fhk_reduce() call.
-	if dsyms then
-		dsyms:copy_alloc(G, m_vars, m_models,
-			function(e) return e.sup_idx, e.name or e.model.name end,
-			misc.delegate(scratch, scratch.alloc)
-		)
+	if C.fhk_is_debug() then
+		self:map_syms(G, mapping, function(e) return e.sup_idx end,
+			misc.delegate(scratch, scratch.alloc))
 	end
 
-	local r_flags = scratch:new("uint8_t", #m_vars)
+	local r_flags = scratch:new("uint8_t", #mapping.vars)
 
-	for i, v in ipairs(m_vars) do
+	for i, v in ipairs(mapping.vars) do
 		local flag = 0
 		if v.given then flag = C.FHKR_GIVEN end
 		if v.root then flag = flag + C.FHKR_ROOT end
@@ -463,7 +539,7 @@ local function build_subgraph(m_vars, m_models, types, static_alloc, dsyms)
 
 	local S, fxi = G:reduce(scratch, r_flags)
 	if not S then
-		error(string.format("inconsistent subgraph: '%s' was not pruned", m_vars[fxi+1].name))
+		error(string.format("inconsistent subgraph: '%s' was not pruned", mapping.vars[fxi+1].name))
 	end
 
 	-- step 3. build the subgraph
@@ -471,13 +547,13 @@ local function build_subgraph(m_vars, m_models, types, static_alloc, dsyms)
 	local sub_g = indexer()
 	D:reset()
 
-	for i, v in ipairs(m_vars) do
+	for i, v in ipairs(mapping.vars) do
 		if S:var(i-1) then
 			v.sub_idx = D:add_var(sub_g[v.group], conv.sizeof(types:typeof(v.name)))
 		end
 	end
 
-	for i, m in ipairs(m_models) do
+	for i, m in ipairs(mapping.models) do
 		if S:model(i-1) then
 			local idx = D:add_model(sub_g[m.group], m.model.k, m.model.c)
 			m.sub_idx = idx -- for dsym
@@ -501,348 +577,342 @@ local function build_subgraph(m_vars, m_models, types, static_alloc, dsyms)
 		end
 	end
 
-	local G = D:build(static_alloc(D:size(), ffi.alignof("fhk_graph")))
+	local G = D:build(self.static_alloc(D:size(), ffi.alignof("fhk_graph")))
 
-	if dsyms then
+	if C.fhk_is_debug() then
 		-- this must be copied with static_alloc() since it should outlive G
-		dsyms:copy_alloc(G, m_vars, m_models,
-			function(e) return e.sub_idx, e.name or e.model.name end,
-			static_alloc
-		)
+		self:map_syms(G, mapping, function(e) return e.sub_idx end, self.static_alloc)
 	end
 
 	return G, sub_g
 end
 
-local function compile_driver(G, m_vars, m_models, types, static_alloc, runtime_alloc)
-	local gen = driver.gen()
-	local sym_vars, sym_models = {}, {}
+function compiler_mt.__index:compile_driver(mapping, types)
+	local symbols = sym.symbols()
+	local builder = driver.builder()
 
-	-- umaps
-	-- TODO: build subgraph should collect user maps into a g_maps table
-	-- (edge.create() will return the umap index, each unique edge.create is run once,
-	-- give it static_alloc and virtuals)
-
-	-- given variables
-
-	local n_given = 0
-	for _,v in ipairs(m_vars) do
+	for _,v in ipairs(mapping.vars) do
 		if v.sub_idx then
-			sym_vars[v.sub_idx] = v.name
-
+			symbols.var[v.sub_idx] = v.name
 			if v.given then
-				n_given = n_given+1
+				builder:given(v.sub_idx, v.create)
 			end
 		end
 	end
 
-	local d_vars = ffi.cast("fhkD_given *",
-		static_alloc(ffi.sizeof("fhkD_given")*n_given, ffi.alignof("fhkD_given")))
-	
-	for _,v in ipairs(m_vars) do
-		if v.sub_idx and v.given then
-			-- TODO also pass virtuals here
-			v.create(d_vars+v.sub_idx, gen, static_alloc, runtime_alloc)
-		end
-	end
-	
-	-- models
-
-	local d_models = ffi.cast("fhkD_model *",
-		static_alloc(ffi.sizeof("fhkD_model")*G.nm, ffi.alignof("fhkD_model")))
-	
-	for _,m in ipairs(m_models) do
+	for _,m in ipairs(mapping.models) do
 		if m.sub_idx then
-			sym_models[m.sub_idx] = m.model.name
-
-			-- TODO and also pass virtuals here
-			m.create(d_models+m.sub_idx, m, types, gen, static_alloc, runtime_alloc)
+			symbols.model[m.sub_idx] = m.name
+			builder:model(m.sub_idx, self:create_model(m, types))
 		end
 	end
 
-	local D = ffi.cast("fhkD_driver *",
-		static_alloc(ffi.sizeof("fhkD_driver"), ffi.alignof("fhkD_driver")))
+	local driver = builder:compile {
+		loop    = self.loop,
+		alloc   = self.static_alloc,
+		symbols = symbols
+	}
+
+	local _, release = self:pool()
+
+	return code.new():emit([[
+		local driver, release, error = driver, release, error
+
+		return function(state, solver, arena)
+			local err = driver(state, solver, arena)
+			release(arena)
+			if err then error(err) end
+		end
+	]]):compile({
+		driver  = driver,
+		release = release,
+		error   = error
+	}, string.format("=(subgraphdriver@%p)", driver))()
+end
+
+function compiler_mt.__index:create_model(m, types)
+	-- TODO: if model.impl is virtual, then we create a virtual model here.
+	---- C model creation below.
 	
-	D.d_vars = d_vars
-	D.d_models = d_models
-	D.d_maps = nil -- TODO
-
-	return gen:compile(D, { vars = sym_vars, models = sym_models })
-end
-
-local function compile_shapeinit(g_groups)
-	local shapef = {}
-
-	for g,i in pairs(g_groups) do
-		shapef[i] = g:shape_func()
-	end
-
-	return driver.compile_shapeinit(shapef)
-end
-
-function subgraph_mt.__index:create_solvers(
-		def,
-		create_mod,
-		static_alloc, runtime_alloc,
-		dsyms,
-		obtain, release)
-
-	self.create_solvers = function() error("subgraph:create_solvers() called twice") end
-
-	if #self._solvers == 0 then
-		return
-	end
-
-	local m_vars, m_models = self:mapping(def, create_mod)
-	local types = typing(m_vars, m_models)
-
-	-- note: this writes sub_idx to m_vars/m_models included in subgraph
-	local G, g_groups = build_subgraph(m_vars, m_models, types, static_alloc, dsyms)
-
-	local drv = compile_driver(G, m_vars, m_models, types, static_alloc, runtime_alloc)
-	local shapeinit = compile_shapeinit(g_groups)
-
-	for _,s in ipairs(self._solvers) do
-		for _,v in ipairs(s) do
-			v.idx = m_vars[v.name].sub_idx or assert(false)
-			v.group = g_groups[m_vars[v.name].group]
-			v.ctype = v.ctype or conv.ctypeof(types:typeof(v.name))
-		end
-
-		s:bind(
-			shapeinit,
-			s:compile(G, static_alloc, runtime_alloc),
-			drv,
-			obtain, release
-		)
-	end
-end
-
-function solver_mt.__index:compile(G, static_alloc, runtime_alloc)
-	local rq = ffi.cast("struct fhk_req *",
-		static_alloc(#self * ffi.sizeof("struct fhk_req"),
-			ffi.alignof("struct fhk_req"))
-	)
-
-	local fields, types, mangled, subsets = {}, {}, {}, {}
-
-	for i,v in ipairs(self) do
-		rq[i-1].idx = v.idx
-		rq[i-1].buf = nil
-
-		if type(v.subset) == "cdata" then
-			rq[i-1].ss = v.subset
-		else
-			subsets[i] = v.subset
-		end
-
-		-- need a valid C identifier for the result struct, so force this to be a valid C identifier
-		-- by making non-alnums underscores and prepending an underscore if it starts with a number.
-		-- eg. 7tree#h becomes _7tree_h.
-		-- if we get conflicts, oh well, could append more underscores but better to just let it error.
-		local name = v.alias or v.name:gsub("[^%w]", "_"):gsub("^([^%a_])", "_%1")
-		mangled[i] = name
-		fields[i] = string.format("$ *%s;", name)
-		types[i] = v.ctype
-	end
-
-	local res_ct = ffi.typeof(string.format("struct { %s }", table.concat(fields, "")), unpack(types))
-
-	local solve = code.new()
-
-	for i,v in ipairs(self) do
-		if subsets[i] then
-			solve:emitf("local subset%d = subsets[%d]", i-1, i)
-		end
-	end
-
-	-- TODO: opt if needed: res could be taken as parameter or allocated statically
-	-- in some situations (should be explicitly requested by user)
+	-- TODO: the buffer sizes really shouldn't be hardcoded.
 	
-	-- another possible optimization: change the alloc code to something like
-	--     local chunk = alloc( <precalculated size & align> )
-	--     local res = ffi.cast(res_ctp, chunk)
-	--     ...
-	--     rq[i].buf = chunk + <precalc offset>
-	--     ...
+	-- TODO: values returned by impl:create() should be cached somewhere, probably this
+	-- (compiler/plan level) is the most natural place.
+	-- caching in the model impl could allow for more sharing, but would require implementing
+	-- caching separately for each caller (and implementing basic caching @ compiler level
+	-- doesn't prevent optimized caching in the caller)
+	
+	return function(dm)
+		-- scratch buffer for signature as seen by graph (max mt_sig size is 2*256 + 2 = 514.)
+		local g_sig = ffi.cast("struct mt_sig *", C.malloc(514))
 
-	solve:emitf([[
-		local ffi = ffi
-		local C = ffi.C
-		local G, alloc, space, size = G, alloc, space, size
-		local rq, res_ctp = rq, res_ctp
+		-- scratch buffer for signature as seen by model (autoconverted)
+		local m_sig = ffi.cast("struct mt_sig *", C.malloc(514))
+
+		types:sigof(g_sig, m)
+		types:autoconvsig(m_sig, m)
+
+		dm:set_mcall(m.model.impl:create(m_sig), driver.conv(g_sig, m_sig, self.static_alloc))
+
+		C.free(g_sig)
+		C.free(m_sig)
+	end
+end
+
+local function solver_mapping(solver, mapping, types, groups)
+	local def = {}
+
+	for _,v in ipairs(solver) do
+		table.insert(def, {
+			-- field name in result ctype
+			name            = v.alias or v.name:gsub("[^%w]", "_"):gsub("^([^%a_])", "_%1"),
+
+			-- result ctype. this must be the same as graph ctype
+			ctype           = v.ctype or conv.ctypeof(types:typeof(v.name)),
+
+			-- subgraph variable index
+			idx             = mapping.vars[v.name].sub_idx or assert(false),
+
+			-- group index
+			group           = groups[mapping.vars[v.name].group],
+
+			-- pregiven subset (may be nil, see comment in solve())
+			subset          = v.subset,
+
+			-- `subset` is a constant subset?
+			fixed_subset    = type(v.subset) == "cdata",
+
+			-- `subset` is a key to lookup the set from `state`?
+			computed_subset = v.subset and type(v.subset) ~= "cdata",
+
+			-- do not use the solver buffer directly (the given variable may be given using
+			-- fhkS_give_all, which won't work with fhkS_use_mem because they tell fhk to
+			-- use different direct buffers).
+			-- note: `given` doesn't necessarily imply fhkS_give_all, it would be possible to
+			-- look at the mapper and check if it's going to use it.
+			-- requesting given variables is not very useful outside debugging though, so
+			-- it's not worth optimizing
+			direct_buffer   = not (v.subset or mapping.vars[v.name].given)
+		})
+	end
+
+	return setmetatable(def, solver_mapping_mt)
+end
+
+function solver_mapping_mt.__index:result_ctype()
+	local fields, ctypes = {}, {}
+
+	for _,v in ipairs(self) do
+		table.insert(fields, string.format("$ *%s;", v.name))
+		table.insert(ctypes, v.ctype)
+	end
+
+	return ffi.typeof(string.format("struct { %s }", table.concat(fields, "")), unpack(ctypes))
+end
+
+function compiler_mt.__index:compile_solver_init(G, def)
+	local req = ffi.cast("struct fhk_req *", self.static_alloc(
+		#def*ffi.sizeof("struct fhk_req"), ffi.alignof("struct fhk_req")
+	))
+
+	for i,v in ipairs(def) do
+		req[i-1].idx = v.idx
+		req[i-1].buf = nil
+		if v.fixed_subset then
+			req[i-1].ss = v.subset
+		end
+	end
+
+	local res_ct = def:result_ctype()
+
+	local out = code.new()
+
+	for i,v in ipairs(def) do
+		if v.computed_subset then
+			out:emitf("local __subset_%d = def[%d].subset", i, i)
+		end
+	end
+
+	out:emitf([[
+		local ffi = require "ffi"
+		local C, cast = ffi.C, ffi.cast
+		local fhk_ct = require "fhk.ctypes"
+		local space, size = fhk_ct.space, fhk_ct.ss_size
+		local G, req = G, req
+		local res_ctp = res_ctp
 
 		return function(state, shape, arena)
-			local res = ffi.cast(res_ctp, alloc(%d, %d))
+			local res = cast(res_ctp, alloc(%d, %d))
 	]], ffi.sizeof(res_ct), ffi.alignof(res_ct))
 
-	for i,v in ipairs(self) do
-		if v.subset then
-			if subsets[i] then
-				solve:emitf([[
-					rq[%d].ss = state[subset%d]
-					rq[%d].buf = alloc(size(rq[%d].ss) * %d, %d)
-				]],
-				i-1, i-1,
-				i-1, i-1, ffi.sizeof(v.ctype), ffi.alignof(v.ctype))
-			else
-				solve:emitf([[
-					rq[%d].buf = alloc(%d, %d)
-				]],
-				i-1, i-1,
-				i-1, fhk_ct.ss_size(v.subset)*ffi.sizeof(v.ctype), ffi.alignof(v.ctype))
-			end
-			solve:emitf("res.%s = rq[%d].buf", mangled[i], i-1)
+	-- TODO: allocate everything in a single `alloc` call so that luajit can actually optimize
+	-- the `req` initialization`
+
+	for i,v in ipairs(def) do
+		out:emit("do")
+		
+		if v.fixed_subset then
+			out:emitf([[
+				local buf = alloc(%d, %d)
+				req[%d].buf = buf
+			]],
+			fhk_ct.ss_size(v.subset)*ffi.sizeof(v.ctype), ffi.alignof(v.ctype),
+			i-1)
+		elseif v.computed_subset then
+			out:emitf([[
+				local buf = alloc(size(state[__subset_%d])*%d, %d)
+				req[%d].ss = state[__subset_%d]
+				req[%d].buf = buf
+			]],
+			i, ffi.sizeof(v.ctype), ffi.alignof(v.ctype),
+			i-1, i,
+			i-1)
 		else
-			solve:emitf("rq[%d].ss = space(shape[%d])", i-1, v.group)
+			-- fast path for space
+			-- TODO: compute the space/size only once per group
+			out:emitf([[
+				local buf = alloc(shape[%d]*%d, %d)
+				req[%d].ss = space(shape[%d])
+				req[%d].buf = buf
+			]],
+			v.group, ffi.sizeof(v.ctype), ffi.alignof(v.ctype),
+			i-1, v.group,
+			i-1)
+		end
+
+		out:emitf([[
+			res.%s = buf
+			end
+		]], v.name)
+	end
+
+	out:emitf([[
+		local solver = C.fhk_create_solver(G, arena, %d, req)
+		C.fhkS_shape_table(solver, shape)
+	]], #def)
+
+	-- direct buffer optimization, fhk will copy others.
+	for i,v in ipairs(def) do
+		if v.direct_buffer then
+			out:emitf("C.fhkS_use_mem(solver, %d, res.%s)", v.idx, v.name)
 		end
 	end
 
-	-- optimization: use direct buffers for spaces.
-	-- split in two loops to group the allocations and fhk calls
-	for i,v in ipairs(self) do
-		if not v.subset then
-			solve:emitf("res.%s = alloc(shape[%d] * %d, %d)",
-				mangled[i], v.group, ffi.sizeof(v.ctype), ffi.alignof(v.ctype))
-		end
-	end
-
-	solve:emitf("local solver = C.fhk_create_solver(G, arena, %d, rq)", #self)
-	solve:emit("C.fhkS_shape_table(solver, shape)")
-
-	for i,v in ipairs(self) do
-		if not v.subset then
-			solve:emitf("C.fhkS_use_mem(solver, %d, res.%s)", v.idx, mangled[i])
-		end
-	end
-
-	solve:emit([[
-			return solver, res
+	out:emit([[
+		return solver, res
 		end
 	]])
 
-	return solve:compile({
-		ffi     = ffi,
-		rq      = rq,
-		res_ctp = ffi.typeof("$*", res_ct),
+	return out:compile({
+		require = require,
+		req     = req,
 		G       = G,
-		alloc   = runtime_alloc,
-		subsets = subsets,
-		space   = fhk_ct.space,
-		size    = fhk_ct.ss_size
-	}, string.format("=(solve@%p)", self))()
+		res_ctp = ffi.typeof("$*", res_ct),
+		alloc   = self.runtime_alloc,
+		def     = def
+	}, string.format("=(initsolver@%p)", def))()
 end
 
-function solver_mt.__index:bind(make_shape, make_solver, driver, obtain, release)
-	if not self._f then
-		error(string.format("Missing solver function: %s (did you forget to call create?)", self._f))
+function compiler_mt.__index:compile_init(groups)
+	local out = code.new()
+
+	local shapef = {}
+	for group,idx in pairs(groups) do
+		shapef[idx] = group:shape_func()
 	end
 
-	code.setupvalue(self._f, "_make_shape", make_shape)
-	code.setupvalue(self._f, "_make_solver", make_solver)
-	code.setupvalue(self._f, "_driver", driver)
-	code.setupvalue(self._f, "_obtain", obtain)
-	code.setupvalue(self._f, "_release", release)
-end
-
-local function dsyms_intern(alloc)
-	return setmetatable({alloc=alloc, syms={}}, dsyms_mt)
-end
-
-function dsyms_mt.__index:sym(s)
-	local sym = self.syms[s]
-	if not sym then
-		sym = self.alloc(#s+1, 1)
-		ffi.copy(sym, s)
-		self.syms[s] = sym
+	for i,_ in pairs(shapef) do
+		out:emitf("local __shape_%d = shapef[%d]", i, i)
 	end
-	return sym
-end
 
-function dsyms_mt.__index:copy_syms(dest, es, infof)
-	for _,e in ipairs(es) do
-		local idx, name = infof(e)
-		if idx then
-			dest[idx] = self:sym(name)
+	out:emitf([[
+		local ffi = require "ffi" 
+		local C, cast = ffi.C, ffi.cast
+		local fhk_idxp = ffi.typeof "fhk_idx *"
+		local obtain = obtain
+
+		return function(state)
+			local arena = obtain()
+			local shape = cast(fhk_idxp, C.arena_alloc(arena, %d, %d))
+	]], #shapef*ffi.sizeof("fhk_idx"), ffi.alignof("fhk_idx"))
+
+	for i,_ in pairs(shapef) do
+		out:emitf("shape[%d] = __shape_%d(state)", i, i)
+	end
+
+	out:emit([[
+			return shape, arena
 		end
+	]])
+
+	return out:compile({
+		require = require,
+		shapef  = shapef,
+		obtain  = self:pool()
+	}, string.format("=(subgraphinit@%p)", groups))()
+end
+
+function compiler_mt.__index:compile_subgraph(subgraph)
+	local mapping = self:mapping(subgraph)
+	local types = typing(mapping)
+	local G, groups = self:build_subgraph(mapping, types)
+
+	local init = self:compile_init(groups)
+	local driver = self:compile_driver(mapping, types)
+
+	local solvers = {}
+
+	for _,solver in ipairs(subgraph._solvers) do
+		local def = solver_mapping(solver, mapping, types, groups)
+		solvers[solver] = self:compile_solver_init(G, def)
 	end
+
+	return init, driver, solvers
 end
 
-function dsyms_mt.__index:copy_alloc(G, vars, models, infof, alloc)
-	alloc = alloc or self.alloc
+local function solver_template()
+	-- load is used to compile a new root trace
+	-- see: https://github.com/luafun/luafun/pull/33
+	return load([[
+		local _init, _create, _driver
 
-	local ds_v = ffi.cast("const char **", alloc(ffi.sizeof("void *")*G.nv, ffi.alignof("void *")))
-	local ds_m = ffi.cast("const char **", alloc(ffi.sizeof("void *")*G.nm, ffi.alignof("void *")))
-
-	self:copy_syms(ds_v, vars, infof)
-	self:copy_syms(ds_m, models, infof)
-
-	G:set_dsym(ds_v, ds_m)
+		return function(state)
+			local shape, arena = _init(state)
+			local solver, result = _create(state, shape, arena)
+			_driver(state, solver, arena)
+			return result
+		end
+	]])()
 end
 
-local function arena_pool()
-	local pool = {}
+local function bind_solver(template, init, create, driver)
+	code.setupvalue(template, "_init", init)
+	code.setupvalue(template, "_create", create)
+	code.setupvalue(template, "_driver", driver)
+end
 
-	return
-		-- obtain
-		function()
-			if pool[#pool] then
-				local ret = pool[#pool]
-				pool[#pool] = nil
-				return ret
+function compiler_mt.__index:compile_plan(plan)
+	for _,subgraph in ipairs(plan.subgraphs) do
+		if #subgraph._solvers > 0 then
+			local init, driver, solvers = self:compile_subgraph(subgraph)
+			for solver,create in pairs(solvers) do
+				bind_solver(plan.solvers[solver], init, create, driver)
 			end
-
-			-- the default arena size doesn't really matter too much so just take enough
-			return ffi.gc(C.arena_create(2^20), C.arena_destroy)
-		end,
-
-		-- release
-		function(arena)
-			pool[#pool+1] = arena
 		end
-end
-
-local function create_model_func()
-	-- scratch buffer for signature as seen by graph (max mt_sig size is 2*256 + 2 = 514.)
-	local g_sig = ffi.gc(ffi.cast("struct mt_sig *", C.malloc(514)), C.free)
-
-	-- scratch buffer for signature as seen by model (autoconverted)
-	local m_sig = ffi.gc(ffi.cast("struct mt_sig *", C.malloc(514)), C.free)
-
-	return function(dm, mm, types, _, static_alloc)
-		local conv, npc, nc = nil, 0, 0
-		types:sigof(g_sig, mm)
-		types:autoconvsig(m_sig, mm)
-
-		if g_sig ~= m_sig then
-			conv, npc, nc = driver.mcall_conv(g_sig, m_sig, static_alloc)
-		end
-
-		-- TODO: cache mm.impl:create(m_sig)
-		driver.mcall(dm, mm.model.impl:create(m_sig), conv, npc, nc)
 	end
 end
 
 ---- public api ----------------------------------------
 
-function plan_mt.__index:finalize(def, opt)
-	self.finalize = function() error("plan:finalize() called twice") end
-	local dsyms = C.fhk_is_debug() and dsyms_intern(opt.static_alloc)
-	local create_mod = create_model_func()
-	local obtain, release = arena_pool()
+local function plan()
+	return setmetatable({
+		subgraphs = {},
+		solvers   = {}
+	}, plan_mt)
+end
 
-	for _,s in ipairs(self.subgraphs) do
-		s:create_solvers(
-			def,
-			-- TODO: virtuals table (virtual handles will be shared even for models, even if
-			-- the models aren't)
-			create_mod,
-			opt.static_alloc,
-			opt.runtime_alloc,
-			dsyms,
-			obtain, release
-		)
-	end
+function plan_mt.__index:compile(...)
+	compiler(...):compile_plan(self)
 end
 
 local function subgraph(...)
@@ -871,9 +941,8 @@ end
 --                          ->  true           group maps `name` as computed
 --                          ->  type, create   group maps `name` as given
 --
---         * create(dv, gen, static_alloc, runtime_alloc)
---                                             create mapping on dv.
---                                             it's safe to store aux data in gen[my_object]
+--         * create(dv, umem)                  create mapping on dv.
+--                                             it's safe to store aux data in umem[my_object]
 --
 --    group:map_model(name) ->  nil            group doesn't map `name`
 --                          ->  true           group maps `name` (ie. the model belongs in the group)
@@ -891,38 +960,43 @@ function subgraph_mt.__index:include(graph)
 end
 
 function subgraph_mt.__index:solver()
-	if self._graph then
-		error("Common subgraph has already been selected; can't define a new solver")
-	end
-
 	local solver = setmetatable({}, solver_mt)
 	table.insert(self._solvers, solver)
-
 	return solver
 end
 
-function subgraph_mt.__index:solve(...)
-	return self:solver():solve(...)
+function plan_mt.__index:add_solver(solver)
+	local template = solver_template()
+	self.solvers[solver] = template
+	return template
 end
 
--- solve(var, {...})
--- solve({var1, var2, ..., varN}, {...})  -- options apply to all vars
-function solver_mt.__index:solve(var, opt)
-	opt = opt or {}
+function plan_mt.__index:solver(subgraph, ...)
+	return self:add_solver(subgraph:solver():solve(...))
+end
 
-	if type(var) == "table" then
-		for _,v in ipairs(var) do
-			self:solve(v, opt)
+function solver_mt.__index:solve(...)
+	for _,x in ipairs({...}) do
+		if type(x) == "string" then
+			self:add(x)
+		else
+			for _,name in ipairs(x) do
+				self:add(name, x)
+			end
 		end
-		return self
 	end
 
+	return self
+end
+
+function solver_mt.__index:add(name, opt)
+	opt = opt or {}
 	local ctype = opt.ctype and ffi.typeof(opt.ctype)
 
 	-- TODO: opt.single - take a single result, inline it in the struct
 
 	table.insert(self, {
-		name   = var,
+		name   = name,
 		alias  = opt.alias,
 
 		-- if you want a custom subset.
@@ -941,36 +1015,6 @@ function solver_mt.__index:solve(var, opt)
 		-- all your pointers will be void *).
 		ctype  = ctype
 	})
-
-	return self
-end
-
-function solver_mt.__index:create()
-	if self._f then
-		error("create() called twice on this solver")
-	end
-
-	-- load used here to make luajit always compile a new root trace
-	-- (see eg. https://github.com/luafun/luafun/pull/33)
-	self._f = load([[
-		local _make_shape, _make_solver, _driver, _obtain, _release
-
-		return function(state)
-			local arena = _obtain()
-			local shape = _make_shape(state, arena)
-			local solver, res = _make_solver(state, shape, arena)
-			local err = _driver(state, solver, arena)
-			_release(arena)
-			if err then error(err) end
-			return res
-		end
-	]], nil, nil, {
-		obtain = pool_obtain,
-		release = pool_release,
-		error = error
-	})()
-
-	return self._f
 end
 
 function solver_mt:__tostring()
@@ -984,5 +1028,6 @@ end
 --------------------------------------------------------------------------------
 
 return {
-	create = plan
+	compiler = compiler,
+	create   = plan
 }

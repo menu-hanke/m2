@@ -82,7 +82,9 @@ function testbuilder_mt.__index:from_def(graph)
 	return self
 end
 
-function testbuilder_mt.__index:runner(G)
+function testbuilder_mt.__index:runner(plan)
+	local G = plan:subgraph()
+
 	if #self.auto_edges > 0 then
 		G:edge(mapping.match_edges(self.auto_edges))
 	end
@@ -98,7 +100,7 @@ function testbuilder_mt.__index:runner(G)
 	local solvers = {}
 
 	for name,solver in pairs(self.solvers) do
-		solvers[name] = solver:runner(G, self.check)
+		solvers[name] = solver:runner(plan, G, self.check)
 	end
 
 	return function(case)
@@ -208,14 +210,14 @@ local function checkv_eps(buf, values, eps)
 	return errors
 end
 
-function testsolver_mt.__index:runner(G, check)
+function testsolver_mt.__index:runner(plan, G, check)
 	local solver = G:solver()
 
 	for _,var in ipairs(self) do
-		solver:solve(var.name, var)
+		solver:add(var.name, var)
 	end
 
-	solver = solver:create()
+	solver = plan:add_solver(solver)
 
 	return function(data, params)
 		params._solver_anchor = {}
@@ -348,7 +350,7 @@ end
 function session_def_mt.__index:finalize()
 	setmetatable(self, session_g_mt)
 
-	self.plan:finalize(self.def, {
+	self.plan:compile(self.def, {
 		static_alloc = self.debugger.static_alloc,
 		runtime_alloc = self.debugger.runtime_alloc
 	})
@@ -401,7 +403,7 @@ local function main(args)
 		for _,t in ipairs(args.tests) do
 			local def = cjson.decode(io.open(t):read("*a"))
 			table.insert(testers, {
-				runner = testbuilder(check):from_def(def.graph):runner(session.plan:subgraph()),
+				runner = testbuilder(check):from_def(def.graph):runner(session.plan),
 				cases  = def.testcases,
 				name   = t
 			})

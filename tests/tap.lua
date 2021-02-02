@@ -1,3 +1,13 @@
+local function fails(f, err)
+	if type(f) == "string" then
+		return function(g) return fails(g, f) end
+	end
+
+	local ok, mes = pcall(f)
+	if ok then return false end
+	return (not err) or mes:match(err)
+end
+
 local env_mt = {
 	__newindex = function(self, k, v)
 		if self._only and not self._only[k] then
@@ -9,7 +19,7 @@ local env_mt = {
 	end,
 
 	__index = setmetatable({
-		fails = function(f) return not pcall(f) end
+		fails = fails
 	}, {__index=_G})
 }
 

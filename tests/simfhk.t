@@ -60,13 +60,13 @@ end, function()
 		:edge(m2.fhk.match_edges { {"=>%1", m2.fhk.ident }})
 		:given(m2.fhk.group("s", m2.fhk.struct_mapper(struct_ct, "inst")))
 	
-	local solver_unbound = sg_unbound:solve("s#z"):solve("s#w"):create()
+	local solver_unbound = m2.fhk.solver(sg_unbound, "s#z", "s#w")
 	
 	local sg_bound = m2.fhk.subgraph()
 		:edge(m2.fhk.match_edges { {"=>%1", m2.fhk.ident }})
 		:given(m2.fhk.group("s", m2.fhk.struct_mapper(struct_ct, struct)))
 	
-	local solver_bound = sg_bound:solve("s#z"):solve("s#w"):create()
+	local solver_bound = m2.fhk.solver(sg_bound, "s#z", "s#w")
 	
 	m2.on("test", function()
 		local res_unbound = solver_unbound({inst=struct})
@@ -91,13 +91,13 @@ end, function()
 		:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
 		:given(m2.fhk.group("s", m2.fhk.soa_mapper(soa_ct, "inst")))
 	
-	local solver_unbound = sg_unbound:solve({"s#z", "s#w"}):create()
+	local solver_unbound = m2.fhk.solver(sg_unbound, "s#z", "s#w")
 
 	local sg_bound = m2.fhk.subgraph()
 		:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
 		:given(m2.fhk.group("s", m2.fhk.soa_mapper(soa_ct, soa)))
 	
-	local solver_bound = sg_bound:solve({"s#z", "s#w"}):create()
+	local solver_bound = m2.fhk.solver(sg_bound, "s#z", "s#w")
 
 	m2.on("test", function()
 		soa:alloc(3)
@@ -143,7 +143,7 @@ end, function()
 		:given(m2.fhk.group("plot", m2.fhk.struct_mapper(Plot, plot)))
 		:given(m2.fhk.group("tree", m2.fhk.soa_mapper(Trees, trees)))
 	
-	local solver = subgraph:solve("plot#ba"):create()
+	local solver = m2.fhk.solver(subgraph, "plot#ba")
 
 	m2.on("test", function()
 		trees:alloc(3)
@@ -160,32 +160,35 @@ end, function()
 end)
 
 test_missing_model = _(function() end, function()
-	m2.fhk.subgraph()
-		:edge(m2.fhk.match_edges { {"=>%1", m2.fhk.ident }})
-		:given(m2.fhk.group("g", unmapped))
-		:solve("g#x")
-		:create()
+	m2.fhk.solver(
+		m2.fhk.subgraph()
+			:edge(m2.fhk.match_edges { {"=>%1", m2.fhk.ident }})
+			:given(m2.fhk.group("g", unmapped)),
+		"g#x"
+	)
 	
-	return fails
+	return fails "inconsistent subgraph: 'g#x' was not pruned"
 end)
 
 test_missing_var = _(gmodel_gx_Const(), function()
-	m2.fhk.subgraph()
-		:edge(m2.fhk.match_edges {{"=>%1", m2.fhk.ident}})
-		:given(m2.fhk.group("g", unmapped))
-		:solve("g#y")
-		:create()
+	m2.fhk.solver(
+		m2.fhk.subgraph()
+			:edge(m2.fhk.match_edges {{"=>%1", m2.fhk.ident}})
+			:given(m2.fhk.group("g", unmapped)),
+		"g#y"
+	)
 	
-	return fails
+	return fails "inconsistent subgraph: 'g#y' was not pruned"
 end)
 
 test_missing_edge = _(gmodel_gx_Const(), function()
-	m2.fhk.subgraph()
-		:given(m2.fhk.group("g", unmapped))
-		:solve("g#x")
-		:create()
+	m2.fhk.solver(
+		m2.fhk.subgraph()
+			:given(m2.fhk.group("g", unmapped)),
+		"g#x"
+	)
 	
-	return fails
+	return fails "unmapped edge"
 end)
 
 test_const_missing_type = _(function()
@@ -194,32 +197,35 @@ test_const_missing_type = _(function()
 		impl.Const(123)
 	}
 end, function()
-	m2.fhk.subgraph()
-		:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
-		:given(m2.fhk.group("g", unmapped))
-		:solve("g#x")
-		:create()
+	m2.fhk.solver(
+		m2.fhk.subgraph()
+			:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+			:given(m2.fhk.group("g", unmapped)),
+		"g#x"
+	)
 	
-	return fails
+	return fails "can't determine unique return type for 'g#x'"
 end)
 
 test_wrong_type = _(gmodel_gx_Const("uint64_t"), function()
-	m2.fhk.subgraph()
-		:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
-		:given(m2.fhk.group("g", unmapped))
-		:solve("g#x", {ctype="double"})
-		:create()
+	m2.fhk.solver(
+		m2.fhk.subgraph()
+			:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+			:given(m2.fhk.group("g", unmapped)),
+		{ "g#x", ctype="double" }
+	)
 	
 	-- Note: when auto conversions for returns are implemented, this test should pass instead
-	return fails
+	return fails "conflicting types for 'g#x'"
 end)
 
 test_const_unmapped = _(gmodel_gx_Const(), function()
-	local solver = m2.fhk.subgraph()
-		:edge(m2.fhk.match_edges { {"=>%1", m2.fhk.ident }})
-		:given(m2.fhk.group("g", unmapped))
-		:solve("g#x")
-		:create()
+	local solver = m2.fhk.solver(
+		m2.fhk.subgraph()
+			:edge(m2.fhk.match_edges { {"=>%1", m2.fhk.ident }})
+			:given(m2.fhk.group("g", unmapped)),
+		"g#x"
+	)
 	
 	m2.on("test", function()
 		local result = solver()
@@ -228,25 +234,27 @@ test_const_unmapped = _(gmodel_gx_Const(), function()
 end)
 
 test_dupe_mapper = _(gmodel_gx_Const(), function()
-	m2.fhk.subgraph()
-		:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
-		:given(m2.fhk.group("g", unmapped))
-		:given(m2.fhk.group("g", unmapped))
-		:solve("g#x")
-		:create()
+	m2.fhk.solver(
+		m2.fhk.subgraph()
+			:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+			:given(m2.fhk.group("g", unmapped))
+			:given(m2.fhk.group("g", unmapped)),
+		"g#x"
+	)
 	
-	return fails
+	return fails "mapping conflict"
 end)
 
 test_dupe_edge = _(gmodel_gx_Const(), function()
-	m2.fhk.subgraph()
-		:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
-		:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
-		:given(m2.fhk.group("g", unmapped))
-		:solve("g#x")
-		:create()
+	m2.fhk.solver(
+		m2.fhk.subgraph()
+			:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+			:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+			:given(m2.fhk.group("g", unmapped)),
+		"g#x"
+	)
 	
-	return fails
+	return fails "mapping conflict"
 end)
 
 test_include_subgraph = _(gmodel_gx_Const(), function()
@@ -257,9 +265,7 @@ test_include_subgraph = _(gmodel_gx_Const(), function()
 		:include(sub1)
 		:edge(m2.fhk.match_edges {{"=>%1", m2.fhk.ident}})
 	
-	local solver = sub2
-		:solve("g#x")
-		:create()
+	local solver = m2.fhk.solver(sub2, "g#x")
 	
 	m2.on("test", function()
 		local result = solver()
@@ -278,11 +284,12 @@ test_derive = _(function()
 		impl.Lua("models", "id")
 	}
 end, function()
-	local solver = m2.fhk.subgraph()
-		:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
-		:given(m2.fhk.group("g", unmapped))
-		:solve("g#z")
-		:create()
+	local solver = m2.fhk.solver(
+		m2.fhk.subgraph()
+			:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+			:given(m2.fhk.group("g", unmapped)),
+		"g#z"
+	)
 	
 	m2.on("test", function()
 		assert(solver().g_z[0] == 123)
@@ -311,11 +318,12 @@ end, function()
 	v:newband("x")
 	v.x[0] = 4; v.x[1] = 5; v.x[2] = 6
 
-	local solver = m2.fhk.subgraph()
-		:given(m2.fhk.group("g", m2.fhk.struct_mapper(g_ct, g)))
-		:given(m2.fhk.group("v", m2.fhk.soa_mapper(v_ct, v)))
-		:solve("g#sum")
-		:create()
+	local solver = m2.fhk.solver(
+		m2.fhk.subgraph()
+			:given(m2.fhk.group("g", m2.fhk.struct_mapper(g_ct, g)))
+			:given(m2.fhk.group("v", m2.fhk.soa_mapper(v_ct, v))),
+		"g#sum"
+	)
 	
 	m2.on("test", function()
 		assert(solver().g_sum[0] == 100*(4+5+6))
@@ -369,11 +377,12 @@ end, function()
 
 	local g = g_ct({f32=-1, f64=1, u8=5})
 
-	local solver = m2.fhk.subgraph()
-		:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
-		:given(m2.fhk.group("g", m2.fhk.struct_mapper(g_ct, g)))
-		:solve({"g#x", "g#y", "g#z"})
-		:create()
+	local solver = m2.fhk.solver(
+		m2.fhk.subgraph()
+			:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+			:given(m2.fhk.group("g", m2.fhk.struct_mapper(g_ct, g))),
+		"g#x", "g#y", "g#z"
+	)
 	
 	m2.on("test", function()
 		local solution = solver()
@@ -409,11 +418,12 @@ end, function()
 	v.f32[0] = 1; v.f32[1] = 2; v.f32[2] = 3;
 	v.u8[0] = 1; v.u8[1] = 2; v.u8[2] = 3;
 
-	local solver = m2.fhk.subgraph()
-		:given(m2.fhk.group("g", unmapped))
-		:given(m2.fhk.group("v", m2.fhk.soa_mapper(v_ct, v)))
-		:solve({"g#x", "g#y"})
-		:create()
+	local solver = m2.fhk.solver(
+		m2.fhk.subgraph()
+			:given(m2.fhk.group("g", unmapped))
+			:given(m2.fhk.group("v", m2.fhk.soa_mapper(v_ct, v))),
+		"g#x", "g#y"
+	)
 
 	m2.on("test", function()
 		local solution = solver()
@@ -441,11 +451,12 @@ end, function()
 	v.x[3] = -4
 	v.x[4] = 5
 
-	local solver = m2.fhk.subgraph()
-		:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
-		:given(m2.fhk.group("v", m2.fhk.soa_mapper(v_ct, v)))
-		:solve("v#y", {subset="sub"})
-		:create()
+	local solver = m2.fhk.solver(
+		m2.fhk.subgraph()
+			:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+			:given(m2.fhk.group("v", m2.fhk.soa_mapper(v_ct, v))),
+		{ "v#y", subset="sub" }
+	)
 
 	local sub = m2.fhk.subset_builder()
 		:add(0, 2)
@@ -468,14 +479,15 @@ test_solver_fail_chain = _(function()
 		impl.Const(0)
 	}
 end, function()
-	local solver = m2.fhk.subgraph()
-		:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
-		:given(m2.fhk.group("g", unmapped))
-		:solve("g#x")
-		:create()
+	local solver = m2.fhk.solver(
+		m2.fhk.subgraph()
+			:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+			:given(m2.fhk.group("g", unmapped)),
+		"g#x"
+	)
 	
 	m2.on("test", function()
-		assert(fails(solver))
+		assert(fails(solver, "fhk failed: no chain with finite cost.*variable: g#x"))
 	end)
 end)
 
@@ -490,13 +502,14 @@ test_invalid_constraint = _(function()
 		impl.Const(0)
 	}
 end, function()
-	m2.fhk.subgraph()
-		:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
-		:given(m2.fhk.group("g", unmapped))
-		:solve("g#x")
-		:create()
+	m2.fhk.solver(
+		m2.fhk.subgraph()
+			:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+			:given(m2.fhk.group("g", unmapped)),
+		"g#x"
+	)
 	
-	return fails
+	return fails "set constraint isn't applicable"
 end)
 
 test_no_solution = _(function()
@@ -510,14 +523,15 @@ test_no_solution = _(function()
 		impl.Const(0)
 	}
 end, function()
-	local solver = m2.fhk.subgraph()
-		:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
-		:given(m2.fhk.group("g", unmapped))
-		:solve("g#y")
-		:create()
+	local solver = m2.fhk.solver(
+		m2.fhk.subgraph()
+			:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+			:given(m2.fhk.group("g", unmapped)),
+		"g#y"
+	)
 	
 	m2.on("test", function()
-		assert(fails(solver))
+		assert(fails(solver, "fhk failed: no chain with finite cost.*variable: g#y"))
 	end)
 end)
 
@@ -527,14 +541,15 @@ test_model_crash = _(function()
 		impl.Lua("models", "runtime_error")
 	}
 end, function()
-	local solver = m2.fhk.subgraph()
-		:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
-		:given(m2.fhk.group("g", unmapped))
-		:solve("g#y")
-		:create()
+	local solver = m2.fhk.solver(
+		m2.fhk.subgraph()
+			:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+			:given(m2.fhk.group("g", unmapped)),
+		"g#y"
+	)
 	
 	m2.on("test", function()
-		assert(fails(solver))
+		assert(fails(solver, "model crashed"))
 	end)
 end)
 
@@ -543,14 +558,29 @@ test_R_impl = _(function()
 		impl.R("models.r", "ret1")
 	}
 end, function()
-	local solver = m2.fhk.subgraph()
-		:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
-		:given(m2.fhk.group("g", m2.fhk.fixed_size(1)))
-		:solve("g#x")
-		:create()
+	local solver = m2.fhk.solver(
+		m2.fhk.subgraph()
+			:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+			:given(m2.fhk.group("g", m2.fhk.fixed_size(1))),
+		"g#x"
+	)
 	
 	m2.on("test", function()
 		local solution = solver()
 		assert(solution.g_x[0] == 1)
+	end)
+end)
+
+test_alias = _(gmodel_gx_Const(), function()
+	local solver = m2.fhk.solver(
+		m2.fhk.subgraph()
+			:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+			:given(m2.fhk.group("g", unmapped)),
+		{ "g#x", alias="var0" }
+	)
+
+	m2.on("test", function()
+		local solution = solver()
+		assert(solution.var0[0] == 123)
 	end)
 end)
