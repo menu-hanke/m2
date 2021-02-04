@@ -1,21 +1,27 @@
+local cli = require "cli"
 local plan = require "fhk.plan"
 local mapping = require "fhk.mapping"
 local ctypes = require "fhk.ctypes"
+local debugger = require "fhk.debugger"
 local ffi = require "ffi"
 local C = ffi.C
 
 local function inject(env, def)
 	local p = plan.create()
 
+	local compiler = {
+		static_alloc  = env.sim:allocator("static"),
+		runtime_alloc = env.sim:allocator("frame"),
+		trace         = cli.verbosity <= -2 and debugger.tracer
+	}
+
 	env.m2.on("env:prepare", function()
-		p:compile(def, {
-			static_alloc = env.sim:allocator("static"),
-			runtime_alloc = env.sim:allocator("frame")
-		})
+		p:compile(def, compiler)
 
 		-- these won't be needed any more, let them be gc'd
 		p = nil
 		def = nil
+		compiler = nil
 	end)
 
 	-- don't use misc.delegate here so `p` and `def` won't be kept alive
@@ -24,6 +30,7 @@ local function inject(env, def)
 		add_solver     = function(...) return p:add_solver(...) end,
 		solver         = function(...) return p:solver(...) end,
 		copylabels     = function(...) return def:copylabels(...) end,
+		tracer         = function(trace) compiler.trace = trace end,
 		group          = mapping.parallel_group,
 		struct_mapper  = mapping.struct_mapper,
 		soa_mapper     = mapping.soa_mapper,

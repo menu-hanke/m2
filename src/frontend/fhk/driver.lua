@@ -27,10 +27,6 @@ local fhkD_status_ct = ffi.metatype("fhkD_status", {
 	}
 })
 
--- Note: a global status will not cause a race condition. the status will be immediately
--- handled after solver return, so it doesn't matter if a recursive call/virtual overwrites it.
-local g_status = fhkD_status_ct()
-
 ---- driver loop ----------------------------------------
 
 local dvbuild_mt = { __index={} }
@@ -62,36 +58,37 @@ function dvbuild_mt.__index:model(idx, create)
 	self.s_models = math.max(self.s_models, idx+1)
 end
 
-function dvbuild_mt.__index:create_driver(alloc)
+function dvbuild_mt.__index:create_mapping(alloc)
 	local umem = umem()
 
-	local d_vars = ffi.cast("fhkD_given *",
+	local vars = ffi.cast("fhkD_given *",
 		alloc(ffi.sizeof("fhkD_given")*self.s_given, ffi.alignof("fhkD_given")))
 	
 	for i=0, self.s_given-1 do
 		if self.givens[i] then
-			self.givens[i](d_vars+i, umem)
+			vars[i].trace = false
+			self.givens[i](vars+i, umem)
 		end
 	end
 
-	local d_models = ffi.cast("fhkD_model *",
+	local models = ffi.cast("fhkD_model *",
 		alloc(ffi.sizeof("fhkD_model")*self.s_models, ffi.alignof("fhkD_model")))
 	
 	for i=0, self.s_models-1 do
 		if self.models[i] then
-			self.models[i](d_models+i, umem)
+			models[i].trace = false
+			self.models[i](models+i, umem)
 		end
 	end
 
-	local D = ffi.cast("fhkD_driver *",
-		alloc(ffi.sizeof("fhkD_driver"), ffi.alignof("fhkD_driver")))
+	local M = ffi.cast("fhkD_mapping *",
+		alloc(ffi.sizeof("fhkD_mapping"), ffi.alignof("fhkD_mapping")))
 	
-	
-	D.d_vars = d_vars
-	D.d_models = d_models
-	D.d_maps = nil -- TODO
+	M.vars = vars
+	M.models = models
+	M.maps = nil -- TODO
 
-	return D, umem
+	return M, umem
 end
 
 function umem_mt.__index:scalar(ctype, init)
@@ -135,23 +132,42 @@ function umem_mt.__index:ctype()
 	return self._ctype
 end
 
+local function continue_loop(opt)
+	local symbols, trace = opt.symbols, opt.trace
+	return function(D)
+		while true do
+			local status = C.fhkD_continue(D)
+
+			if status == C.FHKD_OK then
+				return
+			elseif status == C.FHKDL_TRACE then
+				trace(D, ctypes.status(D.tr_status))
+			elseif status < 0 then
+				return D.status:fmt_error(status, symbols)
+			else
+				assert(false)
+			end
+		end
+	end
+end
+
 -- opt:
---     alloc : alloc(size, align) -- note the memory must outlive the driver function
---     loop  : loop -- loop function
+--     alloc    : alloc(size, align) -- _static_ allocator, this must outlive the driver
+--     trace?   : driver tracer
+--     symbols? : var/model symbols for error messages
 --
 -- this generates a function that inits umem and hands control to the driver loop.
 -- note: this is per-subgraph, not per-solver.
 -- note: the solver must have a shape table set when entering the generated function, this function
 --       will error if the solver requests shape.
 function dvbuild_mt.__index:compile(opt)
-	local D, umem = self:create_driver(opt.alloc)
+	local M, umem = self:create_mapping(opt.alloc)
 	local caller = code.new()
 
 	caller:emit([[
 		local ffi = require "ffi"
 		local C, cast = ffi.C, ffi.cast
-		local driver, symbols, loop, g_status = driver, symbols, loop, g_status
-		local umem_ctp = ffi.typeof("$*", umem:ctype())
+		local M, loop, umem_ctp = M, loop, umem_ctp
 	]])
 
 	for i=1, #umem.fields do
@@ -159,41 +175,36 @@ function dvbuild_mt.__index:compile(opt)
 	end
 
 	local uct = umem:ctype()
+	assert(ffi.alignof(uct) <= 16)
+
 	caller:emitf([[
 		return function(state, solver, arena)
-			local u = cast(umem_ctp, C.arena_alloc(arena, %d, %d))
-	]], ffi.sizeof(uct), ffi.alignof(uct))
+			local D = C.fhkD_create_driver(M, %d, solver, arena)
+			local u = cast(umem_ctp, D.umem)
+	]], ffi.sizeof(uct))
 
 	for i,field in ipairs(umem.fields) do
 		caller:emitf("u.%s = __init_%d(state)", field.name, i)
 	end
 
-	-- TODO: FHKDL_* virtual callbacks
-	caller:emitf([[
-		while true do
-			local code = %s(solver, driver, g_status, arena, u)
-
-			if code == C.FHK_OK then
-				return
-			end
-
-			if code < 0 then
-				return g_status:fmt_error(code, symbols)
-			end
-
-			assert(false)
+	caller:emit([[
+			return loop(D)
 		end
-	end
-	]], opt.loop and "loop" or "C.fhkD_continue")
+	]])
 
-	return caller:compile({
+	local df = caller:compile({
 		require  = require,
-		loop     = opt.loop,
-		symbols  = opt.symbols,
-		driver   = D,
+		M        = M,
+		loop     = continue_loop(opt),
 		umem     = umem,
-		g_status = g_status
+		umem_ctp = ffi.typeof("$*", uct)
 	}, string.format("=(driverinit@%p)", self))()
+
+	if opt.trace and not opt.jit then
+		jit.off(df)
+	end
+
+	return df
 end
 
 ---- models calls ----------------------------------------
@@ -232,12 +243,12 @@ local function conv(g_sig, m_sig, alloc)
 	return mconv, np, n
 end
 
-local function mcall(dm, model, conv, np, n)
+local function mcall(dm, fp, model, conv, np, n)
 	dm.tag = C.FHKDM_MCALL
 	dm.m_npconv = np or 0
 	dm.m_nconv = n or 0
 	dm.m_conv = conv or nil
-	dm.m_fp = model.call
+	dm.m_fp = fp
 	dm.m_model = model
 	return dm
 end

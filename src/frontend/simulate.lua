@@ -14,8 +14,8 @@ local function main(args)
 	env:require_all(args.scripts or {})
 	env:prepare()
 
-	if args.instr then
-		local insn = env:load_insn(args.instr)
+	if args.instructions then
+		local insn = env:load_insn(args.instructions)
 
 		if args.input then
 			local sim = env.sim

@@ -5,12 +5,14 @@
 #include "../../model/conv.h"
 
 #include <stdint.h>
+#include <stdbool.h>
 
 typedef uint16_t fhkD_lhandle;
 
 // ---- varcalls ----------------------------------------
 
-typedef void (*fhkD_var_f)(fhk_solver *S, void *arg, fhk_idx idx, fhk_inst instance);
+struct fhkD_driver;
+typedef void *(*fhkD_var_f)(struct fhkD_driver *D, void *arg, fhk_eref vref);
 
 enum {
 	FHKDV_FP,
@@ -21,6 +23,7 @@ enum {
 
 typedef struct fhkD_given {
 	uint8_t tag;
+	bool trace;
 
 	// FHKDV_REF*
 	union {
@@ -64,6 +67,7 @@ typedef struct fhkD_conv {
 
 typedef struct fhkD_model {
 	uint8_t tag;
+	bool trace;
 
 	union {
 		// FHKDM_MCALL
@@ -98,6 +102,7 @@ enum {
 
 typedef struct fhkD_map {
 	uint8_t tag;
+	bool trace;
 
 	union {
 		// FHKDP_FP (TODO)
@@ -110,12 +115,12 @@ typedef struct fhkD_map {
 
 // ------------------------------------------------------------
 
-typedef struct fhkD_driver {
-	struct fhkD_given *d_vars; // note: only given. you must rearrange your vars so that given
-	                           //       variables come first
-	struct fhkD_model *d_models;
-	struct fhkD_map *d_maps;
-} fhkD_driver;
+typedef struct fhkD_mapping {
+	fhkD_given *vars;        // note: only given. you must rearrange your vars so that given
+	                         //       variables come first
+	fhkD_model *models;
+	fhkD_map *maps;
+} fhkD_mapping;
 
 enum {
 	FHKDE_MOD = -3,  // model call failed (model crashed etc., see model_error())
@@ -125,7 +130,8 @@ enum {
 
 	FHKDL_VAR,       // run a lua callback
 	FHKDL_MODEL,     //
-	FHKDL_MAP        //
+	FHKDL_MAP,       //
+	FHKDL_TRACE      //
 };
 
 typedef union fhkD_status {
@@ -148,4 +154,15 @@ typedef union fhkD_status {
 	};
 } fhkD_status;
 
-int32_t fhkD_continue(fhk_solver *S, fhkD_driver *D, fhkD_status *status, arena *A, void *umem);
+typedef struct fhkD_driver {
+	fhkD_mapping M;
+	fhk_solver *S;
+	arena *mem;
+	fhkD_status status;
+	fhk_status tr_status;
+	bool trace;
+	uint8_t umem[] __attribute__((aligned(16)));
+} fhkD_driver;
+
+fhkD_driver *fhkD_create_driver(fhkD_mapping *M, size_t n_umem, fhk_solver *S, arena *mem);
+int32_t fhkD_continue(fhkD_driver *D);

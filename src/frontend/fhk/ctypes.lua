@@ -69,6 +69,28 @@ ffi.metatype("fhk_solver", {
 	}
 })
 
+local inspect = {
+	costv = C.fhkSi_costv,
+	costm = C.fhkSi_costm,
+	G     = C.fhkSi_G,
+	shape = function(...)
+		local shape = C.fhkSi_shape(...)
+		return shape ~= C.FHK_NREF and shape or nil
+	end,
+	chain = function(...)
+		local chain = C.fhkSi_chain(...)
+		if chain.idx ~= C.FHK_NREF then
+			return chain.idx, chain.inst
+		end
+	end,
+	value = function(...)
+		local p = C.fhkSi_value(...)
+		if p ~= ffi.NULL then
+			return p
+		end
+	end
+}
+
 local fpop = {
 	[">="] = C.FHKC_GEF64,
 	["<="] = C.FHKC_LEF64
@@ -306,6 +328,7 @@ local function fmt_error(ei, syms)
 end
 
 return {
+	inspect     = inspect,
 	status_code = status_code,
 	status_arg  = status_arg,
 	status      = status,

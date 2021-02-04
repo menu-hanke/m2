@@ -301,14 +301,14 @@ function testgraph_mt.__index:driver_loop(S)
 		elseif code == C.FHKS_MAPCALL or code == C.FHKS_MAPCALLI then
 			local idx = code - C.FHKS_MAPCALL + 1 -- mapcall->1, mapcalli->2
 			local mp = arg.s_mapcall
-			mp.ss[0] = self.maps[mp.idx].maps[idx](mp.instance)
-		elseif code == C.FHKS_GVAL then
-			local gv = arg.s_gval
+			mp.ss[0] = self.maps[mp.mref.idx].maps[idx](mp.mref.inst)
+		elseif code == C.FHKS_VREF then
+			local vref = arg.s_vref
 			error(string.format("solver tried to evaluate non-given variable: %s:%d",
-				self.syms.vars[gv.idx], gv.instance))
+				self.syms.vars[vref.idx], vref.inst))
 		elseif code == C.FHKS_MODCALL then
 			local mc = arg.s_modcall
-			self.models[mc.idx].f(mc)
+			self.models[mc.mref.idx].f(mc)
 		end
 	end
 end

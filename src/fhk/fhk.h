@@ -14,6 +14,15 @@ typedef uint16_t fhk_grp;
 typedef uint16_t fhk_idx;
 typedef uint16_t fhk_inst;
 
+typedef struct fhk_eref {
+	fhk_idx idx;
+	fhk_inst inst;
+} fhk_eref;
+
+enum {
+	FHK_NREF = 0xffff
+};
+
 //       tag
 //      ^^^^^
 //      00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F 10 11 12 13 14 15 16 17 18 19 1A 1B 1C 1D 1E 1F
@@ -42,7 +51,7 @@ enum {
 	FHKS_SHAPE,              // s_shape                 call fhkS_shape(_table)
 	FHKS_MAPCALL,            // s_mapcall               write mapping to s_mapcall->ss
 	FHKS_MAPCALLI,           // s_mapcall               write inverse mapping to s_mapcall->ss
-	FHKS_GVAL,               // s_gval                  call fhkS_give(_all)
+	FHKS_VREF,               // s_vref                  call fhkS_give(_all)
 	FHKS_MODCALL,            // s_modcall               write values to return edges [np, np+nr)
 	FHK_ERROR                // s_ei                    stop
 };
@@ -51,24 +60,19 @@ enum {
 typedef union fhk_sarg {
 	uint64_t u64;
 
-	// FHKS_GVAL
-	struct {
-		fhk_idx idx;
-		fhk_inst instance;
-	} s_gval;
+	// FHKS_VREF
+	fhk_eref s_vref;
 
 	// FHKS_MAPCALL(I)
 	struct {
-		fhk_idx idx;
-		fhk_inst instance;
+		fhk_eref mref;
 		fhk_subset *ss;
 	} *s_mapcall;
 
 	// FHKS_MODCALL
 	struct {
 		uint8_t np, nr;
-		fhk_idx idx;
-		fhk_inst instance;
+		fhk_eref mref;
 		struct {
 			void *p;
 			size_t n;
@@ -91,7 +95,7 @@ typedef union fhk_sarg {
 
 static_assert(sizeof(fhk_sarg) == sizeof(uint64_t));
 
-#define fhk_gval    typeof(((fhk_sarg *)0)->s_gval)
+#define fhk_vref    typeof(((fhk_sarg *)0)->s_vref)
 #define fhk_modcall typeof(*((fhk_sarg *)0)->s_modcall)
 #define fhk_mcedge  typeof(*((fhk_modcall *)0)->edges)
 #define fhk_mapcall typeof(*((fhk_sarg *)0)->s_mapcall)
@@ -178,7 +182,7 @@ enum {
 	FHKR_ROOT  = 0x2,   // must include in subgraph (selection root)
 
 	// r_vars/r_models
-	FHKR_SKIP  = 0xffff // skipped from subgraph
+	FHKR_SKIP  = FHK_NREF // skipped from subgraph
 };
 
 // ---- graph builder ----------------------------------------
@@ -209,6 +213,15 @@ void fhkS_shape_table(fhk_solver *S, fhk_inst *shape);
 void fhkS_give(fhk_solver *S, fhk_idx xi, fhk_inst inst, void *vp);
 void fhkS_give_all(fhk_solver *S, fhk_idx xi, void *vp);
 void fhkS_use_mem(fhk_solver *S, fhk_idx xi, void *vp);
+
+// inspection functions (this is a private api and should probably be moved in its own file).
+// don't rely on these, they are only exposed for debugging.
+float fhkSi_costv(fhk_solver *S, fhk_idx xi, fhk_inst inst);
+float fhkSi_costm(fhk_solver *S, fhk_idx mi, fhk_inst inst);
+fhk_inst fhkSi_shape(fhk_solver *S, fhk_grp group);
+fhk_eref fhkSi_chain(fhk_solver *S, fhk_idx xi, fhk_inst inst);
+void *fhkSi_value(fhk_solver *S, fhk_idx xi, fhk_inst inst);
+fhk_graph *fhkSi_G(fhk_solver *S);
 
 fhk_subgraph *fhk_reduce(fhk_graph *G, arena *arena, uint8_t *v_flags, fhk_idx *fail);
 

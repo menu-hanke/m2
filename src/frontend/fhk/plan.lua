@@ -12,10 +12,14 @@ local C = ffi.C
 local plan_mt = { __index={} }
 local compiler_mt = { __index={} }
 local subgraph_mt = { __index={} }
+local subgraph_compiler_mt = { __index={} }
 local solver_mt = { __index={} }
 local mapping_mt = { __index={} }
 local solver_mapping_mt = { __index={} }
 local typing_mt = { __index={} }
+
+-- TODO huomenna:
+-- compiler_subgraph -> laiskoina(?) funktioina mapping, types, symbols, etc.
 
 -- given:     name -> group, type, create
 -- computed:  name -> group
@@ -394,7 +398,7 @@ end
 local function compiler(def, opt)
 	return setmetatable({
 		def             = def,
-		loop            = opt.loop,
+		trace           = opt.trace,
 		static_alloc    = opt.static_alloc,
 		runtime_alloc   = opt.runtime_alloc
 	}, compiler_mt)
@@ -434,6 +438,7 @@ function compiler_mt.__index:pool()
 		end,
 
 		release = function(arena)
+			arena:reset()
 			pool[#pool+1] = arena
 		end
 	}
@@ -462,23 +467,34 @@ function compiler_mt.__index:map_syms(G, mapping, index, alloc)
 	G:set_dsym(vsym, msym)
 end
 
-function compiler_mt.__index:mapping(subgraph)
-	local mapping = subgraph_mapping(subgraph)
+function subgraph_compiler_mt.__index:mapping()
+	if self._mapping then
+		return self._mapping, self._types
+	end
+
+	local mapping = subgraph_mapping(self.subgraph)
 
 	-- this includes virtuals (injected in def)
-	for name, mod in pairs(self.def.models) do
+	for name, mod in pairs(self.compiler.def.models) do
 		mapping:define_model(name, mod)
 	end
 
-	for _,var in pairs(subgraph:roots()) do
+	for _,var in pairs(self.subgraph:roots()) do
 		mapping:add_root(var)
 	end
 
 	mapping:sort()
-	return mapping
+	self._mapping = mapping
+	self._types = typing(mapping)
+	return mapping, self._types
 end
 
-function compiler_mt.__index:build_subgraph(mapping, types)
+function subgraph_compiler_mt.__index:reduced_subgraph()
+	if self._G then
+		return self._G, self._groups
+	end
+
+	local mapping, types = self:mapping()
 	local scratch = alloc.arena()
 	local D = ffi.gc(C.fhk_create_def(), C.fhk_destroy_def)
 
@@ -524,7 +540,7 @@ function compiler_mt.__index:build_subgraph(mapping, types)
 	-- this is done to have debug output in fhk_reduce().
 	-- ok to copy it in scratch space, it lives only for the fhk_reduce() call.
 	if C.fhk_is_debug() then
-		self:map_syms(G, mapping, function(e) return e.sup_idx end,
+		self.compiler:map_syms(G, mapping, function(e) return e.sup_idx end,
 			misc.delegate(scratch, scratch.alloc))
 	end
 
@@ -577,45 +593,82 @@ function compiler_mt.__index:build_subgraph(mapping, types)
 		end
 	end
 
-	local G = D:build(self.static_alloc(D:size(), ffi.alignof("fhk_graph")))
+	local G = D:build(self.compiler.static_alloc(D:size(), ffi.alignof("fhk_graph")))
 
 	if C.fhk_is_debug() then
 		-- this must be copied with static_alloc() since it should outlive G
-		self:map_syms(G, mapping, function(e) return e.sub_idx end, self.static_alloc)
+		self.compiler:map_syms(G, mapping, function(e) return e.sub_idx end,
+			self.compiler.static_alloc)
 	end
 
+	self._G = G
+	self._groups = sub_g
 	return G, sub_g
 end
 
-function compiler_mt.__index:compile_driver(mapping, types)
+function subgraph_compiler_mt.__index:symbols()
+	if self._symbols then
+		return self._symbols
+	end
+
+	local mapping = self:mapping()
 	local symbols = sym.symbols()
-	local builder = driver.builder()
 
 	for _,v in ipairs(mapping.vars) do
 		if v.sub_idx then
 			symbols.var[v.sub_idx] = v.name
-			if v.given then
-				builder:given(v.sub_idx, v.create)
-			end
 		end
 	end
 
 	for _,m in ipairs(mapping.models) do
 		if m.sub_idx then
-			symbols.model[m.sub_idx] = m.name
-			builder:model(m.sub_idx, self:create_model(m, types))
+			symbols.model[m.sub_idx] = m.model.name
+		end
+	end
+
+	self._symbols = symbols
+	return symbols
+end
+
+function subgraph_compiler_mt.__index:trace()
+	if self._trace ~= nil or not self.compiler.trace then
+		return self._trace or nil, self._trace_install
+	end
+
+	local trace, install = self.compiler.trace(self)
+	self._trace = trace or false
+	self._trace_install = install
+	return trace, install
+end
+
+function subgraph_compiler_mt.__index:driver()
+	if self._driver then
+		return self._driver
+	end
+
+	local mapping = self:mapping()
+	local builder = driver.builder()
+
+	for _,v in ipairs(mapping.vars) do
+		if v.sub_idx and v.given then
+			builder:given(v.sub_idx, self:create_var(v))
+		end
+	end
+
+	for _,m in ipairs(mapping.models) do
+		if m.sub_idx then
+			builder:model(m.sub_idx, self:create_model(m))
 		end
 	end
 
 	local driver = builder:compile {
-		loop    = self.loop,
-		alloc   = self.static_alloc,
-		symbols = symbols
+		alloc   = self.compiler.static_alloc,
+		trace   = self:trace(),
+		symbols = self:symbols()
 	}
 
-	local _, release = self:pool()
-
-	return code.new():emit([[
+	local _, release = self.compiler:pool()
+	local caller = code.new():emit([[
 		local driver, release, error = driver, release, error
 
 		return function(state, solver, arena)
@@ -628,9 +681,24 @@ function compiler_mt.__index:compile_driver(mapping, types)
 		release = release,
 		error   = error
 	}, string.format("=(subgraphdriver@%p)", driver))()
+
+	self._driver = caller
+	return caller
 end
 
-function compiler_mt.__index:create_model(m, types)
+function subgraph_compiler_mt.__index:create_var(v)
+	local _, install = self:trace()
+
+	return function(dv, umem)
+		v.create(dv, umem)
+
+		if install then
+			install("var", v, dv, umem)
+		end
+	end
+end
+
+function subgraph_compiler_mt.__index:create_model(m)
 	-- TODO: if model.impl is virtual, then we create a virtual model here.
 	---- C model creation below.
 	
@@ -642,7 +710,10 @@ function compiler_mt.__index:create_model(m, types)
 	-- caching separately for each caller (and implementing basic caching @ compiler level
 	-- doesn't prevent optimized caching in the caller)
 	
-	return function(dm)
+	local _, install = self:trace()
+	local _, types = self:mapping()
+	
+	return function(dm, umem)
 		-- scratch buffer for signature as seen by graph (max mt_sig size is 2*256 + 2 = 514.)
 		local g_sig = ffi.cast("struct mt_sig *", C.malloc(514))
 
@@ -652,14 +723,22 @@ function compiler_mt.__index:create_model(m, types)
 		types:sigof(g_sig, m)
 		types:autoconvsig(m_sig, m)
 
-		dm:set_mcall(m.model.impl:create(m_sig), driver.conv(g_sig, m_sig, self.static_alloc))
+		local impl = m.model.impl:create(m_sig)
+		dm:set_mcall(impl.call, impl, driver.conv(g_sig, m_sig, self.compiler.static_alloc))
+
+		if install then
+			install("model", m, dm, umem)
+		end
 
 		C.free(g_sig)
 		C.free(m_sig)
 	end
 end
 
-local function solver_mapping(solver, mapping, types, groups)
+function subgraph_compiler_mt.__index:solver_mapping(solver)
+	local mapping, types = self:mapping()
+	local _, groups = self:reduced_subgraph()
+
 	local def = {}
 
 	for _,v in ipairs(solver) do
@@ -710,8 +789,10 @@ function solver_mapping_mt.__index:result_ctype()
 	return ffi.typeof(string.format("struct { %s }", table.concat(fields, "")), unpack(ctypes))
 end
 
-function compiler_mt.__index:compile_solver_init(G, def)
-	local req = ffi.cast("struct fhk_req *", self.static_alloc(
+function subgraph_compiler_mt.__index:compile_solver_init(solver)
+	local def = self:solver_mapping(solver)
+
+	local req = ffi.cast("struct fhk_req *", self.compiler.static_alloc(
 		#def*ffi.sizeof("struct fhk_req"), ffi.alignof("struct fhk_req")
 	))
 
@@ -806,14 +887,19 @@ function compiler_mt.__index:compile_solver_init(G, def)
 	return out:compile({
 		require = require,
 		req     = req,
-		G       = G,
+		G       = self:reduced_subgraph(),
 		res_ctp = ffi.typeof("$*", res_ct),
-		alloc   = self.runtime_alloc,
+		alloc   = self.compiler.runtime_alloc,
 		def     = def
 	}, string.format("=(initsolver@%p)", def))()
 end
 
-function compiler_mt.__index:compile_init(groups)
+function subgraph_compiler_mt.__index:init()
+	if self._init then
+		return self._init
+	end
+
+	local _, groups = self:reduced_subgraph()
 	local out = code.new()
 
 	local shapef = {}
@@ -845,29 +931,20 @@ function compiler_mt.__index:compile_init(groups)
 		end
 	]])
 
-	return out:compile({
+	self._init = out:compile({
 		require = require,
 		shapef  = shapef,
-		obtain  = self:pool()
+		obtain  = self.compiler:pool()
 	}, string.format("=(subgraphinit@%p)", groups))()
+
+	return self._init
 end
 
 function compiler_mt.__index:compile_subgraph(subgraph)
-	local mapping = self:mapping(subgraph)
-	local types = typing(mapping)
-	local G, groups = self:build_subgraph(mapping, types)
-
-	local init = self:compile_init(groups)
-	local driver = self:compile_driver(mapping, types)
-
-	local solvers = {}
-
-	for _,solver in ipairs(subgraph._solvers) do
-		local def = solver_mapping(solver, mapping, types, groups)
-		solvers[solver] = self:compile_solver_init(G, def)
-	end
-
-	return init, driver, solvers
+	return setmetatable({
+		compiler = self,
+		subgraph = subgraph
+	}, subgraph_compiler_mt)
 end
 
 local function solver_template()
@@ -891,13 +968,20 @@ local function bind_solver(template, init, create, driver)
 	code.setupvalue(template, "_driver", driver)
 end
 
+function subgraph_compiler_mt.__index:bind(template, solver)
+	bind_solver(
+		template,
+		self:init(),
+		self:compile_solver_init(solver),
+		self:driver()
+	)
+end
+
 function compiler_mt.__index:compile_plan(plan)
 	for _,subgraph in ipairs(plan.subgraphs) do
-		if #subgraph._solvers > 0 then
-			local init, driver, solvers = self:compile_subgraph(subgraph)
-			for solver,create in pairs(solvers) do
-				bind_solver(plan.solvers[solver], init, create, driver)
-			end
+		local subcompiler = self:compile_subgraph(subgraph)
+		for _,solver in ipairs(subgraph._solvers) do
+			subcompiler:bind(plan.solvers[solver], solver)
 		end
 	end
 end

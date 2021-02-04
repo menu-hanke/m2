@@ -26,9 +26,6 @@
 #define A_SARG(...)      (((fhk_sarg){__VA_ARGS__}).u64 << 16)
 #define E_META(j,T,V)    .tag##j=FHKEI_##T,.v##j=(V)
 
-// empty group marker
-#define SHAPE_EMPTY      0xffff
-
 // subset and iterator representation
 //                                        exclusive   inclusive
 //                                           vvvvvv   vvvvv
@@ -157,7 +154,6 @@ struct fhk_solver {
 
 static_assert(offsetof(struct fhk_solver, C) == 0);
 
-
 // S_* functions are solver functions that may yield.
 // these must be called from the solver coroutine (unless you can be sure it won't yield).
 static void S_solve(struct fhk_solver *restrict S);
@@ -276,10 +272,10 @@ void fhkS_shape(struct fhk_solver *S, fhk_grp group, fhk_inst shape){
 	if(UNLIKELY(!S->g_shape)){
 		S->g_shape = arena_alloc(S->arena, S->G.ng * sizeof(*S->g_shape), alignof(*S->g_shape));
 		for(xinst i=0;i<S->G.ng;i++)
-			S->g_shape[i] = SHAPE_EMPTY;
+			S->g_shape[i] = FHK_NREF;
 	}
 
-	if(UNLIKELY(S->g_shape[group] != SHAPE_EMPTY)){
+	if(UNLIKELY(S->g_shape[group] != FHK_NREF)){
 		tracefail("overwrite S->g_shape[%u]: %u -> %u", group, S->g_shape[group], shape);
 		X_exit(S, FHK_ERROR | A_SARG(.s_ei = {
 				.ecode = FHKE_REWRITE,
@@ -337,7 +333,7 @@ void fhkS_give(struct fhk_solver *S, fhk_idx xi, fhk_inst inst, void *vp){
 	//       yield FHKS_SHAPE, then copy the variable. (this is similar to how X_exit works)
 	//       (you don't have to use the solver stack, you can allocate a new one via the arena,
 	//       scratch buffers, malloc, etc...)
-	if(UNLIKELY(!S->g_shape || S->g_shape[x->group] == SHAPE_EMPTY)){
+	if(UNLIKELY(!S->g_shape || S->g_shape[x->group] == FHK_NREF)){
 		tracefail("%s: missing shape for group %u (shape table: %p)", fhk_Dvar(&S->G, xi),
 				x->group, S->g_shape);
 		X_exit(S, FHK_ERROR | A_SARG(.s_ei = {
@@ -410,6 +406,55 @@ void fhkS_use_mem(struct fhk_solver *S, fhk_idx xi, void *vp){
 	S->vars[xi].vp = vp;
 }
 
+// inspection functions - use these for debugging only, they expose solver internals and are slow
+
+float fhkSi_costv(struct fhk_solver *S, fhk_idx xi, fhk_inst inst){
+	ssp *sp = S->vars[xi].sp;
+	return LIKELY(sp) ? sp[inst].cost : 0;
+}
+
+float fhkSi_costm(struct fhk_solver *S, fhk_idx mi, fhk_inst inst){
+	ssp *sp = S->models[mi].sp;
+	return LIKELY(sp) ? sp[inst].cost : 0;
+}
+
+fhk_inst fhkSi_shape(struct fhk_solver *S, fhk_grp group){
+	if(UNLIKELY(!S->g_shape))
+		return FHK_NREF;
+	return S->g_shape[group];
+}
+
+fhk_eref fhkSi_chain(struct fhk_solver *S, fhk_idx xi, fhk_inst inst){
+	ssp *sp = S->vars[xi].sp;
+	if(UNLIKELY(!sp || !(sp[inst].state & SP_CHAIN)))
+		return (fhk_eref){.idx=FHK_NREF, .inst=FHK_NREF};
+
+	return (fhk_eref){
+		.idx = S->G.vars[xi].models[SP_CHAIN_EI(sp[inst])].idx,
+		.inst = SP_CHAIN_INSTANCE(sp[inst])
+	};
+}
+
+void *fhkSi_value(struct fhk_solver *S, fhk_idx xi, fhk_inst inst){
+	struct fhk_var *x = &S->G.vars[xi];
+
+	if(LIKELY(V_COMPUTED(x))){
+		ssp *sp = S->vars[xi].sp;
+		if(UNLIKELY(!sp || !(sp[inst].state & SP_VALUE)))
+			return NULL;
+	}else{
+		uint64_t *gs = S->vars[xi].gs;
+		if(UNLIKELY(gs != GS_ALL && !bm_isset(gs, inst)))
+			return NULL;
+	}
+
+	return S->vars[xi].vp + x->size*inst;
+}
+
+struct fhk_graph *fhkSi_G(struct fhk_solver *S){
+	return &S->G;
+}
+
 // the use of restrict is valid here because modifying the graph/solver is not allowed
 // this basically tells the compiler that user callbacks won't touch S
 // (unfortunately there's no way to tell the compiler S won't be written to at all,
@@ -474,10 +519,10 @@ __attribute__((pure))
 static size_t S_shape(struct fhk_solver *restrict S, xgrp group){
 	assert(group < S->G.ng);
 
-	if(UNLIKELY(!S->g_shape || S->g_shape[group] == SHAPE_EMPTY)){
+	if(UNLIKELY(!S->g_shape || S->g_shape[group] == FHK_NREF)){
 		fhkJ_yield(&S->C, FHKS_SHAPE | A_SARG(.s_group=group));
 
-		if(UNLIKELY(!S->g_shape || S->g_shape[group] == SHAPE_EMPTY)){
+		if(UNLIKELY(!S->g_shape || S->g_shape[group] == FHK_NREF)){
 			tracefail("no shape table entry for group %zu (shape table: %p)", group, S->g_shape);
 			S_exit(S, FHK_ERROR | A_SARG(.s_ei = {
 					.ecode = FHKE_INVAL,
@@ -517,8 +562,10 @@ static fhk_subset S_umap(struct fhk_solver *restrict S, xmap map, xinst inst){
 		return cm[inst];
 
 	fhk_mapcall mp = {
-		.idx = map & UMAP_INDEX,
-		.instance = inst,
+		.mref = {
+			.idx = map & UMAP_INDEX,
+			.inst = inst
+		},
 		.ss = &cm[inst]
 	};
 
@@ -1203,7 +1250,7 @@ static void S_get_given_ssne(struct fhk_solver *restrict S, xidx xi, fhk_subset 
 		// asymptotically this is not optimal but the test is so fast it doesn't matter
 		// (asking for the variable is so much slower)
 		while(bm_find0_ssne(gs, &inst, ss)){
-			fhkJ_yield(&S->C, FHKS_GVAL | A_SARG(.s_gval={.idx=xi, .instance=inst}));
+			fhkJ_yield(&S->C, FHKS_VREF | A_SARG(.s_vref={.idx=xi, .inst=inst}));
 			if(UNLIKELY(!bm_isset(gs, inst)))
 				goto fail;
 		}
@@ -1212,7 +1259,7 @@ static void S_get_given_ssne(struct fhk_solver *restrict S, xidx xi, fhk_subset 
 	}
 
 	inst = SS_INDEX(ss_first_nonempty(ss));
-	fhkJ_yield(&S->C, FHKS_GVAL | A_SARG(.s_gval={.idx=xi, .instance=inst}));
+	fhkJ_yield(&S->C, FHKS_VREF | A_SARG(.s_vref={.idx=xi, .inst=inst}));
 	if(UNLIKELY(!S->vars[xi].gs))
 		goto fail;
 
@@ -1300,8 +1347,8 @@ static void S_compute_model(struct fhk_solver *restrict S, xidx mi, xinst inst, 
 
 	struct fhk_model *m = &S->G.models[mi];
 	fhk_modcall *cm = alloca(sizeof(*cm) + (m->n_param+m->n_return)*sizeof(*cm->edges));
-	cm->idx = mi;
-	cm->instance = inst;
+	cm->mref.idx = mi;
+	cm->mref.inst = inst;
 	cm->np = m->n_param;
 	cm->nr = m->n_return;
 	sc_mask sc_used = 0;

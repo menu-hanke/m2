@@ -6,13 +6,153 @@ local ctypes = require "fhk.ctypes"
 local def = require "fhk.def"
 local plan = require "fhk.plan"
 local mapping = require "fhk.mapping"
+local conv = require "model.conv"
 local ffi = require "ffi"
+local C = ffi.C
 
----- test runner ----------------------------------------
-
+local tracer_mt = { __index={} }
 local testgroup_mt = { __index={} }
 local testsolver_mt = { __index={} }
 local testbuilder_mt = { __index={} }
+
+---- inspect ----------------------------------------
+
+local function Gnode_proxy(func)
+	return ffi.metatype([[
+		struct {
+			fhk_graph *G;
+			fhk_idx idx;
+		}
+	]], {
+		__index = function(self, key)
+			return func[key] or func.ref(self)[key]
+		end
+	})
+end
+
+local inspectv, inspectm = {}, {}
+
+inspectv = Gnode_proxy {
+	ref = function(self)
+		return self.G.vars[self.idx]
+	end
+}
+
+inspectm = Gnode_proxy {
+	ref = function(self)
+		return self.G.models[self.idx]
+	end,
+
+	param = function(self, i)
+		local edge = self.params[i]
+
+		return {
+			x   = inspectv(self.G, edge.idx),
+			ei  = edge.edge_param,
+			map = edge.map
+		}
+	end,
+
+	ret = function(self, i)
+		local edge = self.returns[i]
+
+		return {
+			x   = inspectv(self.G, edge.idx),
+			map = edge.map
+		}
+	end
+}
+
+---- tracer ----------------------------------------
+
+local function trace_all(_, _, e)
+	e.trace = true
+end
+
+local function tracer(subgraph)
+	local tracer = setmetatable({
+		symbols = subgraph:symbols(),
+		ctypes  = {}
+	}, tracer_mt)
+
+	local _, types = subgraph:mapping()
+	for idx,name in pairs(tracer.symbols.var) do
+		tracer.ctypes[idx] = ffi.typeof("$*", conv.ctypeof(types:typeof(name)))
+	end
+
+	return tracer, trace_all
+end
+
+function tracer_mt:__call(driver, status, arg)
+	if status == C.FHKS_VREF then
+		self:trace_vref(driver, arg.s_vref)
+	elseif status == C.FHKS_MODCALL then
+		self:trace_modcall(driver, arg.s_modcall)
+	end
+end
+
+function tracer_mt.__index:trace_vref(driver, vref)
+	local S = driver.S
+	local x = inspectv(ctypes.inspect.G(S), vref.idx)
+	local ctype = self.ctypes[vref.idx]
+	local value = {}
+
+	for i=0, ctypes.inspect.shape(S, x.group)-1 do
+		local vp = ctypes.inspect.value(S, vref.idx, i)
+		local s
+		if vp then
+			s = string.format("%6s", tostring(ffi.cast(ctype, vp)[0]):sub(1,6))
+			if i == vref.inst then
+				s = cli.bold(s)
+			end
+		else
+			s = i == vref.inst and cli.red "(none)" or "      "
+		end
+		table.insert(value, s)
+	end
+
+	io.stdout:write(
+		"< ",
+		string.format("%3d:%-3d", vref.idx, vref.inst),
+		cli.green(self.symbols.var[vref.idx]),
+		cli.yellow(" -> "),
+		"[ ",
+		table.concat(value, " "),
+		" ]\n"
+	)
+end
+
+function tracer_mt.__index:trace_modcall(driver, modcall)
+	local S = driver.S
+	local G = ctypes.inspect.G(S)
+	local mref = modcall.mref
+	local m = inspectm(G, mref.idx)
+	local output = {}
+
+	for i=modcall.np, modcall.np+modcall.nr-1 do
+		local xi = m.returns[i-modcall.np].idx
+		local ctype = self.ctypes[xi]
+		local vp = ffi.cast(ctype, modcall.edges[i].p)
+
+		table.insert(output, string.format("%s: [", cli.green(self.symbols.var[xi])))
+		for j=0, tonumber(modcall.edges[i].n)-1 do
+			table.insert(output, string.format("%6s", tostring(vp[j]):sub(1, 6)))
+		end
+		table.insert(output, "]")
+	end
+
+	io.stdout:write(
+		"m ",
+		string.format("%3d:%-3d", mref.idx, mref.inst),
+		cli.blue(self.symbols.model[mref.idx]),
+		cli.red(string.format(" (%f)", ctypes.inspect.costm(S, mref.idx, mref.inst))),
+		cli.yellow(" -> "),
+		table.concat(output, " "),
+		"\n"
+	)
+end
+
+---- test runner ----------------------------------------
 
 local function testbuilder(check)
 	return setmetatable({
@@ -351,8 +491,9 @@ function session_def_mt.__index:finalize()
 	setmetatable(self, session_g_mt)
 
 	self.plan:compile(self.def, {
-		static_alloc = self.debugger.static_alloc,
-		runtime_alloc = self.debugger.runtime_alloc
+		static_alloc  = self.debugger.static_alloc,
+		runtime_alloc = self.debugger.runtime_alloc,
+		trace         = cli.verbosity <= -2 and tracer
 	})
 
 	for _,f in ipairs(self._finalize_hooks) do
@@ -437,6 +578,7 @@ local flags, help = cli.def(function(opt)
 end)
 
 return {
+	tracer = tracer,
 	cli = {
 		main = main,
 		help = "[options]...\n\n"..help,

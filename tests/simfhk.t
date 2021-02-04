@@ -584,3 +584,44 @@ test_alias = _(gmodel_gx_Const(), function()
 		assert(solution.var0[0] == 123)
 	end)
 end)
+
+test_tracing = _(function()
+	model "g#model" {
+		params "g#y",
+		returns "g#x" *as "double",
+		impl.Lua("models", "id")
+	}
+end, function()
+	local num = 0
+
+	m2.fhk.tracer(function()
+		return function(D, status, arg)
+			if num == 0 then assert(status == ffi.C.FHKS_VREF and arg.s_vref.idx == 0) end
+			if num == 1 then assert(status == ffi.C.FHKS_MODCALL and arg.s_modcall.mref.idx == 0) end
+			if num > 1 then assert(false) end
+			num = num+1
+		end, function(_, _, e)
+			e.trace = true
+		end
+	end)
+
+	local g_ct = ffi.typeof [[
+		struct {
+			double y;
+		}
+	]]
+
+	local g = g_ct(0)
+
+	local solver = m2.fhk.solver(
+		m2.fhk.subgraph()
+			:edge(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+			:given(m2.fhk.group("g", m2.fhk.struct_mapper(g_ct, g))),
+		"g#x"
+	)
+
+	m2.on("test", function()
+		solver()
+		assert(num == 2)
+	end)
+end)

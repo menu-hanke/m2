@@ -5,7 +5,11 @@
 #include "driver.h"
 
 #include <assert.h>
+#include <stdalign.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 // this ensures that an fhk_modcall can be cast as mcall_s, ie. no conversions are required
 // between fhk/mcall modcalls
@@ -20,125 +24,152 @@ static_assert(
 static_assert(FHKS_MAPCALLI == (FHKS_MAPCALL|1));
 #define IS_INVERSE(p) ((p) & 1)
 
-#define D_DEF(S, D, s, a, U) fhk_solver *S, fhkD_driver *D, fhkD_status *s, arena *a, void *U
+static int32_t d_mcall(struct fhkD_driver *D, struct fhkD_model *dm, fhk_modcall *mc);
+static void d_vrefa(struct fhkD_driver *D, fhk_idx xi, void *ref);
 
-static int32_t d_mapcall(D_DEF(S, D, status, A, U), fhk_mapcall *mp, bool mp_inverse);
-static int32_t d_gval(D_DEF(S, D, status, A, U), fhk_idx xi, fhk_inst x_inst);
-static int32_t d_modcall(D_DEF(S, D, status, A, U), fhk_modcall *mc);
-static int32_t d_mcall(D_DEF(S, D, status, A, U), fhkD_model *dm, fhk_modcall *mc);
-static int32_t d_vrefa(D_DEF(S, D, status, A, U), fhk_idx xi, void *ref);
+struct fhkD_driver *fhkD_create_driver(struct fhkD_mapping *M, size_t n_umem, fhk_solver *S,
+		arena *mem){
 
-int32_t fhkD_continue(D_DEF(S, D, status, A, U)){
-	fhk_status fs = fhk_continue(S);
-	fhk_sarg a = FHK_ARG(fs);
+	struct fhkD_driver *D = arena_alloc(mem, sizeof(*D) + n_umem, alignof(*D));
+	D->M = *M;
+	D->S = S;
+	D->mem = mem;
+	D->trace = false;
 
-	switch(FHK_CODE(fs)){
-
-		case FHK_OK:
-			return FHKD_OK;
-
-		case FHKS_SHAPE:
-			// TODO: currently this expects that the shape table is given
-			assert(!"TODO");
-			return FHKDE_FHK;
-
-		case FHKS_MAPCALL:
-		case FHKS_MAPCALLI:
-			return d_mapcall(S, D, status, A, U, a.s_mapcall, IS_INVERSE(fs));
-
-		case FHKS_GVAL:
-			return d_gval(S, D, status, A, U, a.s_gval.idx, a.s_gval.instance);
-
-		case FHKS_MODCALL:
-			return d_modcall(S, D, status, A, U, a.s_modcall);
-
-		case FHK_ERROR:
-			status->e_status = fs;
-			return FHKDE_FHK;
-	}
-
-	UNREACHABLE();
+	return D;
 }
 
-static int32_t d_mapcall(D_DEF(S, D, status, A, U), fhk_mapcall *mp, bool mp_inverse){
-	fhkD_map *dm = &D->d_maps[mp->idx];
+// this used to be split into multiple functions that tailcalled fhkD_continue,
+// but unfortunately clang had too much braindamage and couldn't compile it into a loop,
+// so here everything is manually inlined.
+// go blame clang developers.
+int32_t fhkD_continue(struct fhkD_driver *restrict D){
+	static const void *s_status[] = {
+		[FHK_OK]        = &&s_ok,
+		[FHKS_SHAPE]    = &&s_shape,
+		[FHKS_MAPCALL]  = &&s_mapcall,
+		[FHKS_MAPCALLI] = &&s_mapcall,
+		[FHKS_VREF]     = &&s_vref,
+		[FHKS_MODCALL]  = &&s_modcall,
+		[FHK_ERROR]     = &&s_error
+	};
 
-	switch(dm->tag){
-		case FHKDP_FP:
-			assert(!"TODO");
-			break;
+	for(;;){
+		if(UNLIKELY(D->trace)){
+			D->trace = false;
+			return FHKDL_TRACE;
+		}
 
-		case FHKDP_LUA:
-			status->p_handle = dm->l_handle[mp_inverse];
-			status->p_inst = mp->instance;
-			status->p_ss = mp->ss;
-			return FHKDL_MAP;
+		fhk_status fs = fhk_continue(D->S);
+		D->tr_status = fs;
+		fhk_sarg a = FHK_ARG(fs);
+		goto *s_status[FHK_CODE(fs)];
 
-		default:
-			UNREACHABLE();
+s_ok:
+		return FHKD_OK;
+
+s_mapcall:
+		{
+			fhk_mapcall *mp = a.s_mapcall;
+			fhkD_map *dm = &D->M.maps[mp->mref.idx];
+			D->trace = dm->trace;
+
+			switch(dm->tag){
+				case FHKDP_FP:
+					assert(!"TODO");
+					break;
+
+				case FHKDP_LUA:
+					D->status.p_handle = dm->l_handle[IS_INVERSE(fs)];
+					D->status.p_inst = mp->mref.inst;
+					D->status.p_ss = mp->ss;
+					return FHKDL_MAP;
+
+				default:
+					UNREACHABLE();
+			}
+
+			continue;
+		}
+
+s_vref:
+		{
+			fhk_eref vref = a.s_vref;
+			fhkD_given *gv = &D->M.vars[vref.idx];
+			D->trace = gv->trace;
+
+			switch(gv->tag){
+				case FHKDV_FP:
+					gv->fp(D, gv->fp_arg, vref);
+					break;
+
+				case FHKDV_LUA:
+					D->status.v_handle = gv->l_handle;
+					D->status.v_inst = vref.inst;
+					return FHKDL_VAR;
+
+				case FHKDV_REFK:
+					d_vrefa(D, vref.idx, gv->rk_ref);
+					break;
+
+				case FHKDV_REFU:
+					d_vrefa(D, vref.idx, D->umem + gv->ru_udata);
+					break;
+
+				default:
+					UNREACHABLE();
+			}
+
+			continue;
+		}
+
+s_modcall:
+		{
+			fhk_modcall *mc = a.s_modcall;
+			fhkD_model *dm = &D->M.models[mc->mref.idx];
+			D->trace = dm->trace;
+			int r;
+
+			switch(dm->tag){
+				case FHKDM_FP:
+					assert(!"TODO");
+					break;
+
+				case FHKDM_MCALL:
+					if((r = d_mcall(D, dm, mc)))
+						return r;
+					break;
+
+				case FHKDM_LUA:
+					assert(!"TODO");
+					break;
+
+				default:
+					UNREACHABLE();
+			}
+
+			continue;
+		}
+
+s_shape:
+		// TODO: currently this expects that the shape table is given
+		assert(!"TODO");
+s_error:
+		D->status.e_status = fs;
+		return FHKDE_FHK;
 	}
-
-	return fhkD_continue(S, D, status, A, U);
 }
 
-static int32_t d_gval(D_DEF(S, D, status, A, U), fhk_idx xi, fhk_inst x_inst){
-	fhkD_given *gv = &D->d_vars[xi];
-
-	switch(gv->tag){
-		case FHKDV_FP:
-			gv->fp(S, gv->fp_arg, xi, x_inst);
-			break;
-
-		case FHKDV_LUA:
-			status->v_handle = gv->l_handle;
-			status->v_inst = x_inst;
-			return FHKDL_VAR;
-
-		case FHKDV_REFK:
-			return d_vrefa(S, D, status, A, U, xi, D->d_vars[xi].rk_ref);
-
-		case FHKDV_REFU:
-			return d_vrefa(S, D, status, A, U, xi, U + D->d_vars[xi].ru_udata);
-
-		default:
-			UNREACHABLE();
-	}
-
-	return fhkD_continue(S, D, status, A, U);
-}
-
-static int32_t d_modcall(D_DEF(S, D, status, A, U), fhk_modcall *mc){
-	fhkD_model *dm = &D->d_models[mc->idx];
-
-	switch(dm->tag){
-		case FHKDM_FP:
-			assert(!"TODO");
-			break;
-
-		case FHKDM_MCALL:
-			return d_mcall(S, D, status, A, U, dm, mc);
-
-		case FHKDM_LUA:
-			assert(!"TODO");
-			break;
-
-		default:
-			UNREACHABLE();
-	}
-
-	return fhkD_continue(S, D, status, A, U);
-}
-
-static int32_t d_mcall(D_DEF(S, D, status, A, U), fhkD_model *dm, fhk_modcall *mc){
+static int32_t d_mcall(struct fhkD_driver *D, struct fhkD_model *dm, fhk_modcall *mc){
 	// convert sig?
 	if(UNLIKELY(dm->m_nconv > 0)){
-		arena a = *A;
+		arena mem = *D->mem;
 
 		// convert parameters
 		for(size_t i=0;i<dm->m_npconv;i++){
 			fhkD_conv *c = &dm->m_conv[i];
 			fhk_mcedge *e = &mc->edges[c->ei];
-			void *p = arena_alloc(&a, e->n * MT_SIZEOF(c->to), MT_SIZEOF(c->to));
+			void *p = arena_alloc(&mem, e->n * MT_SIZEOF(c->to), MT_SIZEOF(c->to));
 			int r = mt_cconv(p, c->to, e->p, c->from, e->n);
 
 			// this shouldn't happen because all conversions produced by the
@@ -156,7 +187,7 @@ static int32_t d_mcall(D_DEF(S, D, status, A, U), fhkD_model *dm, fhk_modcall *m
 
 			// we need to write back to the original pointer so store it just before
 			// the allocation
-			void **buf = arena_malloc(&a, sizeof(void *) + e->n*MT_SIZEOF(c->from));
+			void **buf = arena_malloc(&mem, sizeof(void *) + e->n*MT_SIZEOF(c->from));
 			*buf = e->p;
 			e->p = buf+1;
 		}
@@ -166,7 +197,7 @@ static int32_t d_mcall(D_DEF(S, D, status, A, U), fhkD_model *dm, fhk_modcall *m
 		return FHKDE_MOD;
 
 	// need to convert returns?
-	if(UNLIKELY(dm->m_npconv > dm->m_nconv)){
+	if(UNLIKELY(dm->m_npconv < dm->m_nconv)){
 		for(size_t i=dm->m_npconv;i<dm->m_nconv;i++){
 			fhkD_conv *c = &dm->m_conv[i];
 			fhk_mcedge *e = &mc->edges[c->ei];
@@ -181,11 +212,11 @@ static int32_t d_mcall(D_DEF(S, D, status, A, U), fhkD_model *dm, fhk_modcall *m
 		}
 	}
 
-	return fhkD_continue(S, D, status, A, U);
+	return 0;
 }
 
-static int32_t d_vrefa(D_DEF(S, D, status, A, U), fhk_idx xi, void *ref){
-	fhkD_given *gv = &D->d_vars[xi];
+static void d_vrefa(struct fhkD_driver *D, fhk_idx xi, void *ref){
+	fhkD_given *gv = &D->M.vars[xi];
 
 	for(uint16_t i=0;i<4;i++){
 		if(i >= gv->r_num)
@@ -194,6 +225,5 @@ static int32_t d_vrefa(D_DEF(S, D, status, A, U), fhk_idx xi, void *ref){
 		ref = *((void **)ref) + gv->r_off[i];
 	}
 
-	fhkS_give_all(S, xi, ref);
-	return fhkD_continue(S, D, status, A, U);
+	fhkS_give_all(D->S, xi, ref);
 }
