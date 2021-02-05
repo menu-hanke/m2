@@ -18,8 +18,10 @@ local function main(args)
 		local insn = env:load_insn(args.instructions)
 
 		if args.input then
+			local input = io.open(args.input) or error(string.format("failed to open file: '%s'", args.input))
+			local data = require("cjson").decode(input:read("*a"))
+			input:close()
 			local sim = env.sim
-			local data = misc.readjson(args.input)
 			sim:savepoint()
 			local fp = sim:fp()
 			for i,v in ipairs(data) do

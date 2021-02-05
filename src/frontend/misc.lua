@@ -1,12 +1,3 @@
-local function readjson(fname)
-	local decode = require "json.decode"
-	local fp = io.open(fname)
-	if not fp then return nil end
-	local ret = decode(fp:read("*a"))
-	fp:close()
-	return ret
-end
-
 local function delegate(owner, f)
 	return function(...)
 		return f(owner, ...)
@@ -68,7 +59,6 @@ local function dofile_env(env, fname)
 end
 
 return {
-	readjson   = readjson,
 	delegate   = delegate,
 	merge      = merge,
 	enumerate  = enumerate,
