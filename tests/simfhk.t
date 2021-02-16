@@ -1,25 +1,28 @@
 -- vim: ft=lua
 local sim = require "sim"
-local sim_env = require "sim_env"
+local scripting = require "scripting"
 local fhk = require "fhk"
 local ffi = require "ffi"
 local fails = fails
 
 local function _(f1, f2)
 	return function()
-		local env = sim_env.create(sim.create())
-		env:inject_base()
-
 		local def = fhk.def()
 		setfenv(f1, fhk.env(def))()
-		fhk.inject(env, def)
 
-		local f = setfenv(f2, env.env)()
+		local sim = sim.create()
+		local env = scripting.env(sim)
+		fhk.inject(env, def)
+		require("soa").inject(env)
+		require("control").inject(env)
+
+		setfenv(f2, env)()
+
 		if f then
-			assert(f(function() env:prepare() end))
-		else
-			env:prepare()
-			env:event("test")
+			assert(f(function() scripting.hook(env, "start") end))
+		elseif env.m2.export.test then
+			scripting.hook(env, "start")
+			env.m2.export.test()
 		end
 	end
 end
@@ -67,14 +70,14 @@ end, function()
 		:given(m2.fhk.group("s", m2.fhk.struct_mapper(struct_ct, struct)))
 	
 	local solver_bound = m2.fhk.solver(sg_bound, "s#z", "s#w")
-	
-	m2.on("test", function()
+
+	function m2.export.test()
 		local res_unbound = solver_unbound({inst=struct})
 		assert(res_unbound.s_z[0] == 1 and res_unbound.s_w[0] == 2)
 
 		local res_bound = solver_bound()
 		assert(res_bound.s_z[0] == 1 and res_bound.s_w[0] == 2)
-	end)
+	end
 end)
 
 test_soa_mapper = _(function()
@@ -99,7 +102,7 @@ end, function()
 	
 	local solver_bound = m2.fhk.solver(sg_bound, "s#z", "s#w")
 
-	m2.on("test", function()
+	function m2.export.test()
 		soa:alloc(3)
 		local x, y = soa:newband("x"), soa:newband("y")
 		x[0] = 1; y[0] = 100
@@ -119,7 +122,7 @@ end, function()
 			res_bound.s_z[1] == 2 and res_bound.s_w[1] == 200 and
 			res_bound.s_z[2] == 3 and res_bound.s_w[2] == 300
 		)
-	end)
+	end
 end)
 
 test_mixed_mapping = _(function()
@@ -145,7 +148,7 @@ end, function()
 	
 	local solver = m2.fhk.solver(subgraph, "plot#ba")
 
-	m2.on("test", function()
+	function m2.export.test()
 		trees:alloc(3)
 		trees:newband("ba")
 		trees.ba[0] = 1
@@ -156,7 +159,7 @@ end, function()
 
 		local solution = solver()
 		assert(solution.plot_ba[0] == 10*(1+2+3))
-	end)
+	end
 end)
 
 test_missing_model = _(function() end, function()
@@ -227,10 +230,10 @@ test_const_unmapped = _(gmodel_gx_Const(), function()
 		"g#x"
 	)
 	
-	m2.on("test", function()
+	function m2.export.test()
 		local result = solver()
 		assert(result.g_x[0] == 123)
-	end)
+	end
 end)
 
 test_dupe_mapper = _(gmodel_gx_Const(), function()
@@ -267,10 +270,10 @@ test_include_subgraph = _(gmodel_gx_Const(), function()
 	
 	local solver = m2.fhk.solver(sub2, "g#x")
 	
-	m2.on("test", function()
+	function m2.export.test()
 		local result = solver()
 		assert(result.g_x[0] == 123)
-	end)
+	end
 end)
 
 test_derive = _(function()
@@ -291,9 +294,9 @@ end, function()
 		"g#z"
 	)
 	
-	m2.on("test", function()
+	function m2.export.test()
 		assert(solver().g_z[0] == 123)
-	end)
+	end
 end)
 
 test_builtin_set = _(function()
@@ -325,9 +328,9 @@ end, function()
 		"g#sum"
 	)
 	
-	m2.on("test", function()
+	function m2.export.test()
 		assert(solver().g_sum[0] == 100*(4+5+6))
-	end)
+	end
 end)
 
 test_builtin_constraints = _(function()
@@ -384,12 +387,12 @@ end, function()
 		"g#x", "g#y", "g#z"
 	)
 	
-	m2.on("test", function()
+	function m2.export.test()
 		local solution = solver()
 		assert(solution.g_x[0] == 1)
 		assert(solution.g_y[0] == 2)
 		assert(solution.g_z[0] == 5)
-	end)
+	end
 end)
 
 test_builtin_constraints_set = _(function()
@@ -425,11 +428,11 @@ end, function()
 		"g#x", "g#y"
 	)
 
-	m2.on("test", function()
+	function m2.export.test()
 		local solution = solver()
 		assert(solution.g_x[0] == 123)
 		assert(solution.g_y[0] == 456)
-	end)
+	end
 end)
 
 test_subset = _(function()
@@ -463,9 +466,9 @@ end, function()
 		:add(4)
 		:to_subset()
 	
-	m2.on("test", function()
+	function m2.export.test()
 		solver({sub=sub})
-	end)
+	end
 end)
 
 test_solver_fail_chain = _(function()
@@ -486,9 +489,9 @@ end, function()
 		"g#x"
 	)
 	
-	m2.on("test", function()
+	function m2.export.test()
 		assert(fails(solver, "fhk failed: no chain with finite cost.*variable: g#x"))
-	end)
+	end
 end)
 
 test_invalid_constraint = _(function()
@@ -530,9 +533,9 @@ end, function()
 		"g#y"
 	)
 	
-	m2.on("test", function()
+	function m2.export.test()
 		assert(fails(solver, "fhk failed: no chain with finite cost.*variable: g#y"))
-	end)
+	end
 end)
 
 test_model_crash = _(function()
@@ -548,9 +551,9 @@ end, function()
 		"g#y"
 	)
 	
-	m2.on("test", function()
+	function m2.export.test()
 		assert(fails(solver, "model crashed"))
-	end)
+	end
 end)
 
 test_R_impl = _(function()
@@ -565,10 +568,10 @@ end, function()
 		"g#x"
 	)
 	
-	m2.on("test", function()
+	function m2.export.test()
 		local solution = solver()
 		assert(solution.g_x[0] == 1)
-	end)
+	end
 end)
 
 test_alias = _(gmodel_gx_Const(), function()
@@ -579,10 +582,10 @@ test_alias = _(gmodel_gx_Const(), function()
 		{ "g#x", alias="var0" }
 	)
 
-	m2.on("test", function()
+	function m2.export.test()
 		local solution = solver()
 		assert(solution.var0[0] == 123)
-	end)
+	end
 end)
 
 test_tracing = _(function()
@@ -620,8 +623,8 @@ end, function()
 		"g#x"
 	)
 
-	m2.on("test", function()
+	function m2.export.test()
 		solver()
 		assert(num == 2)
-	end)
+	end
 end)

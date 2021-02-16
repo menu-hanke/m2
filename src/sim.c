@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <stdalign.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <assert.h>
 
 // reserve vstack+static+nframe frames + 1 extra for alignment
@@ -17,15 +18,12 @@ typedef struct {
 } block __attribute__((aligned(SIM_SAVEPOINT_BLOCKSIZE)));
 
 struct frame {
-	unsigned has_savepoint    : 1;
-	unsigned has_branchpoint  : 1;
-
+	bool has_savepoint;
+	bool has_branchpoint;
 	uint32_t fid;
 	region mem;
-
-	// savepoint data, only touch this when has_savepoint=1
-	void *vstack_copy;
-	void *vstack_ptr;
+	void *sp_data;
+	void *sp_ptr;
 };
 
 struct sim {
@@ -105,8 +103,9 @@ void *sim_alloc(struct sim *sim, size_t sz, size_t align, int lifetime){
 	// Notes:
 	// (1) this is the only NaN that work for this, other NaNs are used by luajit for tagging
 	// (2) this is undefined behavior and breaks strict aliasing, but it's just for debugging
-	for(uintptr_t px=ALIGN((uintptr_t)p, 8); px<((uintptr_t)p)+sz; px+=8)
-		*((uint64_t *) px) = 0xfff8000000000000;
+	if(p)
+		for(uintptr_t px=ALIGN((uintptr_t)p, 8); px<((uintptr_t)p)+sz; px+=8)
+			*((uint64_t *) px) = 0xfff8000000000000;
 #endif
 
 	return p;
@@ -124,39 +123,21 @@ int sim_savepoint(struct sim *sim){
 	struct frame *f = TOP(sim);
 	size_t size = sim->vstack.ptr - sim->vstack.mem;
 
-	// have a reusable savepoint?
 	if(UNLIKELY(f->has_savepoint)){
-		// old alloc fits?
-		// note: sim->vstack.ptr >= f->vstack_ptr
-		if(sim->vstack.ptr == (uintptr_t)f->vstack_ptr)
-			goto copy;
-
-		// can extend old alloc?
-		if(f->mem.ptr == (uintptr_t)f->vstack_copy + ((uintptr_t)f->vstack_ptr - sim->vstack.mem)){
-			f->mem.ptr = (uintptr_t) f->vstack_copy + size;
-			f->vstack_ptr = (void *) sim->vstack.ptr;
-			goto copy;
-		}
-
-		dv("[%u] @ %u LEAK %p -- vstack grew %zu -> %zu bytes (savepoint not extendable)\n",
-				sim->fp, f->fid, f->vstack_copy,
-				(uintptr_t)f->vstack_ptr - sim->vstack.mem, size);
+		dv("[%u] @ %u ERR -- double save point\n", sim->fp, f->fid);
+		return SIM_ESAVE;
 	}
 
-	// both the allocation and region end are aligned at least blocksize, so if the allocation
-	// succeeds the remainder of the last block can be copied over without overruning the region
-	f->vstack_ptr = (void*)sim->vstack.ptr;
-	f->vstack_copy = reg_alloc(&f->mem, size, SIM_SAVEPOINT_BLOCKSIZE);
-	if(UNLIKELY(!f->vstack_copy))
+	f->sp_data = reg_alloc(&f->mem, size, SIM_SAVEPOINT_BLOCKSIZE);
+	f->sp_ptr = (void*)sim->vstack.ptr;
+	if(UNLIKELY(!f->sp_data))
 		return SIM_EALLOC;
 
-	f->has_savepoint = 1;
-
-copy:
-	blockcpy(f->vstack_copy, (void*)sim->vstack.mem, size);
+	f->has_savepoint = true;
+	blockcpy(f->sp_data, (void*)sim->vstack.mem, size);
 
 	dv("[%u] @ %u -- savepoint %p -> %p (%zu bytes)\n", sim->fp, f->fid, (void*)sim->vstack.mem,
-			f->vstack_copy, size);
+			f->sp_data, size);
 
 	return SIM_OK;
 }
@@ -187,11 +168,11 @@ int sim_reload(struct sim *sim){
 		return SIM_ESAVE;
 	}
 
-	sim->vstack.ptr = (uintptr_t)f->vstack_ptr;
+	sim->vstack.ptr = (uintptr_t)f->sp_ptr;
 	size_t size = sim->vstack.ptr - sim->vstack.mem;
-	blockcpy((void*)sim->vstack.mem, f->vstack_copy, size);
+	blockcpy((void*)sim->vstack.mem, f->sp_data, size);
 
-	dv("[%u] @ %u -- restore %p -> %p (%zu bytes)\n", sim->fp, f->fid, f->vstack_copy,
+	dv("[%u] @ %u -- restore %p -> %p (%zu bytes)\n", sim->fp, f->fid, f->sp_data,
 			(void*)sim->vstack.mem, size);
 
 	return SIM_OK;
@@ -199,7 +180,7 @@ int sim_reload(struct sim *sim){
 
 int sim_load(struct sim *sim, uint32_t fp){
 	int r;
-	if((r = sim_up(sim, fp)))
+	if(UNLIKELY((r = sim_up(sim, fp))))
 		return r;
 
 	return sim_reload(sim);
@@ -225,22 +206,21 @@ int sim_enter(struct sim *sim){
 	return SIM_OK;
 }
 
-int sim_branch(struct sim *sim, int hint){
-	TOP(sim)->has_branchpoint = 1;
+int sim_branch(struct sim *sim){
+	struct frame *f = TOP(sim);
 
-	// TODO: if replaying, ignore hint and just check how many branches
-	if(hint & SIM_CREATE_SAVEPOINT){
-		int r;
-		if((r = sim_savepoint(sim)))
-			return r;
+	if(UNLIKELY(f->has_branchpoint)){
+		dv("[%u] @ %u ERR -- double branch point\n", sim->fp, f->fid);
+		return SIM_EBRANCH;
 	}
 
 	dv("[%u] @ %u -- branch point\n", sim->fp, TOP(sim)->fid);
 
-	return SIM_OK;
+	f->has_branchpoint = true;
+	return sim_savepoint(sim);
 }
 
-int sim_enter_branch(struct sim *sim, uint32_t fp, int hint){
+int sim_enter_branch(struct sim *sim, uint32_t fp){
 	if(fp != sim->fp){
 		int r;
 		if((r = sim_load(sim, fp)))
@@ -254,24 +234,15 @@ int sim_enter_branch(struct sim *sim, uint32_t fp, int hint){
 		return SIM_EBRANCH;
 	}
 
-	// TODO: if replaying, the last taken branch from a branchpoint is a tailcall
-	if(hint & SIM_TAILCALL){
-		f->has_branchpoint = 0;
-	}else{
-		int r;
-		if((r = sim_enter(sim)))
-			return r;
-	}
-
-	return SIM_OK;
+	return sim_enter(sim);
 }
 
 static void f_enter(struct sim *sim, struct frame *f){
 	assert(f == TOP(sim));
 
 	f->fid = sim->next_fid++;
-	f->has_savepoint = 0;
-	f->has_branchpoint = 0;
+	f->has_savepoint = false;
+	f->has_branchpoint = false;
 	REG_RESET(&f->mem);
 
 	dv("[%u] @ %u -- enter\n", sim->fp, f->fid);

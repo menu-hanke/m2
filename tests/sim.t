@@ -1,16 +1,10 @@
 -- vim: ft=lua
 local sim = require "sim"
 local ffi = require "ffi"
-local C = ffi.C
 
-local function _(f)
-	return function()
-		f(sim.create())
-	end
-end
-
-test_savepoint = _(function(sim)
-	local vsnum = sim:new(ffi.typeof"double", C.SIM_VSTACK)
+test_savepoint = function()
+	local sim = sim.create()
+	local vsnum = sim:new(ffi.typeof"double", "vstack")
 
 	vsnum[0] = 1
 
@@ -26,68 +20,58 @@ test_savepoint = _(function(sim)
 
 	sim:load(fp)
 	assert(vsnum[0] == 1)
-end)
+end
 
-test_double_savepoint = _(function(sim)
-	local v = sim:new(ffi.typeof"double", C.SIM_VSTACK)
-
-	v[0] = 1
+test_double_savepoint = function()
+	local sim = sim.create()
 	sim:savepoint()
-	local fp = sim:fp()
+	assert(fails(function() sim:savepoint() end, "invalid save state"))
+end
 
-	v[0] = 2
+test_double_branch = function()
+	local sim = sim.create()
+	sim:branch()
+	assert(fails(function() sim:branch() end, "invalid branch point"))
+end
+
+test_oom_new = function()
+	local sim = sim.create({ rsize=2^8 })
+	assert(sim:new(ffi.typeof "uint8_t[1024]", "vstack") == nil)
+end
+
+test_oom_savepoint = function()
+	local sim = sim.create({ rsize=2^8 })
+	sim:new(ffi.typeof "uint8_t[129]", "vstack")
+	sim:new(ffi.typeof "uint8_t[129]", "frame")
+	assert(fails(function() sim:savepoint() end, "failed to allocate memory"))
+end
+
+test_invalid_frame_jump = function()
+	local sim = sim.create()
+	assert(ffi.C.sim_up(sim, 2) == ffi.C.SIM_EFRAME)
+end
+
+test_invalid_savepoint = function()
+	local sim = sim.create()
+	assert(fails(function() sim:reload() end), "invalid save state")
+end
+
+test_invalid_frame_savepoint = function()
+	local sim = sim.create()
 	sim:savepoint()
-
-	v[0] = 3
-	sim:load(fp)
-
-	assert(v[0] == 2)
-
-	-- goes back to latest
-	sim:load(fp)
-	assert(v[0] == 2)
-end)
-
-test_leak_savepoint = _(function(sim)
-	local v = sim:new(ffi.typeof"double", C.SIM_VSTACK)
-
-	v[0] = 1
-	sim:savepoint()
-	local fp = sim:fp()
-
-	sim:new(ffi.typeof"double", C.SIM_VSTACK)
-	sim:new(ffi.typeof"double", C.SIM_FRAME)
-
-	-- first savepoint is leaked here
-	v[0] = 2
-	sim:savepoint()
-
-	v[0] = 3
-	sim:load(fp)
-
-	assert(v[0] == 2)
-end)
-
-test_jump_down = _(function(sim)
-	sim:savepoint()
-	local fp1 = sim:fp()
-
 	sim:enter()
-	sim:savepoint()
-	local fp2 = sim:fp()
+	assert(fails(function() sim:reload() end), "invalid save state")
+end
 
-	sim:load(fp1)
-	assert(fails(function() sim:load(fp2) end))
-end)
+test_oof = function()
+	local sim = sim.create({ nframes=2 })
+	sim:enter()
+	assert(fails(function() sim:enter() end), "invalid frame")
+end
 
-test_tail_branch = _(function(sim)
-	sim:branch(C.SIM_CREATE_SAVEPOINT)
-	local fid = C.sim_frame_id(sim)
-	local fp = sim:fp()
-
-	assert(sim:enter_branch(fp, 0))
-	assert(C.sim_frame_id(sim) ~= fid)
-	assert(sim:enter_branch(fp, C.SIM_TAILCALL))
-	assert(C.sim_frame_id(sim) == fid)
-	assert(fails(function() sim:enter_branch(fp, C.SIM_TAILCALL) end))
-end)
+test_invalid_branchpoint = function()
+	local sim = sim.create()
+	-- this could fail either due to a missing savepoint or missing branchpoint,
+	-- so the message isn't checked
+	assert(fails(function() sim:enter_branch(sim:fp()) end))
+end

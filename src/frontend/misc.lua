@@ -55,7 +55,7 @@ local function dofile_env(env, fname)
 		error(string.format("Failed to read file: %s", err), 2)
 	end
 
-	f()
+	return f()
 end
 
 return {

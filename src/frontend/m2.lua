@@ -23,7 +23,10 @@ local function bootstrap(path)
 
 	require "m2_cdef"
 	require "alloc"   -- required here because this introduces the cdef for malloc and free
-	require("sim_env").init_sandbox(old_path, old_loaded)
+	require("scripting").init_sandbox(require("sandbox").capture({
+		path = old_path,
+		loaded = old_loaded
+	}))
 end
 
 local function jit_cmd(stream)

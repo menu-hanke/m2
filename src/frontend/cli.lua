@@ -257,6 +257,7 @@ return install_logger({
 	multi_positional = multi_positional,
 	def              = def,
 
+	reset            = color "\x1b[m",
 	bold             = color "\x1b[1m",
 	red              = color "\x1b[31m",
 	green            = color "\x1b[32m",

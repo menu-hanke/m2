@@ -22,11 +22,6 @@ enum {
 	SIM_EBRANCH    // invalid branch point
 };
 
-enum {
-	SIM_CREATE_SAVEPOINT = 1,
-	SIM_TAILCALL = 1
-};
-
 sim *sim_create(uint32_t nframe, uint32_t rsize);
 void sim_destroy(sim *sim);
 
@@ -40,6 +35,5 @@ int sim_up(sim *sim, uint32_t fp);
 int sim_reload(sim *sim);
 int sim_enter(sim *sim);
 
-int sim_branch(sim *sim, int hint);
-int sim_enter_branch(sim *sim, uint32_t fp, int hint);
-int sim_exit_branch(sim *sim);
+int sim_branch(sim *sim);
+int sim_enter_branch(sim *sim, uint32_t fp);

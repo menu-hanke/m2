@@ -208,7 +208,7 @@ local function mt_merge(meta, mt)
 end
 
 local function inject(env)
-	local _sim = env.sim
+	local _sim = env.m2.sim
 
 	local function reflct(ctype, info, slicect)
 		if not info then

@@ -1,12 +1,11 @@
-local misc = require "misc"
 local ffi = require "ffi"
 local C = ffi.C
 
 local errors = {
-	[tonumber(C.SIM_EFRAME)]  = "Invalid frame",
-	[tonumber(C.SIM_ESAVE)]   = "Invalid save state",
-	[tonumber(C.SIM_EALLOC)]  = "Failed to allocate memory",
-	[tonumber(C.SIM_EBRANCH)] = "Invalid branch point"
+	[tonumber(C.SIM_EFRAME)]  = "invalid frame",
+	[tonumber(C.SIM_ESAVE)]   = "invalid save state",
+	[tonumber(C.SIM_EALLOC)]  = "failed to allocate memory",
+	[tonumber(C.SIM_EBRANCH)] = "invalid branch point"
 }
 
 local function check(r)
@@ -31,13 +30,12 @@ ffi.metatype("sim", {
 		savepoint   = function(self) check(C.sim_savepoint(self)) end,
 		load        = function(self, fp) check(C.sim_load(self, fp)) end,
 		enter       = function(self) check(C.sim_enter(self)) end,
-		branch      = function(self, hint) check(C.sim_branch(self, hint)) end,
-		enter_branch= function(self, fp, hint)
-			local r = C.sim_enter_branch(self, fp, hint)
+		branch      = function(self) check(C.sim_branch(self)) end,
+		enter_branch= function(self, fp)
+			local r = C.sim_enter_branch(self, fp)
 			check(r)
 			return r ~= C.SIM_SKIP
 		end,
-		exit_branch = function(self) check(C.sim_exit_branch(self)) end,
 
 		alloc       = function(self, size, align, life)
 			return C.sim_alloc(self, size, align, tolifetime(life))
@@ -60,7 +58,7 @@ ffi.metatype("sim", {
 local function create(opt)
 	opt = opt or {}
 	local _sim = C.sim_create(
-		opt.nframe or 16,
+		opt.nframes or 16,
 		opt.rsize or 0x1000000
 	)
 
@@ -72,29 +70,12 @@ local function create(opt)
 	return _sim
 end
 
-local function branch(sim, branches)
-	-- this is a lazy implementation, it won't even be compiled
-	-- TODO: codegen (with same api)
-	return function(continue, x, f)
-		sim:branch(C.SIM_CREATE_SAVEPOINT)
-		local fp = sim:fp()
-
-		for _, cb in ipairs(branches) do
-			if sim:enter_branch(fp, 0) then
-				cb()
-				f(continue, x)
-			end
-		end
-	end
-end
-
 local function inject(env)
-	env.m2.branch = misc.delegate(env.sim, branch)
-	env.m2.new    = misc.delegate(env.sim, env.sim.new)
+	local sim = env.m2.sim
+	env.m2.new = function(ctype, life) return sim:new(ctype, life) end
 end
 
 return {
 	create = create,
-	branch = branch,
 	inject = inject
 }

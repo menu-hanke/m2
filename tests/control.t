@@ -1,147 +1,236 @@
 -- vim: ft=lua
+local ffi = require "ffi"
+local sim = require "sim"
+local scripting = require "scripting"
 local control = require "control"
+local cfg = require "control.cfg"
+local export = require "control.export"
 
-test_chain = function()
-	local x = 0
-
-	local b = control.chain(function(y) x = x*y end)
-	local a = control.chain(function(y) x = x+y end, b)
-
-	local continue_called = false
-	a(function()
-		continue_called = true
-	end, 10)
-
-	assert(continue_called)
-	assert(x == (0+10)*10)
+local function exec(node, sim_)
+	control.exec(control.compile(sim_ or sim.create(), node))
 end
 
-test_multi_continue = function()
-	local x = 0
+test_sanity = function()
+	local called = false
+	exec(function() called = true end)
+	assert(called)
+end
+
+test_empty_all = function()
+	local n = 0
+	exec(cfg.all {
+		cfg.all {},
+		cfg.primitive(function() n=n+1 end)
+	})
+	assert(n == 1)
+end
+
+test_single_all = function()
+	local n = 0
+	exec(cfg.all {
+		cfg.primitive(function() n=n+1 end)
+	})
+	assert(n == 1)
+end
+
+test_all = function()
+	local n = 0
+	exec(cfg.all {
+		cfg.primitive(function() n = n+2 end),
+		cfg.primitive(function() n = 2^n end)
+	})
+	assert(n == 4)
+end
+
+test_empty_any = function()
+	local n = 0
+	exec(cfg.all {
+		cfg.any {},
+		cfg.primitive(function() n=n+1 end)
+	})
+	assert(n == 0)
+end
+
+test_single_any = function()
+	local n = 0
+	exec(cfg.any {
+		cfg.primitive(function() n=n+1 end)
+	})
+	assert(n == 1)
+end
+
+test_any = function()
+	local sim = sim.create()
+	local state = sim:new(ffi.typeof "struct { int which; }", "vstack")
+	state.which = 0
+
+	exec(cfg.all {
+		cfg.any {
+			cfg.primitive(function() assert(state.which == 0) state.which = 1 end),
+			cfg.primitive(function() assert(state.which == 0) state.which = 2 end),
+			cfg.primitive(function() assert(state.which == 0) state.which = 3 end),
+		},
+		cfg.primitive(function() assert(state.which ~= 0) end)
+	}, sim)
+end
+
+test_nothing = function()
+	local n = 0
+	exec(cfg.all {
+		cfg.primitive(function() n=n+1 end),
+		cfg.nothing,
+		cfg.primitive(function() n=n+2 end)
+	})
+	assert(n == 3)
+end
+
+test_optional = function()
+	local sim = sim.create()
+	local state = sim:new(ffi.typeof [[
+		struct {
+			uint32_t bit;
+			uint32_t value;
+		}
+	]], "vstack")
+
+	state.bit = 0
+	state.value = 0
+	local seen = {}
+
+	local toggle = cfg.optional(cfg.primitive(function()
+		state.value = state.value + 2^state.bit
+	end))
+
+	local nextbit = cfg.primitive(function()
+		state.bit = state.bit + 1
+	end)
+
+	exec(cfg.all {
+		toggle,
+		nextbit,
+		toggle,
+		nextbit,
+		toggle,
+		cfg.primitive(function() seen[state.value] = true end)
+	}, sim)
+
+	for i=0, 7 do
+		assert(seen[i])
+	end
+end
+
+test_guard = function()
+	local a, b = false, false
+
+	exec(cfg.any {
+		cfg.all {
+			cfg.primitive(function() return false end),
+			cfg.primitive(function() a = true end)
+		},
+		cfg.all {
+			cfg.primitive(function() b = true end)
+		}
+	})
+
+	assert(not a)
+	assert(b)
+end
+
+test_recursion = function()
+	local n = 0
+	local node = cfg.all {
+		cfg.primitive(function()
+			if n == 10 then
+				return false
+			end
+			n = n+1
+		end)
+	}
+
+	table.insert(node.edges, node)
+	exec(node)
+	assert(n == 10)
+end
+
+test_custom_func = function()
 	local n = 0
 
-	local function call3(continue, x, f)
-		f(continue, x)
-		f(continue, x)
-		f(continue, x)
+	exec(cfg.all {
+		function(stack, idx, continue)
+			for i=1, 10 do
+				continue(stack, idx-1, stack[idx])
+			end
+		end,
+		cfg.primitive(function() n = n+1 end)
+	})
+
+	assert(n == 10)
+end
+
+test_primitive_args = function()
+	local n = 0
+
+	exec(cfg.primitive(function(x, y)
+		n = n+x*y
+	end, 2, {3, 4}))
+
+	assert(n == 12)
+end
+
+test_chain_primitive_args = function()
+	local n = 0
+
+	exec(cfg.all {
+		cfg.primitive(function(x) n = n+x end, 1, {2}),
+		cfg.primitive(function(y) n = n*y end, 1, {-1})
+	})
+
+	assert(n == -2)
+end
+
+test_export = function()
+	local n = 0
+
+	local insn = cfg.all {
+		cfg.export("f", 2, {1, 3}),
+		cfg.export("g", 1, {-4})
+	}
+
+	export.patch_exports(insn, {
+		f = function(x, y)
+			n = n+x+y
+		end,
+		g = export.make_primitive(function(x)
+			return function(y)
+				n = x*n/y
+			end, 2
+		end)
+	})
+
+	exec(insn)
+
+	assert(n == -8) -- 4*(-4)/2
+end
+
+test_scripting = function()
+	local sim = sim.create()
+	local env = scripting.env(sim)
+	control.inject(env)
+
+	local n = 0
+	function env.m2.export.f(x)
+		n = n+x
 	end
 
-	local b = control.chain(function(y) x = x+y end)
-	local a = control.chain(function() return call3 end, b)
+	local cenv = control.env()
+	local insn = setfenv(function()
+		return all {
+			getfenv().sim.f(1)
+		}
+	end, cenv)()
 
-	a(function()
-		n = n+1
-	end, 5)
+	export.patch_exports(insn, env.m2.export)
+	exec(insn, sim)
 
-	assert(n == 3)
-	assert(x == 15)
-end
-
-test_forward_jump = function()
-	local c_called = false
-
-	local c = control.chain(function() c_called = true end)
-	local b = control.chain(function() assert(not "Don't call this") end, c)
-	local a = control.chain(function() return c end, b)
-
-	a(function() end)
-
-	assert(c_called)
-end
-
-test_backward_jump = function()
-	local x = 0
-
-	local a
-
-	local b = control.chain(function()
-		x = x+1
-	end, control.jump_f(function() return a end))
-
-	a = control.chain(function()
-		if x < 10 then
-			return b
-		end
-	end)
-
-	a(function() end)
-
-	assert(x == 10)
-end
-
-test_self_loop = function()
-	local x = 0
-
-	local a = control.chain(function()
-		if x == 10 then
-			return control.exit
-		end
-		x = x+1
-	end, "self")
-
-	a(function() end)
-
-	assert(x == 10)
-end
-
-test_bfunc = function()
-	local x = 0
-
-	local function call2(continue, x, f)
-		f(continue, x)
-		f(continue, x)
-	end
-
-	local bf = control.bfunc()
-	bf:chain(function() return call2 end)
-	bf:chain(function() x = x+1 end)
-
-	local f = bf:compile()
-
-	f(function() end)
-
-	assert(x == 2)
-end
-
-test_eset = function()
-	local x = 0
-
-	local eset = control.eset()
-
-	eset:on("add", function(n)
-		x = x+n
-	end)
-
-	eset:on("reset", function()
-		x = 0
-	end)
-
-	local events = eset:compile()
-
-	control.event(events, "add", 1)
-	control.event(events, "reset")
-	control.event(events, "add", 2)
-
-	assert(x == 2)
-end
-
-test_insn = function()
-	local x = 0
-
-	local eset = control.eset()
-
-	eset:on("add", function(n)
-		x = x+n
-	end)
-
-	local events = eset:compile()
-
-	local rec = control.record()
-	rec.add(1)
-	rec.add(2)
-
-	local insn = control.instruction(rec, events)
-	insn()
-
-	assert(x == 3)
+	assert(n == 1)
 end

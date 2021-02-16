@@ -261,7 +261,7 @@ end
 --------------------------------------------------------------------------------
 
 local function inject(env)
-	local _sim = env.sim
+	local _sim = env.m2.sim
 
 	env.m2.vmath = setmetatable({
 		loop    = loop,
