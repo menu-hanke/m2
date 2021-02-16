@@ -18,9 +18,6 @@ local mapping_mt = { __index={} }
 local solver_mapping_mt = { __index={} }
 local typing_mt = { __index={} }
 
--- TODO huomenna:
--- compiler_subgraph -> laiskoina(?) funktioina mapping, types, symbols, etc.
-
 -- given:     name -> group, type, create
 -- computed:  name -> group
 -- missing:   name -> nil
