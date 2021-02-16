@@ -24,25 +24,25 @@ function code_mt.__index:emitf(fmt, ...)
 	return self
 end
 
-local function try_indent(x)
-	local indent = os.getenv("M2_DEBUG_INDENT")
+local function try_format(x)
+	local formatter = os.getenv("M2_CODE_FORMATTER")
 
-	if indent then
-		try_indent = function(src)
+	if formatter then
+		try_format = function(src)
 			local proc = io.popen(string.format([[
 				%s <<EOF
-				%s]].."\nEOF", indent, src))
+				%s]].."\nEOF", formatter, src))
 			src = proc:read("*a")
 			proc:close()
 			return src
 		end
 	else
-		try_indent = function(src)
+		try_format = function(src)
 			return src
 		end
 	end
 
-	return try_indent(x)
+	return try_format(x)
 end
 
 function code_mt.__index:compile(env, name)
@@ -51,7 +51,7 @@ function code_mt.__index:compile(env, name)
 
 	if cli.verbosity <= -2 then
 		cli.debug("%s %s\n%s", cli.magenta "emit", cli.bold(name),
-			cli.magenta "> " .. try_indent(src):gsub("\n", cli.magenta "\n> "))
+			cli.magenta "> " .. try_format(src):gsub("\n", cli.magenta "\n> "))
 	end
 
 	local f, err = load(src, name, t, env)
