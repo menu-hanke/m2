@@ -1,4 +1,5 @@
 local model = require "model"
+local conv = require "model.conv"
 local ffi = require "ffi"
 local C = ffi.C
 
@@ -13,20 +14,11 @@ ffi.metatype("mod_R", {
 	}
 })
 
-local def_mt = { __index={} }
-
-function def_mt.__index:param_types()
-	return C.mod_R_types()
-end
-
-function def_mt.__index:return_types()
-	return C.mod_R_types()
-end
-
 return {
 	def = function(fname, func)
-		return setmetatable({
-			create = function(_, sig)
+		return {
+			sigmask = conv.sigmask(C.mod_R_types()),
+			create  = function(_, sig)
 				local m = C.mod_R_create(fname, func, sig)
 				if m == ffi.NULL then
 					error(string.format("%s:%s failed to create R model: %s",
@@ -34,6 +26,6 @@ return {
 				end
 				return m
 			end
-		}, def_mt)
+		}
 	end
 }

@@ -4,14 +4,14 @@ CC = gcc
 CCOPT    = -O3 -flto -fopenmp -ffast-math -march=native
 CCDEBUG  = -DNDEBUG
 CCDEF    =
-CCWARN   = -Wall -Wextra
+# gcc's -Wmaybe-uninitialized is so misguided it's causing more harm than good here.
+CCWARN   = -Wall -Wextra -Wno-maybe-uninitialized
 CCEXTRA  =
 XCFLAGS  ?= 
 XLDFLAGS ?= 
 
-# -fstack-protector causes about ~10% slowdown for typical fhk graphs.
-# Turn it on if you're scared of hackers.
 FHK_CCOPT = $(CCOPT) -fno-stack-protector
+FHK_CCWARN =
 FHK_CCDEF =
 
 # What model languages do you want to build in? You can choose any from the following:
@@ -46,7 +46,7 @@ M2_EXECUTABLE = m2
 M2_LIBS       = $(LUAJIT_LIB)
 
 M2_O = sim.o mem.o grid.o vec.o vmath.o vgrid.o\
-	   fhk/solve.o fhk/build.o fhk/reduce.o fhk/debug.o\
+	   fhk/solve.o fhk/build.o fhk/prune.o fhk/debug.o\
 	   frontend/main.o frontend/fhk/driver.o
 M2_C = $(M2_O:.o=.c)
 
@@ -88,7 +88,7 @@ endif
 
 CCDEF += -DM2_LUAPATH='"$(LUAPATH)"'
 CFLAGS = $(LUAJIT_CFLAGS) $(CCOPT) $(CCDEBUG) $(CCDEF) $(CCWARN) $(CCEXTRA) $(XCFLAGS)
-FHK_CFLAGS = $(FHK_CCOPT) $(FHK_CCDEF) $(CCDEBUG) $(CCDEF) $(CCWARN) $(XCFLAGS)
+FHK_CFLAGS = $(FHK_CCOPT) $(CHK_CCWARN) $(FHK_CCDEF) $(CCDEBUG) $(CCDEF) $(CCWARN) $(XCFLAGS)
 
 # -rdynamic is needed to access C symbols of the executable from lua
 # Note: GCC docs said I don't need to pass -f parameters again to linker,

@@ -1,4 +1,5 @@
 -- vim: ft=lua
+local ffi = require "ffi"
 local _ = require "testgraph"
 
 -- identity : X^n -> X^n
@@ -19,9 +20,12 @@ local function dot(...)
 	return {d}
 end
 
----- sanity checks ----------------------------------------
+local function cf(...)
+	local r = {...}
+	return function() return unpack(r) end
+end
 
-test_san_single = _(function()
+test_solver_single = _(function()
 	graph {
 		m { "a -> x", id }
 	}
@@ -30,19 +34,19 @@ test_san_single = _(function()
 	solution { x = {123} }
 end)
 
-test_san_cost = _(function()
+test_solver_cost = _(function()
 	graph {
-		m { "-> x # M1", function() return {2} end, k=2},
-		m { "-> x # M2", function() return {1} end, k=1}
+		m { "-> x %1", cf {2}, k=2},
+		m { "-> x %2", cf {1}, k=1}
 	}
 
 	solution { x = {1} }
 end)
 
-test_san_given_check = _(function()
+test_solver_given_check = _(function()
 	graph {
-		m { "-> x # M1", function() return {1} end } :check "a>=0 +10",
-		m { "-> x # M2", function() return {2} end } :check "a<=0 +10"
+		m { "-> x [a>=0+10]", cf {1} },
+		m { "-> x [a<=0+10]", cf {2} }
 	}
 
 	given { a = {1} }
@@ -52,31 +56,32 @@ test_san_given_check = _(function()
 	solution { x = {2} }
 end)
 
-test_san_computed_check = _(function()
+test_solver_computed_check = _(function()
 	graph {
-	 	m { "-> x", function() return {1} end },
-		m { "-> y # M1", function() return {1} end, k=100, c=1},
-		m { "-> y # M2", function() return {2} end, k=1, c=1} :check "x<=0 +1000"
+	 	m { "-> x", cf {1} },
+		m { "-> y %k100", cf {1}, k=100},
+		m { "-> y [x<=0+1000] %k1", cf {2}, k=1}
 	}
 
 	solution { y = {1} }
 end)
 
-test_san_complex_parameter = _(function()
+test_solver_complex_parameter = _(function()
+	umap {
+		"even",
+		cf { 0, 2 },
+		function(inst) return (inst%2==0) and {0} or {} end
+	}
+
 	graph {
-		m { "a:even -> x", dot },
-		p { "even",
-			function() return set{0, 2} end,
-			function(inst) return (inst%2==0) and set{0} or set() end
-		},
-		g { "a", size=4 }
+		m { "g# a:even -> g#x", dot }
 	}
 
 	given { a = {1, 2, 3, 4} }
-	solution { x = {1+3} }
+	solution { ["g#x"] = {1+3} }
 end)
 
-test_san_chain = _(function()
+test_solver_chain = _(function()
 	graph {
 		m { "a -> x", id },
 		m { "x -> y", id }
@@ -86,78 +91,58 @@ test_san_chain = _(function()
 	solution { x = {123} }
 end)
 
-test_san_set = _(function()
+test_solver_set = _(function()
 	graph {
-		m { "a:@space -> x", dot },
-		g { "a", size=3 }
+		m { "g# a:@space -> g#x", dot }
 	}
 
 	given { a = {1, 2, 3} }
-	solution { x = {1+2+3} }
+	solution { ["g#x"] = {1+2+3} }
 end)
 
-test_san_set_chain = _(function()
+test_solver_set_chain = _(function()
 	graph {
-		m { "a -> x # M", id },
-		m { "x:@space -> y", dot },
-		g { "a", "x", "M", size=3 }
+		m { "default# a -> x", id },
+		m { "g# x:@space -> g#y", dot },
 	}
 
 	given { a = {1, 2, 3} }
-	solution { y = {1+2+3} }
+	solution { ["g#y"] = {1+2+3} }
 end)
 
----- tech tests ----------------------------------------
-
-test_tech_retbuf = _(function()
+test_solver_ret_space = _(function()
 	graph {
-		-- this model has complex returns so it doesn't set the FHK_MNORETBUF flag,
-		-- ie it has to allocate the return buffers and then copy
-		m { "-> x:@space", function() return {1, 2, 3} end },
-		g { "x", size=3 }
+		m { "-> x:@space", cf {1, 2, 3} }
 	}
 
 	solution { x = {1, 2, 3} }
 end)
 
-test_tech_instace_retbuf = _(function()
+test_solver_retbuf = _(function()
 	graph {
-		-- accessing the results here requires calculating the instance retbuf address
-		m { "x,y -> z,w # M", id },
-		g { "x", "y", "z", "w", "M", size=3 }
+		m { "a,b -> z,w", id, k=1 },
+		m { "c,d -> z,w", id, k=2 }
 	}
 
-	given { x = {1, 2, 3}, y = {4, 5, 6} }
+	given { a = {1, 2, 3}, b = {4, 5, 6} }
 	solution { z = {1, 2, 3}, w = {4, 5, 6} }
 end)
 
-test_tech_large_graph = _(function()
-	local ms = {}
-	for i=1, 255 do
-		ms[i] = m { "x"..i..",y -> z"..i..",w # M"..i }
-	end
-
-	graph(ms)
-end)
-
-test_tech_offset_collect_ss1 = _(function()
+test_solver_offset_collect = _(function()
 	graph {
-		m { "a -> x # M", id },
-		g { "a", "x", "M", size=3 }
+		m { "a -> x", id },
 	}
 
 	given { a = {1, 2, 3} }
-	solution { x = {nil, 2, 3} }
+	solution { x = {na, 2, 3} }
 end)
 
----- acyclic graphs ----------------------------------------
-
-test_acy_bound_retry = _(function()
+test_solver_bound_retry = _(function()
 	graph {
 		m { "x->a",  1, k=1, c=1},
 		m { "y->a",  2, k=2, c=2},
-		m { "xp->x", 3  } :check "xp>=0 +100" :check "xq>=0 +200",
-		m { "yp->y", 4  } :check "yp>=0 +100" :check "yq>=0 +200",
+		m { "xp->x [xp>=0+100] [xq>=0+200]", 3  },
+		m { "yp->y [yp>=0+100] [yq>=0+200]", 4  },
 		m { "->xp",  -1 },
 		m { "->xq",  1  },
 		m { "->yp",  1  },
@@ -199,55 +184,58 @@ test_acy_bound_retry = _(function()
 	solution { a = {1} }
 end)
 
-test_acy_set_given_constraint = _(function()
+test_solver_set_given_constraint = _(function()
 	graph {
-		m { "->x # M1", 1 } :check "a:@space>=0 +100",
-		m { "->x # M2", 2, k=50 },
-		g { "a", size=2 }
+		m { "default# ->x [g#a>=0:@space+100]", 1 },
+		m { "->x", 2, k=50 }
 	}
 
-	given { a = {1, -1} }
+	given { ["g#a"] = {1, -1} }
 	solution { x = {2} }
 
-	given { a = {1, 1} }
+	given { ["g#a"] = {1, 1} }
 	solution { x = {1} }
 end)
 
-test_acy_set_computed_constraint = _(function()
+test_solver_set_computed_constraint = _(function()
 	graph {
-		m { "->x # M1", 1 } :check "a:@space>=0 +100",
-		m { "->x # M2", 2, k=50 },
-		m { "a0->a # M0", id },
-		g { "a0", "a", "M0", size=2 }
+		m { "default# ->x [g#a>=0:@space+100]", 1 },
+		m { "->x", 2, k=50 },
+		m { "g# g#a0->g#a", id },
 	}
 
-	given { a0 = {1, -1} }
+	given { ["g#a0"] = {1, -1} }
 	solution { x = {2} }
 
-	given { a0 = {1, 1} }
+	given { ["g#a0"] = {1, 1} }
 	solution { x = {1} }
 end)
 
-test_acy_set_computed_param = _(function()
-	graph {
-		m { "a:second->x", id },
-		m { "->a:first", 123 },
-		m { "->a:second", 456 },
-		p { "first",
-			function() return set{0} end,
-			function(inst) return inst == 0 and set{0} or set{} end
-		},
-		p { "second",
-			function() return set{1} end,
-			function(inst) return inst == 1 and set{0} or set{} end
-		},
-		g { "a", size=2 }
+test_solver_set_computed_param = _(function()
+	umap {
+		"first",
+		cf {0},
+		function(inst) return inst == 0 and {0} or {} end
 	}
+
+	umap {
+		"second",
+		cf {1},
+		function(inst) return inst == 1 and {0} or {} end
+	}
+
+	graph {
+		m { "g# ->g#a:first", 123 },
+		m { "g# ->g#a:second", 456 },
+		m { "default# g#a:second->x", id }
+	}
+
+	n.g = 2
 
 	solution { x = {456} }
 end)
 
-test_acy_return_overlap = _(function()
+test_solver_return_overlap = _(function()
 	graph {
 		m { "->x,y", {{1}, {1}}, k=1 },
 		m { "->y,z", {{2}, {2}}, k=2 },
@@ -257,82 +245,183 @@ test_acy_return_overlap = _(function()
 	solution { x = {1}, y = {1}, z = {2} }
 end)
 
-test_acy_no_chain_constraint = _(function()
+test_solver_no_chain_check = _(function()
 	graph {
-		m { "->x # M1", 1 } :check "a>=0 +100",
-		m { "->x # M2", 2, k=200},
-		m { "->a", 10 } :check "b>=0 +inf"
+		m { "->x [a>=0+200]", 1, k=1 },
+		m { "->x", 2, k=100},
+		m { "->a [b>=0+inf]", 10 }
 	}
 
 	given { b = {-1} }
 	solution { x = {2} }
 end)
 
----- subgraph selection ----------------------------------------
-
-test_sub_omit_model = _(function()
+test_edge_reordering = _(function()
 	graph {
-		m { "->x # M1", k=1 },
-		m { "->x # M2", k=2 }
+		m { "->x", 1 },
+		m { "y,x->z", function(y,x) return {y[1]+x[1]} end }
 	}
 
-	root { "x" }
-	subgraph { "x", "M1" }
+	given { y = {2} }
+	solution { z = {3} }
 end)
 
-test_sub_omit_given = _(function()
+test_solver_stress_candidates = _(function()
+	local ms = {}
+
+	for i=1, 10 do
+		table.insert(ms, m { string.format("->w%d", i), i, k=(i-1)/10 })
+	end
+
+	for i=1, 10 do
+		-- min (i^2 - 10*i + 100 : i=1..10) = 75 (i = 5)
+		table.insert(ms, m { string.format("->x%d", i), i, k=i^2, c=1 })
+		table.insert(ms, m { string.format("->y%d", i), i, k=100-10*i, c=1 })
+
+		for j=1, 10 do
+			table.insert(ms, m {
+				string.format("x%d,y%d,w%d->z", i, i, j),
+				function(x, y, w) return {100*x[1] + 10*y[1] + w[1]} end
+			})
+		end
+	end
+
+	graph(ms)
+
+	-- x5, y5, w1
+	solution { z = { 551 } }
+end)
+
+test_solver_check_bitmap_over64 = _(function()
+	local ws, xs = {}, {}
+
+	for i=1, 100 do
+		local v = i % 64
+		ws[i] = v
+
+		if v == 1 then                            xs[i] = 1
+		elseif v == 2 or v == 3 or v == 4 then    xs[i] = 2
+		elseif v == 15 or v == 16 or v == 17 then xs[i] = 3
+		elseif v == 32 then                       xs[i] = 4
+		elseif v == 63 then                       xs[i] = 5
+		else                                      xs[i] = 0
+		end
+	end
+
+	graph {
+		v { "w", ctype="uint8_t" },
+		m { "->x[w&1+inf]",        1 },
+		m { "->x[w&2,3,4+inf]",    2 },
+		m { "->x[w&15,16,17+inf]", 3 },
+		m { "->x[w&32+inf]",       4 },
+		m { "->x[w&63+inf]",       5 },
+		m { "->x", k=100,          0 }
+	}
+
+	given { w = ws }
+	solution { x = xs }
+end)
+
+test_solver_checkall_over64 = _(function()
+	local ws = ffi.new("uint8_t[?]", 100)
+	local xs = {}
+
+	for i=0, 99 do
+		ws[i] = i % 64
+		xs[i+1] = (i % 64) == 63 and 1 or 0
+	end
+
+	graph {
+		v { "w", ctype="uint8_t" },
+		m { "->x", k=100,      0 },
+		m { "->x[w&63+inf]",   1 }
+	}
+
+	given { w = { n=100, buf=ws } }
+	solution { x = xs }
+end)
+
+test_prune_omit_model = _(function()
+	graph {
+		m { "->x %1", k=1 },
+		m { "->x %2", k=2 }
+	}
+
+	retain { "x" }
+	selected {
+		["->x %1"] = true,
+		x = {1, }
+	}
+end)
+
+test_prune_omit_given = _(function()
 	graph {
 		m { "x->y" },
 		m { "y->z" }
 	}
 
 	given { "y" }
-	root { "z" }
-	subgraph { "y", "z", "y->z" }
+	retain { "z" }
+	selected { "y", "z", "y->z" }
 end)
 
-test_sub_pick_bound = _(function()
+test_prune_pick_bound = _(function()
 	graph {
-		m { "x->y # M1" } :check "x>=0 +100",
-		m { "x->y # M2", k=2 },
-		m { "x->y # M3", k=3 } :check "x>=0 +100"
+		s { "x>=0", name="s" },
+		m { "x->y [s+100]" },
+		m { "x->y", k=2 },
+		m { "x->y [s+100] %k3", k=3 }
 	}
 
 	given { "x" }
-	root { "y" }
-	subgraph { "x", "y", "M1", "M2" }
+	retain { "y" }
+	selected { "x", "y", "x->y [s+100]", "x->y" }
 end)
 
-test_sub_omit_high_cycle = _(function()
+test_prune_omit_high_cycle = _(function()
 	graph {
 		m { "x->y", k=100},
-		m { "y->x" },
-		m { "x->z" },
-		m { "y->z" },
-		m { "->x", k=100},
-		m { "->y"  }
+		m { "y->x", k=1 },
+		m { "x->z", k=1 },
+		m { "y->z", k=1 },
+		m { "->x",  k=100},
+		m { "->y",  k=1 }
 	}
 
-	root { "z" }
-	subgraph { "y", "z", "y->z", "->y" }
+	retain { "z" }
+	selected { "y", "z", "y->z", "->y" }
 end)
 
-test_sub_retain_bounded_cycle = _(function()
+test_prune_retain_bounded_cycle = _(function()
 	graph {
 		m { "x->y" },
 		m { "y->x" },
 		m { "x->z" },
 		m { "y->z" },
-		m { "->x"  } :check "w>=0 +100",
-		m { "->y"  } :check "w<=0 +100"
+		m { "->x [w>=0+100]" },
+		m { "->y [w<=0+100]" }
 	}
 
 	given { "w" }
-	root { "z" }
-	subgraph {
+	retain { "z" }
+	selected {
 		"x", "y", "z", "w",
-		"x->y", "y->x", "x->z", "y->z", "->x", "->y"
+		"x->y", "y->x", "x->z", "y->z", "->x [w>=0+100]", "->y [w<=0+100]"
 	}
 end)
 
--- TODO: reduce_fail tests
+test_prune_stress_heap = _(function()
+	local ms = {}
+	for i=1, 100 do
+		table.insert(ms, m { string.format("->x%d", i), k=i, c=1 })
+		table.insert(ms, m { string.format("x%d->x", i), k=200-2*i, c=1 })
+	end
+
+	-- min (i + 200-2*i : i=1..100) = 100  (i=100)
+
+	graph(ms)
+	retain { "x" }
+	selected {
+		"x", "x100", "->x100", "x100->x"
+	}
+end)

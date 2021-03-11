@@ -116,9 +116,11 @@ typedef struct fhkD_map {
 // ------------------------------------------------------------
 
 typedef struct fhkD_mapping {
-	fhkD_given *vars;        // note: only given. you must rearrange your vars so that given
-	                         //       variables come first
-	fhkD_model *models;
+	union {
+		fhkD_model *models;
+		fhkD_given *vars;        // note: only given. you must rearrange your vars so that given
+								 //       variables come first
+	};
 	fhkD_map *maps;
 } fhkD_mapping;
 

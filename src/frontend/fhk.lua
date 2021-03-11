@@ -4,21 +4,17 @@ local fhkdbg = require "fhk.debugger"
 local def = require "fhk.def"
 
 return {
-	status_code = ctypes.status_code,
-	status_arg  = ctypes.status_arg,
+	errstr      = ctypes.errstr,
 	status      = ctypes.status,
 	ss1         = ctypes.ss1,
 	space       = ctypes.space,
-	ss_size     = ctypes.ss_size,
-	ss_iter     = ctypes.ss_iter,
-	ss_builder  = ctypes.ss_builder,
-	subset      = ctypes.subset,
-	fmt_error   = ctypes.fmt_error,
+	subset      = ctypes.ssfromidx,
+	subset_ffi  = ctypes.ssfromidx_ffi,
 
-	def         = def.create,
 	env         = def.env,
 	read        = def.read,
 
+	def         = simfhk.def,
 	inject      = simfhk.inject,
 
 	cli         = fhkdbg.cli

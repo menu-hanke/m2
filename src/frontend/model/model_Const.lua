@@ -10,25 +10,15 @@ ffi.metatype("mod_Const", {
 	__gc = C.mod_Const_destroy
 })
 
-local def_mt = { __index={} }
-
-function def_mt.__index:param_types()
-	return 0
-end
-
-function def_mt.__index:return_types()
-	return C.mod_Const_types()
-end
-
-function def_mt.__index:create(sig)
-	local nr = ffi.new("size_t[?]", #self)
-	local rv = ffi.new("void *[?]", #self)
+local function create(sig, values)
+	local nr = ffi.new("size_t[?]", #values)
+	local rv = ffi.new("void *[?]", #values)
 
 	-- sig.np is allowed to be non-zero, it's not an error if you want to pass parameters
 	-- to a constant model (it is pointless though)
 	local typ = sig.typ+sig.np
 
-	for i, x in ipairs(self) do
+	for i, x in ipairs(values) do
 		local isset = conv.isset(typ[i-1])
 		local ct = conv.ctypeof(typ[i-1])
 		local n = isset and #x or 1
@@ -45,9 +35,9 @@ function def_mt.__index:create(sig)
 		end
 	end
 
-	local mp = C.mod_Const_create(#self, nr, rv)
+	local mp = C.mod_Const_create(#values, nr, rv)
 
-	for i=0, #self-1 do
+	for i=0, #values-1 do
 		C.free(rv[i])
 	end
 
@@ -56,6 +46,10 @@ end
 
 return {
 	def = function(...)
-		return setmetatable({...}, def_mt)
+		local values = {...}
+		return {
+			sigmask = conv.sigmask(C.mod_Const_types()),
+			create  = function(_, sig) return create(sig, values) end
+		}
 	end
 }

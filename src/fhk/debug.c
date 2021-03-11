@@ -1,17 +1,14 @@
 #include "fhk.h"
-#include "graph.h"
 #include "def.h"
 
 #include <stdbool.h>
 
-void fhk_set_dsym(struct fhk_graph *G, const char **v_names, const char **m_names){
-#ifdef FHK_DEBUG
-	G->dsym.v_names = v_names;
-	G->dsym.m_names = m_names;
+void fhk_set_dsym(struct fhk_graph *G, const char **dsym){
+#if FHK_DEBUG
+	G->dsym = dsym;
 #else
 	(void)G;
-	(void)v_names;
-	(void)m_names;
+	(void)dsym;
 #endif
 }
 
@@ -23,27 +20,30 @@ bool fhk_is_debug(){
 #endif
 }
 
-#ifdef FHK_DEBUG
+#if FHK_DEBUG
 
 #include <stdio.h>
 
-const char *fhk_Dvar(struct fhk_graph *G, xidx vi){
-	static char buf[32];
+// debug symbol for idx, DO NOT store the return value, it's an internal ring buffer.
+// only use this for debug printing. the ring buffer is to allow using multiple debug syms
+// in the same print call.
+const char *fhk_dsym(struct fhk_graph *G, xidx idx){
+	static char rbuf[4][32];
+	static int pos = 0;
 
-	if(G->dsym.v_names)
-		return G->dsym.v_names[vi];
+	if(idx >= -G->nm && idx < G->nx && G->dsym && G->dsym[idx])
+		return G->dsym[idx];
 
-	sprintf(buf, "var<%zu>", vi);
-	return buf;
-}
+	char *buf = rbuf[pos];
+	pos = (pos + 1) % 4;
 
-const char *fhk_Dmodel(struct fhk_graph *G, xidx mi){
-	static char buf[32];
+	const char *fmt = (idx < -G->nm) ? "(OOB model: %zd)"
+		            : (idx < 0)      ? "model[%zd]"
+					: (idx < G->nv)  ? "var[%zd]"
+					: (idx < G->nx)  ? "shadow[%zd]"
+					:                  "(OOB xnode: %zd)";
 
-	if(G->dsym.m_names)
-		return G->dsym.m_names[mi];
-
-	sprintf(buf, "model<%zu>", mi);
+	sprintf(buf, fmt, idx);
 	return buf;
 }
 

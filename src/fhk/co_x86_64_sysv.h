@@ -19,9 +19,4 @@ typedef struct fhk_co {
 		(co)->rsp = (void*)(stack) + (sz);   \
 	} while(0)
 
-// align to 16 before call, ie. 16n+8 on entry
-// https://wiki.osdev.org/System_V_ABI
-#define FHK_CO_STACK_ALLOC (FHK_CO_STACK+8)
-#define FHK_CO_STACK_ALIGN 16
-
 #define FHK_CO_BUILTIN 1

@@ -131,7 +131,7 @@ ffi.metatype("struct mt_sig", {
 local masks = {
 	any    = typemask(bit.bnot(0ULL)),
 	set    = typemask(0xffffffff00000000ULL),
-	single = typemask(0xffffffffULL)
+	scalar = typemask(0xffffffffULL)
 }
 
 local intoffset = { [1]=0, [2]=1, [4]=2, [8]=3 }
@@ -170,40 +170,57 @@ local function sizeof(ty)
 	return 2^(ty % 4)
 end
 
+-- type(x) = number       -> typemask(1 << mask)
+--           ctype, refct -> typemask(ctype)
+--           string       -> typemask(filter) or typemask(ctype)
+--           uint64_t     -> typemask(mask)
+--           nil          -> typemask(0xff...ff)
+local function totypemask(x)
+	if x == nil then
+		return masks.any
+	end
+
+	if ffi.istype(typemask, x) then
+		return x
+	end
+
+	if masks[x] then
+		return masks[x]
+	end
+
+	if ffi.istype("uint64_t", x) then
+		return typemask(x)
+	end
+
+	local ct = torefct(x)
+	if ct then
+		local mask = bit.lshift(1ULL, fromctype(x))
+		return typemask(mask + bit.lshift(mask, 32)) -- include also set types
+	end
+
+	if type(x) == "number" then
+		return typemask(bit.lshift(1ULL, x))
+	end
+end
+
+local sigcst_mt = {
+	__index = function(self, i)
+		return self.tm
+	end
+}
+
+local function sigmask(tm)
+	tm = totypemask(tm)
+	return {
+		params = setmetatable({tm=tm}, sigcst_mt),
+		returns = setmetatable({tm=tm}, sigcst_mt)
+	}
+end
+
 return {
 
-	-- type(x) = number       -> typemask(1 << mask)
-	--           ctype, refct -> typemask(ctype)
-	--           string       -> typemask(filter) or typemask(ctype)
-	--           uint64_t     -> typemask(mask)
-	--           nil          -> typemask(0xff...ff)
-	typemask = function(x)
-		if x == nil then
-			return masks.any
-		end
-
-		if ffi.istype(typemask, x) then
-			return x
-		end
-
-		if masks[x] then
-			return masks[x]
-		end
-
-		if ffi.istype("uint64_t", x) then
-			return typemask(x)
-		end
-
-		local ct = torefct(x)
-		if ct then
-			local mask = bit.lshift(1ULL, fromctype(x))
-			return typemask(mask + bit.lshift(mask, 32)) -- include also set types
-		end
-
-		if type(x) == "number" then
-			return typemask(bit.lshift(1ULL, x))
-		end
-	end,
+	typemask = totypemask,
+	sigmask  = sigmask,
 
 	sizeof = sizeof,
 	nameof = nameof,

@@ -16,7 +16,7 @@ require("ffi").cdef [[
 #include "../model/model_R.h"
 
 #include "../fhk/fhk.h"
-#include "../fhk/graph.h"
+#include "../fhk/def.h"
 
 #include "fhk/driver.h"
 ]]

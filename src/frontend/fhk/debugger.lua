@@ -5,7 +5,9 @@ local soa = require "soa"
 local ctypes = require "fhk.ctypes"
 local def = require "fhk.def"
 local plan = require "fhk.plan"
-local mapping = require "fhk.mapping"
+local view = require "fhk.view"
+local graph = require "fhk.graph"
+local compile = require "fhk.compile"
 local conv = require "model.conv"
 local ffi = require "ffi"
 local C = ffi.C
@@ -17,70 +19,42 @@ local testbuilder_mt = { __index={} }
 
 ---- inspect ----------------------------------------
 
-local function Gnode_proxy(func)
-	return ffi.metatype([[
-		struct {
-			fhk_graph *G;
-			fhk_idx idx;
-		}
-	]], {
-		__index = function(self, key)
-			return func[key] or func.ref(self)[key]
-		end
-	})
-end
-
-local inspectv, inspectm = {}, {}
-
-inspectv = Gnode_proxy {
-	ref = function(self)
-		return self.G.vars[self.idx]
-	end
-}
-
-inspectm = Gnode_proxy {
-	ref = function(self)
-		return self.G.models[self.idx]
-	end,
-
-	param = function(self, i)
-		local edge = self.params[i]
-
-		return {
-			x   = inspectv(self.G, edge.idx),
-			ei  = edge.edge_param,
-			map = edge.map
-		}
-	end,
-
-	ret = function(self, i)
-		local edge = self.returns[i]
-
-		return {
-			x   = inspectv(self.G, edge.idx),
-			map = edge.map
-		}
-	end
-}
+local inspect = ffi.metatype([[
+	struct {
+		fhk_graph *G;
+		fhk_idx idx;
+	}
+]], {
+	__index = {
+		ref = function(self)
+			if self.idx >= self.G.nv then return self.G.shadows[self.idx] end
+			if self.idx >= 0 then return self.G.vars[self.idx] end
+			return self.G.models[self.idx]
+		end,
+	}
+})
 
 ---- tracer ----------------------------------------
 
-local function trace_all(_, _, e)
-	e.trace = true
-end
-
-local function tracer(subgraph)
+local function tracer(ctx)
 	local tracer = setmetatable({
-		symbols = subgraph:symbols(),
+		symbols = ctx.symbols,
 		ctypes  = {}
 	}, tracer_mt)
 
-	local _, types = subgraph:mapping()
-	for idx,name in pairs(tracer.symbols.var) do
-		tracer.ctypes[idx] = ffi.typeof("$*", conv.ctypeof(types:typeof(name)))
+	for _,node in pairs(ctx.nodeset.vars) do
+		tracer.ctypes[ctx.mapping.nodes[node]] = ffi.typeof("$*", node.ctype)
+		
+		if node.create then
+			ctx.M.vars[ctx.mapping.nodes[node]].trace = true
+		end
 	end
 
-	return tracer, trace_all
+	for _,node in pairs(ctx.nodeset.models) do
+		ctx.M.models[ctx.mapping.nodes[node]].trace = true
+	end
+
+	return tracer
 end
 
 function tracer_mt:__call(driver, status, arg)
@@ -93,7 +67,7 @@ end
 
 function tracer_mt.__index:trace_vref(driver, vref)
 	local S = driver.S
-	local x = inspectv(ctypes.inspect.G(S), vref.idx)
+	local x = inspect(ctypes.inspect.G(S), vref.idx):ref()
 	local ctype = self.ctypes[vref.idx]
 	local value = {}
 
@@ -114,7 +88,7 @@ function tracer_mt.__index:trace_vref(driver, vref)
 	io.stdout:write(
 		"< ",
 		string.format("%3d:%-3d", vref.idx, vref.inst),
-		cli.green(self.symbols.var[vref.idx]),
+		cli.green(self.symbols[vref.idx]),
 		cli.yellow(" -> "),
 		"[ ",
 		table.concat(value, " "),
@@ -126,7 +100,7 @@ function tracer_mt.__index:trace_modcall(driver, modcall)
 	local S = driver.S
 	local G = ctypes.inspect.G(S)
 	local mref = modcall.mref
-	local m = inspectm(G, mref.idx)
+	local m = inspect(G, mref.idx):ref()
 	local output = {}
 
 	for i=modcall.np, modcall.np+modcall.nr-1 do
@@ -134,7 +108,7 @@ function tracer_mt.__index:trace_modcall(driver, modcall)
 		local ctype = self.ctypes[xi]
 		local vp = ffi.cast(ctype, modcall.edges[i].p)
 
-		table.insert(output, string.format("%s: [", cli.green(self.symbols.var[xi])))
+		table.insert(output, string.format("%s: [", cli.green(self.symbols[xi])))
 		for j=0, tonumber(modcall.edges[i].n)-1 do
 			table.insert(output, string.format("%6s", tostring(vp[j]):sub(1, 6)))
 		end
@@ -144,8 +118,8 @@ function tracer_mt.__index:trace_modcall(driver, modcall)
 	io.stdout:write(
 		"m ",
 		string.format("%3d:%-3d", mref.idx, mref.inst),
-		cli.blue(self.symbols.model[mref.idx]),
-		cli.red(string.format(" (%f)", ctypes.inspect.costm(S, mref.idx, mref.inst))),
+		cli.blue(self.symbols[mref.idx]),
+		cli.red(string.format(" (%f)", ctypes.inspect.cost(S, mref.idx, mref.inst))),
 		cli.yellow(" -> "),
 		table.concat(output, " "),
 		"\n"
@@ -172,7 +146,7 @@ local function testsolver()
 end
 
 function testbuilder_mt.__index:add_given(name, ctype)
-	local group = mapping.groupof(name)
+	local group = graph.groupof(name)
 	if not self.groups[group] then
 		self.groups[group] = testgroup()
 	end
@@ -198,7 +172,7 @@ end
 
 function testbuilder_mt.__index:automap_edges(edges)
 	for _,rule in ipairs(edges) do
-		table.insert(self.auto_edges, { rule[1], mapping.builtin_maps[rule[2]] })
+		table.insert(self.auto_edges, { rule[1], view.builtin_maps[rule[2]] })
 	end
 end
 
@@ -222,25 +196,25 @@ function testbuilder_mt.__index:from_def(graph)
 	return self
 end
 
-function testbuilder_mt.__index:runner(plan)
-	local G = plan:subgraph()
+function testbuilder_mt.__index:runner(P, V)
+	local V = view.composite(V)
 
 	if #self.auto_edges > 0 then
-		G:edge(mapping.match_edges(self.auto_edges))
+		V:add(view.match_edges(self.auto_edges))
 	end
 
 	local updaters = {}
 
 	for name,group in pairs(self.groups) do
-		local mapper, update = group:mapping()
-		G:given(mapping.parallel_group(name, mapper))
+		local gview, update = group:view()
+		V:add(view.group(name, gview))
 		table.insert(updaters, update)
 	end
 
 	local solvers = {}
 
 	for name,solver in pairs(self.solvers) do
-		solvers[name] = solver:runner(plan, G, self.check)
+		solvers[name] = solver:runner(P, V, self.check)
 	end
 
 	return function(case)
@@ -273,7 +247,7 @@ function testgroup_mt.__index:add(name, ctype)
 	})
 end
 
-function testgroup_mt.__index:mapping()
+function testgroup_mt.__index:view()
 	local bands, translate = {}, {}
 	for _,var in ipairs(self) do
 		bands[var.field] = var.ctype
@@ -287,12 +261,12 @@ function testgroup_mt.__index:mapping()
 	local ctype = soa.ctfrombands(bands)
 	local instance = ctype()
 
-	local mapper = mapping.translate_mapper(translate, mapping.soa_mapper(ctype, instance))
+	local V = view.translate_view(translate, view.soa_view(ctype, instance))
 
 	-- XXX: buffers allocated with `ffi.new` must be anchored in a lua object to prevent gc
 	local _anchor = {}
 
-	return mapper, function(data)
+	return V, function(data)
 		local n = #data[self[1].name]
 
 		if n > ffi.cast("struct vec *", instance).n_alloc then
@@ -350,28 +324,29 @@ local function checkv_eps(buf, values, eps)
 	return errors
 end
 
-function testsolver_mt.__index:runner(plan, G, check)
-	local solver = G:solver()
+function testsolver_mt.__index:runner(P, V, check)
+	local roots = {}
 
 	for _,var in ipairs(self) do
-		solver:add(var.name, var)
+		table.insert(roots, {var.name, alias=var.alias, subset=var.subset})
 	end
 
-	solver = plan:add_solver(solver)
+	local solver = compile.solver_template()
+	plan.add_solver(P, V, solver, plan.decl_solver(roots))
 
 	return function(data, params)
 		params._solver_anchor = {}
 
 		for _,var in ipairs(self) do
-			local ss = ctypes.ss_builder()
+			local ss = {}
 
 			for i,v in ipairs(data[var.name]) do
 				if type(v) == "number" then
-					ss:add(i-1)
+					table.insert(ss, i-1)
 				end
 			end
 
-			local subset, _ref = ss:to_subset()
+			local subset, _ref = ctypes.ssfromidx(ss)
 			table.insert(params._solver_anchor, _ref)
 			params[var.subset] = subset
 		end
@@ -430,15 +405,23 @@ local session_def_mt = { __index=setmetatable({}, {__index=session_f}) }
 local session_g_mt = { __index=setmetatable({}, {__index=session_f}) }
 
 local function session(debugger)
-	local gdef = def.create()
+	local nodeset, impls = graph.nodeset(), {}
+
+	local plan = plan.create {
+		runtime_alloc = debugger.runtime_alloc,
+		static_alloc  = debugger.static_alloc,
+		trace         = cli.verbosity <= -2 and tracer
+	}
 
 	local ses = setmetatable({
-		debugger        = debugger,
-		plan            = plan.create(),
-		def             = gdef,
-		def_env         = def.env(gdef),
-		_finalize_hooks = {},
+		debugger = debugger,
+		plan     = plan,
+		nodeset  = nodeset,
+		def_env  = def.env(nodeset, impls),
+		_materialize_hooks = {},
 	}, session_def_mt)
+
+	ses.models_view = view.modelset_view(impls, debugger.static_alloc)
 
 	ses.env = setmetatable({}, {
 		__index = function(_, name)
@@ -479,24 +462,16 @@ function session_def_mt.__index:read(fname)
 	self.def_env.read(fname)
 end
 
-function session_def_mt.__index:on_finalize(f)
-	table.insert(self._finalize_hooks, f)
+function session_def_mt.__index:on_materialize(f)
+	table.insert(self._materialize_hooks, f)
 end
 
-function session_def_mt.__index:subgraph(...)
-	return self.plan:subgraph(...)
-end
-
-function session_def_mt.__index:finalize()
+function session_def_mt.__index:materialize_plan()
 	setmetatable(self, session_g_mt)
 
-	self.plan:compile(self.def, {
-		static_alloc  = self.debugger.static_alloc,
-		runtime_alloc = self.debugger.runtime_alloc,
-		trace         = cli.verbosity <= -2 and tracer
-	})
+	plan.materialize(self.plan, self.nodeset)
 
-	for _,f in ipairs(self._finalize_hooks) do
+	for _,f in ipairs(self._materialize_hooks) do
 		self.debugger.runtime_arena:reset()
 		f()
 	end
@@ -544,14 +519,15 @@ local function main(args)
 		for _,t in ipairs(args.tests) do
 			local def = cjson.decode(io.open(t):read("*a"))
 			table.insert(testers, {
-				runner = testbuilder(check):from_def(def.graph):runner(session.plan),
+				runner = testbuilder(check):from_def(def.graph)
+					:runner(session.plan, session.models_view),
 				cases  = def.testcases,
 				name   = t
 			})
 		end
 	end
 
-	session:finalize()
+	session:materialize_plan()
 
 	if args.tests then
 		for _,test in ipairs(testers) do

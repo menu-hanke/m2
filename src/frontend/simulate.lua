@@ -31,7 +31,7 @@ local function optenv(opt)
 		instructions = function(fname) opt.instructions = control.read(fname) end
 	}, { __index=_G })
 	if opt.fhkdef then
-		env.graph = fhk.env(opt.fhkdef).read
+		env.graph = fhk.env(opt.fhkdef.nodeset, opt.fhkdef.impls).read
 	end
 	env.read = misc.delegate(env, misc.dofile_env)
 	return env

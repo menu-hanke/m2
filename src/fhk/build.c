@@ -1,5 +1,4 @@
 #include "fhk.h"
-#include "graph.h"
 #include "def.h"
 
 #include "../def.h"
@@ -12,347 +11,390 @@
 #include <math.h>
 #include <assert.h>
 
-#define MAP_INVAL ((fhk_map)(~0))
+#define OIDX(o)   ((fhk_idx)((o)&0xffff))
+#define OTAG(tag) ((fhk_obj)(tag)<<60)
+
+typedef struct {
+	struct { uint32_t pos; uint32_t alloc; } header[0];
+	uint8_t data[0];
+} __attribute__((may_alias)) vec;
+
+#define vec_header(v)  (((vec*)(v))->header[-1])
+#define vec_destroy(v) free(&vec_header(v))
+#define vec_num(v)     ((v) ? (int64_t)(vec_header(v).pos/sizeof(*v)) : 0)
+#define vec_add(v)     (vec_alloc((vec**)v,sizeof(**v)) ? (vec_num(*v)-1) : (-1))
+
+struct def_edge {
+	fhk_idx idx;
+	fhk_extmap map;
+};
+
+struct def_shedge {
+	fhk_idx idx;
+	fhk_extmap map;
+	float penalty;
+};
 
 struct def_model {
-	uint8_t nc, nc_alloc;
-	uint8_t np, np_alloc;
-	uint8_t nr, nr_alloc;
+	struct def_edge *params;
+	struct def_edge *returns;
+	struct def_shedge *shadows;
 	fhk_grp group;
-	struct fhk_check *checks;
-	fhk_edge *params;
-	fhk_edge *returns;
 	float k, c;
+	float cmin;
 };
 
 struct def_var {
 	fhk_grp group;
 	uint16_t size;
+
+	// these don't strictly need to be counted here, but this way we can return
+	// an error instantly when max edge count is exceeded, and then assume everything is
+	// ok in the graph builder, which simplifies the building process a bit.
+	// this also lets us skip a counting step.
+	uint16_t n_fwd;
+	uint8_t n_mod;
+	float cdiff;
+};
+
+struct def_shadow {
+	fhk_shvalue arg;
+	fhk_idx xi;
+	uint8_t guard;
 };
 
 struct fhk_def {
-	fhk_idx nv, nv_alloc;
-	fhk_idx nm, nm_alloc;
-	struct def_var *vars;
 	struct def_model *models;
+	struct def_var *vars;
+	struct def_shadow *shadows;
 };
 
-#define LIST_ADD(n, na, p) ({                               \
-		if(UNLIKELY(*(n) >= *(na))){                        \
-			typeof(*(na)) _n = *(n);                        \
-			*(na) = *(na) ? 2*(*na) : 8;                    \
-			*(p) = realloc(*(p), sizeof(**(p))*(*na));      \
-			memset(*(p)+_n, 0, sizeof(**(p))*(*(na)-_n));   \
-		}                                                   \
-		*(p) + (*(n))++;                                    \
-	})
+static bool d_checkmap(fhk_extmap map);
 
-#define LIST_PREALLOC(n, na, p, init) do {             \
-		*(n) = 0;                                      \
-		*(na) = (init);                                \
-		*(p) = calloc((init), sizeof(**(p)));          \
-	} while(0)
+static void g_copy_data(struct fhk_graph *G, struct fhk_def *D);
+static void *g_build_edges(struct fhk_graph *G, struct fhk_def *D, void *p);
+static fhk_map g_extmap(struct fhk_graph *G, xidx mi, xidx xi, fhk_extmap emap);
+static fhk_map g_extmapi(struct fhk_graph *G, xidx xi, xidx mi, fhk_extmap emap);
+static bool g_mretbuf(struct fhk_graph *G, xidx mi);
+static void g_mflags(struct fhk_graph *G);
+static void g_reorder_edges(struct fhk_graph *G, struct fhk_def *D);
+static void g_count_ng(struct fhk_graph *G);
+static void g_count_nu(struct fhk_graph *G);
 
-static fhk_map d_map(struct fhk_def *D, fhk_idx mi, fhk_idx xi, fhk_map map);
-static fhk_map d_inverse(struct fhk_def *D, fhk_idx xi, fhk_idx mi, fhk_map map);
-static void d_copy_data(struct fhk_def *D, struct fhk_graph *G);
-static void d_copy_links(void **p, struct fhk_def *D, struct fhk_graph *G);
-
-static void s_count_nodes(struct fhk_graph *G, struct fhk_subgraph *S, size_t *nv, size_t *nm);
-static void s_count_links(struct fhk_graph *G, struct fhk_subgraph *S, size_t *ne, size_t *nc);
-static void s_copy_data(struct fhk_graph *G, struct fhk_subgraph *S, struct fhk_graph *H);
-static void s_copy_links(void **p, struct fhk_graph *G, struct fhk_subgraph *S, struct fhk_graph *H);
-
-#ifdef FHK_DEBUG
-#define DSYM_ALIGN(G, p)\
-	(((G)->dsym.v_names || (G)->dsym.m_names) ? (ALIGN(p, sizeof(void *)) - p) : 0)
-#define DSYM_SIZE(G, nv, nm)\
-	((G->dsym.v_names ? (nv)*sizeof(void *) : 0) + (G->dsym.m_names ? (nm)*sizeof(void *) : 0))
-static void s_copy_ds(const char **dest, const char **src, fhk_idx *rt, size_t n);
-static void s_copy_dsyms(void **p, struct fhk_graph *G, struct fhk_subgraph *S, struct fhk_graph *H);
-#else
-#define DSYM_ALIGN(...) 0
-#define DSYM_SIZE(...)  0
-#endif
-
-static size_t g_alloc_size(size_t nv, size_t nm, size_t ne, size_t nc);
-static struct fhk_graph *g_alloc_base(void **p, fhk_idx nv, fhk_idx nm);
-static void g_compute_flags(struct fhk_graph *G);
-static void g_reorder_edges(struct fhk_graph *G);
-static void g_compute_ng(struct fhk_graph *G);
-static void g_compute_nu(struct fhk_graph *G);
+static void *vec_alloc(vec **v, uint32_t num);
 
 struct fhk_def *fhk_create_def(){
 	struct fhk_def *D = malloc(sizeof(*D));
-	LIST_PREALLOC(&D->nv, &D->nv_alloc, &D->vars, 32);
-	LIST_PREALLOC(&D->nm, &D->nm_alloc, &D->models, 32);
+	memset(D, 0, sizeof(*D));
 	return D;
 }
 
 void fhk_destroy_def(struct fhk_def *D){
-	// this is intentionally looping to nm_alloc instead of nm; if this def is re-used then
-	// there may be allocs beyond nm.
-	// passing null to `free` is ok.
-	for(size_t i=0;i<D->nm_alloc;i++){
+	for(xidx i=0;i<vec_num(D->models);i++){
 		struct def_model *dm = &D->models[i];
-		free(dm->checks);
-		free(dm->params);
-		free(dm->returns);
+		if(dm->params)  vec_destroy(dm->params);
+		if(dm->returns) vec_destroy(dm->returns);
+		if(dm->shadows) vec_destroy(dm->shadows);
 	}
 
-	free(D->vars);
-	free(D->models);
+	if(D->models)  vec_destroy(D->models);
+	if(D->vars)    vec_destroy(D->vars);
+	if(D->shadows) vec_destroy(D->shadows);
 
 	free(D);
 }
 
-void fhk_reset_def(struct fhk_def *D){
-	D->nv = 0;
-	D->nm = 0;
-}
-
+// keep in sync with fhk_build_graph!
 size_t fhk_graph_size(struct fhk_def *D){
 	size_t ne = 0, nc = 0;
 
-	for(size_t i=0;i<D->nm;i++){
+	for(xidx i=0;i<vec_num(D->models);i++){
 		struct def_model *dm = &D->models[i];
-		ne += 2 * (dm->np + dm->nr);
-		nc += dm->nc;
+		ne += 2 * (vec_num(dm->params) + vec_num(dm->returns));
+		nc += vec_num(dm->shadows);
 	}
 
-	return g_alloc_size(D->nv, D->nm, ne, nc);
+	return sizeof(struct fhk_graph)
+		+ vec_num(D->models) * sizeof(struct fhk_model)
+		+ (vec_num(D->vars) + vec_num(D->shadows)) * sizeof(struct fhk_var)
+		+ nc * sizeof(fhk_shedge)
+		+ ne * sizeof(fhk_edge);
+}
+
+fhk_idx fhk_graph_idx(struct fhk_def *D, fhk_obj o){
+	switch(FHKO_TAG(o)){
+		case FHKO_MODEL:  return ~OIDX(o);
+		case FHKO_VAR:    return OIDX(o);
+		case FHKO_SHADOW: return vec_num(D->vars) + OIDX(o);
+		default:          return FHK_NIDX;
+	}
 }
 
 struct fhk_graph *fhk_build_graph(struct fhk_def *D, void *p){
+	static_assert(alignof(struct fhk_graph) == alignof(struct fhk_model));
+	static_assert(alignof(struct fhk_graph) == alignof(struct fhk_var));
+	static_assert(sizeof(struct fhk_shadow) == sizeof(struct fhk_var));
+	static_assert(alignof(struct fhk_graph) >= alignof(fhk_shedge));
+	static_assert(alignof(fhk_shedge) >= alignof(fhk_edge));
+
 	if(!p)
 		p = malloc(fhk_graph_size(D));
 
-#ifdef FHK_DEBUG
+#if FHK_DEBUG
 	void *_mem = p;
 #endif
 
-	struct fhk_graph *G = g_alloc_base(&p, D->nv, D->nm);
-#ifdef FHK_DEBUG
-	memset(&G->dsym, 0, sizeof(G->dsym));
-#endif
-	d_copy_data(D, G);
-	d_copy_links(&p, D, G);
+	assert(p == ALIGN(p, alignof(struct fhk_graph)));
 
-	g_compute_flags(G);
-	g_reorder_edges(G);
-	g_compute_ng(G);
-	g_compute_nu(G);
+	p += vec_num(D->models) * sizeof(struct fhk_model);
+	struct fhk_graph *G = p;
+	p += sizeof(struct fhk_graph);
+	p += (vec_num(D->vars) + vec_num(D->shadows)) * sizeof(struct fhk_var);
 
-#ifdef FHK_DEBUG
-	assert(p == ALIGN(_mem, 8) + fhk_graph_size(D));
+	g_copy_data(G, D);
+	p = g_build_edges(G, D, p);
+	g_reorder_edges(G, D);
+	g_mflags(G);
+	g_count_ng(G);
+	g_count_nu(G);
+
+#if FHK_DEBUG
+	assert(p == _mem+fhk_graph_size(D));
 #endif
 
 	return G;
 }
 
-int fhk_def_add_model(struct fhk_def *D, fhk_idx *idx, fhk_grp group, float k, float c){
-	if(D->nm == G_MAXIDX)
-		return FHKDE_IDX;
+// only use on malloc'd graphs produced by fhk_build_graph
+void fhk_destroy_graph(struct fhk_graph *G){
+	free(G->models - G->nm);
+}
 
-	*idx = D->nm;
+fhk_obj fhk_def_add_model(struct fhk_def *D, fhk_grp group, float k, float c, float cmin){
+	if(vec_num(D->models) == G_MAXIDX)
+		return FHKE_INVAL | E_META(1, I, G_MAXIDX);
 
-	struct def_model *dm = LIST_ADD(&D->nm, &D->nm_alloc, &D->models);
+	if(group > G_MAXGRP)
+		return FHKE_INVAL | E_META(1, G, group);
 
-	if(dm->np_alloc) dm->np = 0;
-	else LIST_PREALLOC(&dm->np, &dm->np_alloc, &dm->params, 8);
+	if(k < 0 || c < 1)
+		return FHKE_INVAL;
 
-	if(dm->nr_alloc) dm->nr = 0;
-	else LIST_PREALLOC(&dm->nr, &dm->nr_alloc, &dm->returns, 8);
+	xidx idx = vec_add(&D->models);
+	if(idx < 0)
+		return FHKE_MEM;
 
-	dm->nc = 0;
-
+	struct def_model *dm = &D->models[idx];
+	dm->params = NULL;
+	dm->returns = NULL;
+	dm->shadows = NULL;
 	dm->group = group;
 	dm->k = k;
 	dm->c = c;
+	dm->cmin = cmin;
 
-	return FHK_OK;
+	return OTAG(FHKO_MODEL) | idx;
 }
 
-int fhk_def_add_var(struct fhk_def *D, fhk_idx *idx, fhk_grp group, uint16_t size){
-	if(D->nv == G_MAXIDX)
-		return FHKDE_IDX;
+fhk_obj fhk_def_add_var(struct fhk_def *D, fhk_grp group, uint16_t size, float cdiff){
+	if(vec_num(D->vars)+vec_num(D->shadows) == G_MAXIDX)
+		return FHKE_INVAL | E_META(1, I, G_MAXIDX);
 
-	*idx = D->nv;
+	if(group > G_MAXGRP)
+		return FHKE_INVAL | E_META(1, G, group);
 
-	struct def_var *dv = LIST_ADD(&D->nv, &D->nv_alloc, &D->vars);
+	// solver uses size as an alignment, so it must be a power of 2.
+	// note: if this causes problems, it can be easily changed by adding a separate alignment
+	// variable (or just aligning to 16 always, like malloc)
+	if(size & (size-1))
+		return FHKE_INVAL;
+
+	xidx idx = vec_add(&D->vars);
+	if(idx < 0)
+		return FHKE_MEM;
+
+	struct def_var *dv = &D->vars[idx];
 	dv->group = group;
 	dv->size = size;
+	dv->n_fwd = 0;
+	dv->n_mod = 0;
+	dv->cdiff = cdiff;
 
-	return FHK_OK;
+	return OTAG(FHKO_VAR) | idx;
 }
 
-int fhk_def_add_param(struct fhk_def *D, fhk_idx model, fhk_idx var, fhk_map map){
-	if(model >= D->nm || var >= D->nv)
-		return FHKDE_INVAL;
+fhk_obj fhk_def_add_shadow(struct fhk_def *D, fhk_obj var, uint8_t guard, fhk_shvalue arg){
+	if(vec_num(D->vars)+vec_num(D->shadows) == G_MAXIDX)
+		return FHKE_INVAL | E_META(1, I, G_MAXIDX);
 
-	struct def_model *dm = &D->models[model];
-	
-	if(dm->np == G_MAXEDGE)
-		return FHKDE_IDX;
+	if(FHKO_TAG(var) != FHKO_VAR)
+		return FHKE_INVAL;
 
-	map = d_map(D, model, var, map);
-	if(map == MAP_INVAL)
-		return FHKDE_INVAL;
+	xidx xi = OIDX(var);
+	if((uint16_t)xi > vec_num(D->vars))
+		return FHKE_INVAL | E_META(1, I, xi);
 
-	*LIST_ADD(&dm->np, &dm->np_alloc, &dm->params) = (fhk_edge){
-		.idx = var,
-		.map = map,
-		.edge_param = dm->np-1 // for param links this is the definition edge index
-	};
+	xidx idx = vec_add(&D->shadows);
+	if(idx < 0)
+		return FHKE_MEM;
 
-	return FHK_OK;
+	struct def_shadow *ds = &D->shadows[idx];
+	ds->xi = xi;
+	ds->guard = guard;
+	ds->arg = arg;
+
+	return OTAG(FHKO_SHADOW) | idx;
 }
 
-int fhk_def_add_return(struct fhk_def *D, fhk_idx model, fhk_idx var, fhk_map map){
-	if(model >= D->nm || var >= D->nv)
-		return FHKDE_INVAL;
+fhk_ei fhk_def_add_param(struct fhk_def *D, fhk_obj model, fhk_obj var, fhk_extmap map){
+	if(FHKO_TAG(model) != FHKO_MODEL || FHKO_TAG(var) != FHKO_VAR)
+		return FHKE_INVAL;
 
-	struct def_model *dm = &D->models[model];
+	if(!d_checkmap(map))
+		return FHKE_INVAL;
 
-	if(dm->nr == G_MAXEDGE)
-		return FHKDE_IDX;
+	xidx mi = OIDX(model);
+	xidx xi = OIDX(var); 
 
-	map = d_map(D, model, var, map);
-	if(map == MAP_INVAL)
-		return FHKDE_INVAL;
+	if((uint16_t)mi > vec_num(D->models))
+		return FHKE_INVAL | E_META(1, I, mi);
 
-	*LIST_ADD(&dm->nr, &dm->nr_alloc, &dm->returns) = (fhk_edge){
-		.idx = var,
-		.map = map,
-		.edge_param = 0
-	};
+	if((uint16_t)xi > vec_num(D->vars))
+		return FHKE_INVAL | E_META(1, I, xi);
 
-	return FHK_OK;
+	struct def_model *dm = &D->models[mi];
+	struct def_var *dx = &D->vars[xi];
+
+	if(vec_num(dm->params) == G_MAXEDGE || dx->n_fwd == G_MAXFWDE)
+		return FHKE_INVAL;
+
+	fhk_idx idx = vec_add(&dm->params);
+	if(idx < 0)
+		return FHKE_MEM;
+
+	dx->n_fwd++;
+
+	struct def_edge *e = &dm->params[idx];
+	e->idx = xi;
+	e->map = map;
+
+	return 0;
 }
 
-int fhk_def_add_check(struct fhk_def *D, fhk_idx model, fhk_idx var, fhk_map map,
-		struct fhk_cst *cst){
+fhk_ei fhk_def_add_return(struct fhk_def *D, fhk_obj model, fhk_obj var, fhk_extmap map){
+	if(FHKO_TAG(model) != FHKO_MODEL || FHKO_TAG(var) != FHKO_VAR)
+		return FHKE_INVAL;
 
-	if(model >= D->nm || var >= D->nv)
-		return FHKDE_INVAL;
+	if(!d_checkmap(map))
+		return FHKE_INVAL;
 
-	struct def_model *dm = &D->models[model];
+	xidx mi = OIDX(model);
+	xidx xi = OIDX(var); 
 
-	if(dm->nc == G_MAXEDGE)
-		return FHKDE_IDX;
+	if((uint16_t)mi > vec_num(D->models))
+		return FHKE_INVAL | E_META(1, I, mi);
 
-	map = d_map(D, model, var, map);
-	if(map == MAP_INVAL)
-		return FHKDE_INVAL;
+	if((uint16_t)xi > vec_num(D->vars))
+		return FHKE_INVAL | E_META(1, I, xi);
 
-	if(cst->op >= FHKC__NUM)
-		return FHKDE_INVAL;
+	struct def_model *dm = &D->models[mi];
+	struct def_var *dx = &D->vars[xi];
 
-	*LIST_ADD(&dm->nc, &dm->nc_alloc, &dm->checks) = (struct fhk_check){
-		.edge = {
-			.idx = var,
-			.map = map,
-			.edge_param = 0
-		},
-		.cst = *cst
-	};
+	if(vec_num(dm->returns) == G_MAXEDGE || dx->n_mod == G_MAXMODE)
+		return FHKE_INVAL;
 
-	return FHK_OK;
+	fhk_idx idx = vec_add(&dm->returns);
+	if(idx < 0)
+		return FHKE_MEM;
+
+	dx->n_mod++;
+
+	struct def_edge *e = &dm->returns[idx];
+	e->idx = xi;
+	e->map = map;
+
+	return 0;
 }
 
-size_t fhk_subgraph_size(struct fhk_graph *G, struct fhk_subgraph *S){
-	size_t nm, nv, ne, nc;
-	s_count_nodes(G, S, &nv, &nm);
-	s_count_links(G, S, &ne, &nc);
-	size_t as = g_alloc_size(nv, nm, ne, nc);
-	return as + DSYM_ALIGN(G, as) + DSYM_SIZE(G, nv, nm);
+fhk_ei fhk_def_add_check(struct fhk_def *D, fhk_obj model, fhk_obj shadow, fhk_extmap map,
+		float penalty){
+
+	if(FHKO_TAG(model) != FHKO_MODEL || FHKO_TAG(shadow) != FHKO_SHADOW)
+		return FHKE_INVAL;
+
+	if(!d_checkmap(map))
+		return FHKE_INVAL;
+
+	xidx mi = OIDX(model);
+	xidx wi = OIDX(shadow);
+
+	if((uint16_t)mi > vec_num(D->models))
+		return FHKE_INVAL | E_META(1, I, mi);
+
+	if((uint16_t)wi > vec_num(D->shadows))
+		return FHKE_INVAL | E_META(1, I, wi);
+
+	struct def_model *dm = &D->models[mi];
+
+	if(vec_num(dm->shadows) == G_MAXEDGE)
+		return FHKE_INVAL;
+
+	fhk_idx idx = vec_add(&dm->shadows);
+	if(idx < 0)
+		return FHKE_MEM;
+
+	struct def_shedge *e = &dm->shadows[idx];
+	e->idx = wi;
+	e->map = map;
+	e->penalty = penalty;
+
+	return 0;
 }
 
-struct fhk_graph *fhk_build_subgraph(struct fhk_graph *G, struct fhk_subgraph *S, void *p){
-	size_t nv, nm;
-	s_count_nodes(G, S, &nv, &nm);
-
-	if(!p){
-		size_t ne, nc;
-		s_count_links(G, S, &ne, &nc);
-		size_t as = g_alloc_size(nv, nm, ne, nc);
-		p = malloc(as + DSYM_ALIGN(G, as) + DSYM_SIZE(G, nv, nm));
-	}
-
-#ifdef FHK_DEBUG
-	void *_mem = p;
-#endif
-
-	struct fhk_graph *H = g_alloc_base(&p, nv, nm);
-
-	// this could technically be smaller but it doesn't matter
-	H->ng = G->ng;
-
-	s_copy_data(G, S, H);
-	s_copy_links(&p, G, S, H);
-#ifdef FHK_DEBUG
-	s_copy_dsyms(&p, G, S, H);
-#endif
-
-	// non-given vars might have turned to given, so this needs to be recomputed
-	g_reorder_edges(H);
-
-	// some umaps might have been deleted so we may have H->nu < G->nu.
-	// this would work without the recomputation (similar to ng), but it makes the solver
-	// allocate less memory for umap caches
-	g_compute_nu(H);
-
-#ifdef FHK_DEBUG
-	assert(p == ALIGN(_mem, 8) + fhk_subgraph_size(G, S));
-#endif
-
-	return H;
-}
-
-static fhk_map d_map(struct fhk_def *D, fhk_idx mi, fhk_idx xi, fhk_map map){
-	switch(FHK_MAP_TAG(map)){
-		case FHK_MAP_TAG(FHKM_USER):
-			if(map >= G_MAXIDX)
-				return MAP_INVAL;
-			return map | GROUP_UMAP(D->models[mi].group);
-
-		case FHK_MAP_TAG(FHKM_SPACE):
-			return map | D->vars[xi].group;
-
-		default:
-			return map;
-	}
-}
-
-static fhk_map d_inverse(struct fhk_def *D, fhk_idx xi, fhk_idx mi, fhk_map map){
-	switch(FHK_MAP_TAG(map)){
-		case FHK_MAP_TAG(FHKM_USER):
-			return FHKM_USER | UMAP_INVERSE | GROUP_UMAP(D->vars[xi].group) | (map & UMAP_INDEX);
-
-		case FHK_MAP_TAG(FHKM_SPACE):
-			return FHKM_SPACE | D->models[mi].group;
-
-		default:
-			return map;
+static bool d_checkmap(fhk_extmap map){
+	switch(map){
+		case FHKM_IDENT: return true; // ident between groups is allowed, at your own risk.
+		case FHKM_SPACE: return true; // space is always valid
+		default:         return map < G_MAXUMAP;
 	}
 }
 
-static void d_copy_data(struct fhk_def *D, struct fhk_graph *G){
-	for(size_t i=0;i<G->nv;i++){
-		struct fhk_var *x = &G->vars[i];
+static void g_copy_data(struct fhk_graph *G, struct fhk_def *D){
+	G->nv = vec_num(D->vars);
+	G->nx = G->nv + vec_num(D->shadows);
+	G->nm = vec_num(D->models);
+#if FHK_DEBUG
+	G->dsym = NULL;
+#endif
+
+	for(xidx i=0;i<G->nv;i++){
 		struct def_var *dx = &D->vars[i];
+		struct fhk_var *x = &G->vars[i];
 
 		x->group = dx->group;
 		x->size = dx->size;
+		x->n_fwd = dx->n_fwd;
+		x->n_mod = dx->n_mod;
 	}
 
-	for(size_t i=0;i<G->nm;i++){
-		struct fhk_model *m = &G->models[i];
+	for(xidx i=G->nv;i<G->nx;i++){
+		struct def_shadow *ds = &D->shadows[i - G->nv];
+		struct fhk_shadow *w = &G->shadows[i];
+
+		w->arg = ds->arg;
+		w->xi = ds->xi;
+		w->group = G->vars[w->xi].group;
+		w->guard = ds->guard;
+	}
+
+	for(xidx i=0;i<G->nm;i++){
 		struct def_model *dm = &D->models[i];
+		struct fhk_model *m = &G->models[~i];
 
 		m->group = dm->group;
 		m->k = dm->k;
 		m->c = dm->c;
+		m->cmin = dm->cmin;
 
 		// precompute inverse
 		//     cost  = c*S + k
@@ -368,10 +410,11 @@ static void d_copy_data(struct fhk_def *D, struct fhk_graph *G){
 	}
 }
 
-static void d_copy_links(void **p, struct fhk_def *D, struct fhk_graph *G){
+static void *g_build_edges(struct fhk_graph *G, struct fhk_def *D, void *p){
+	static_assert(offsetof(struct fhk_model, shadows) == offsetof(struct fhk_model, params));
 
 	// alloc strategy:
-	//     [v1 models] [v1_m1 checks] [v1_m1 params] ... [v1_mN checks] [v1_mN params] [v2 models] ...
+	//     [v1 models] [v1_m1 backward edges] ... [v1_mN bw edges] [v2 models] ...
 	//     [v1 fwds] [v1_f1 returns] [v1_f2 returns] ... [v1_fN returns] [v2 fwds] [v2_f1 returns] ...
 	//
 	// this will make it so that there is a good chance that the candidate model's checks/params will
@@ -382,431 +425,318 @@ static void d_copy_links(void **p, struct fhk_def *D, struct fhk_graph *G){
 	// for complex models)
 	
 	// the allocation proceeds as follows: *p is guaranteed to have enough space, so we use it
-	// as a scratch space to construct the v->m links sequentially (m->v links don't need to be
-	// constructed, just counted). then we assign the link pointers, but don't write any links
+	// as a scratch space to construct the v->m edges sequentially (m->v edges don't need to be
+	// constructed, just counted). then we assign the edge pointers, but don't write any edges
 	// yet (as *p is our scratch space). then after assigning all pointers, we can construct
-	// the real links. this way we avoid any extra allocations.
+	// the real edges. this way we avoid any extra allocations.
 
-	// n_mod and n_fwd will count the number of models/fwds respectively.
-	for(size_t i=0;i<G->nv;i++){
-		struct fhk_var *x = &G->vars[i];
-		x->n_mod = 0;
-		x->n_fwd = 0;
-	}
+	// assign x-> edge pointers to the temp scratch space, we will construct them here first
 
-	// count the reverse links
-	for(size_t i=0;i<G->nm;i++){
-		struct def_model *dm = &D->models[i];
-		struct fhk_model *m = &G->models[i];
-		m->n_param = dm->np;
-		m->n_return = dm->nr;
-		m->n_check = dm->nc;
-		m->params = NULL;
-		m->returns = NULL;
-		// don't need to NULL m->checks
-		for(size_t j=0;j<dm->np;j++) G->vars[dm->params[j].idx].n_fwd++;
-		for(size_t j=0;j<dm->nr;j++) G->vars[dm->returns[j].idx].n_mod++;
-	}
+	void *scratch = p;
 
-	// assign v->m link pointers to the temp scratch space, we will construct them here first
-	void *scratch = *p;
-	for(size_t i=0;i<G->nv;i++){
+	for(xidx i=0;i<G->nv;i++){
 		struct fhk_var *x = &G->vars[i];
 		x->models = scratch;
 		scratch += x->n_mod * sizeof(*x->models);
-		x->fwd_models = scratch;
-		scratch += x->n_fwd * sizeof(*x->fwd_models);
+		x->fwds = scratch;
+		scratch += x->n_fwd * sizeof(*x->fwds);
 
 		// these will be the running index counters in the next step
 		x->n_mod = 0;
 		x->n_fwd = 0;
 	}
 
-	// construct temp v->m links (only the indices, we don't need mapping yet)
-	for(size_t i=0;i<G->nm;i++){
+	// construct temp x-> edges (only indices, we don't need mapping yet)
+
+	for(xidx i=0;i<G->nm;i++){
 		struct def_model *dm = &D->models[i];
 
-		for(size_t j=0;j<dm->np;j++){
+		for(int64_t j=0;j<vec_num(dm->params);j++){
 			struct fhk_var *x = &G->vars[dm->params[j].idx];
-			x->fwd_models[x->n_fwd++].idx = i;
+			x->fwds[x->n_fwd++].idx = ~i;
 		}
 
-		for(size_t j=0;j<dm->nr;j++){
+		for(int64_t j=0;j<vec_num(dm->returns);j++){
 			struct fhk_var *x = &G->vars[dm->returns[j].idx];
-			x->models[x->n_mod++].idx = i;
+			x->models[x->n_mod++].idx = ~i;
 		}
 	}
 
-	// assign backwards link pointers
-	for(size_t i=0;i<G->nv;i++){
+	// count m->x edge positions
+	
+	for(xidx i=0;i<G->nm;i++){
+		struct def_model *dm = &D->models[i];
+		struct fhk_model *m = &G->models[~i];
+
+		m->params = NULL;
+		m->returns = NULL;
+		m->shadows = NULL;
+		m->p_shadow = -vec_num(dm->shadows);
+		m->p_cparam = 0;
+		m->p_param = vec_num(dm->params);
+		m->p_return = vec_num(dm->returns);
+
+		for(int64_t j=0;j<vec_num(dm->params);j++){
+			struct def_var *dx = &D->vars[dm->params[j].idx];
+			if(dx->n_mod) m->p_cparam++;
+		}
+	}
+
+	// assign backwards edge pointers
+
+	for(xidx i=0;i<G->nv;i++){
 		struct fhk_var *x = &G->vars[i];
 		fhk_edge *models = x->models;
-		x->models = *p;
-		*p += x->n_mod * sizeof(*x->models);
+		x->models = p;
+		p += x->n_mod * sizeof(*x->models);
 
-		for(size_t j=0;j<x->n_mod;j++){
+		for(int64_t j=0;j<x->n_mod;j++){
 			struct fhk_model *m = &G->models[models[j].idx];
-			if(LIKELY(!m->params)){
-				m->checks = *p;
-				*p += m->n_check * sizeof(*m->checks);
-				m->params = *p;
-				*p += m->n_param * sizeof(*m->params);
+			if(!m->params){
+				p += -m->p_shadow * sizeof(*m->shadows);
+				m->params = p;
+				p += m->p_param * sizeof(*m->params);
 			}
 		}
 
 		x->n_mod = 0; // this will be a counter
 	}
 
-	// assign forward link pointers
-	for(size_t i=0;i<G->nv;i++){
-		struct fhk_var *x = &G->vars[i];
-		fhk_edge *fwd_models = x->fwd_models;
-		x->fwd_models = *p;
-		*p += x->n_fwd * sizeof(*x->fwd_models);
+	// assign forward edge pointers
 
-		for(size_t j=0;j<x->n_fwd;j++){
-			struct fhk_model *m = &G->models[fwd_models[j].idx];
-			if(LIKELY(!m->returns)){
-				m->returns = *p;
-				*p += m->n_return * sizeof(*m->returns);
+	for(xidx i=0;i<G->nv;i++){
+		struct fhk_var *x = &G->vars[i];
+		fhk_edge *fwds = x->fwds;
+		x->fwds = p;
+		p += x->n_fwd * sizeof(*x->fwds);
+
+		for(int64_t j=0;j<x->n_fwd;j++){
+			struct fhk_model *m = &G->models[fwds[j].idx];
+			if(!m->returns){
+				m->returns = p;
+				p += m->p_return * sizeof(*m->returns);
 			}
 		}
 
-		x->n_fwd = 0;
+		x->n_fwd = 0; // counter
 	}
 
-	// assign the rest (models with no incoming edges don't get assigned in the above loops)
-	for(size_t i=0;i<G->nm;i++){
-		struct fhk_model *m = &G->models[i];
+	// assign the rest. models with no incoming edges don't get assigned in the above loops.
+	// however, all shadows will get assigned because each shadow is attached to a variable.
 
-		if(UNLIKELY(!m->params)){
-			m->checks = *p;
-			*p += m->n_check * sizeof(*m->checks);
-			m->params = *p;
-			*p += m->n_param * sizeof(*m->params);
+	for(xidx i=0;i<G->nm;i++){
+		struct fhk_model *m = &G->models[~i];
+
+		if(!m->params){
+			p += -m->p_shadow * sizeof(*m->shadows);
+			m->params = p;
+			p += m->p_param * sizeof(*m->params);
 		}
 
-		if(UNLIKELY(!m->returns)){
-			m->returns = *p;
-			*p += m->n_return * sizeof(*m->returns);
+		if(!m->returns){
+			m->returns = p;
+			p += m->p_return * sizeof(*m->returns);
 		}
 	}
 
-	// now we can construct the real links!
-	for(size_t i=0;i<G->nm;i++){
+	// now we can construct the real edges!
+
+	for(xidx i=0;i<G->nm;i++){
 		struct def_model *dm = &D->models[i];
-		
-		// m->v links, these can just be copied
-		memcpy(G->models[i].params, dm->params, dm->np * sizeof(*dm->params));
-		memcpy(G->models[i].returns, dm->returns, dm->nr * sizeof(*dm->returns));
-		memcpy(G->models[i].checks, dm->checks, dm->nc * sizeof(*dm->checks));
+		struct fhk_model *m = &G->models[~i];
 
-		// v->m links, same as before but we need the inverse map
+		// shadows (m->w)
+		{
+			int64_t p_shadow = 0;
 
-		for(size_t j=0;j<dm->np;j++){
-			struct fhk_var *x = &G->vars[dm->params[j].idx];
-			x->fwd_models[x->n_fwd++] = (fhk_edge){
-				.idx = i,
-				.map = d_inverse(D, j, i, dm->params[j].map)
-			};
+			for(int64_t j=0;j<vec_num(dm->shadows);j++){
+				struct def_shedge *e = &dm->shadows[j];
+				struct fhk_shadow *w = &G->shadows[G->nv + e->idx];
+				struct def_var *dx = &D->vars[w->xi]; // use def_var because n_mod is zeroed in G
+
+				fhk_shedge *ep = &m->shadows[--p_shadow];
+				ep->penalty = e->penalty;
+				ep->map = g_extmap(G, ~i, w->xi, e->map);
+				ep->idx = G->nv + e->idx;
+				ep->flags = dx->n_mod ? W_COMPUTED : 0;
+			}
 		}
 
-		for(size_t j=0;j<dm->nr;j++){
-			struct fhk_var *x = &G->vars[dm->returns[j].idx];
-			x->models[x->n_mod++] = (fhk_edge){
-				.idx = i,
-				.edge_param = j,
-				.map = d_inverse(D, j, i, dm->returns[j].map)
-			};
+		// params (m->v) & fwd (v->m)
+		{
+			int64_t p_cparam = 0;
+			int64_t p_gparam = m->p_cparam;
+
+			for(int64_t j=0;j<vec_num(dm->params);j++){
+				struct def_edge *de = &dm->params[j];
+				struct fhk_var *x = &G->vars[de->idx];
+				struct def_var *dx = &D->vars[de->idx];
+
+				fhk_edge *ep = &m->params[dx->n_mod ? (p_cparam++) : (p_gparam++)];
+				ep->idx = de->idx;
+				ep->a = j;
+				ep->map = g_extmap(G, ~i, de->idx, de->map);
+
+				fhk_edge *ei = &x->fwds[x->n_fwd++];
+				ei->idx = ~i;
+				ei->map = g_extmapi(G, de->idx, ~i, de->map);
+			}
+		}
+
+		// returns (m->v) & models (v->m)
+		for(int64_t j=0;j<vec_num(dm->returns);j++){
+			struct def_edge *de = &dm->returns[j];
+			struct fhk_var *x = &G->vars[de->idx];
+
+			fhk_edge *ep = &m->returns[j];
+			ep->idx = de->idx;
+			ep->a = j;
+			ep->map = g_extmap(G, ~i, de->idx, de->map);
+
+			fhk_edge *ei = &x->models[x->n_mod++];
+			ei->idx = ~i;
+			ei->a = j;
+			ei->map = g_extmapi(G, de->idx, ~i, de->map);
 		}
 	}
+
+	return p;
 }
 
-static void s_count_nodes(struct fhk_graph *G, struct fhk_subgraph *S, size_t *nv, size_t *nm){
-	size_t _nv = 0, _nm = 0;
-
-	for(size_t i=0;i<G->nv;i++) _nv += !(S->r_vars[i] == FHKR_SKIP);
-	for(size_t i=0;i<G->nm;i++) _nm += !(S->r_models[i] == FHKR_SKIP);
-
-	*nv = _nv;
-	*nm = _nm;
-}
-
-static void s_count_links(struct fhk_graph *G, struct fhk_subgraph *S, size_t *ne, size_t *nc){
-	size_t _ne = 0, _nc = 0;
-
-	for(size_t i=0;i<G->nm;i++){
-		if(S->r_models[i] == FHKR_SKIP)
-			continue;
-
-		struct fhk_model *m = &G->models[i];
-
-		for(size_t j=0;j<m->n_param;j++) ne += !(S->r_vars[m->params[j].idx] == FHKR_SKIP);
-		for(size_t j=0;j<m->n_return;j++) ne += !(S->r_vars[m->returns[j].idx] == FHKR_SKIP);
-		for(size_t j=0;j<m->n_check;j++) nc += !(S->r_vars[m->checks[j].edge.idx] == FHKR_SKIP);
+static fhk_map g_extmap(struct fhk_graph *G, xidx mi, xidx xi, fhk_extmap emap){
+	switch(emap){
+		case FHKM_IDENT: return P_IDENT;
+		case FHKM_SPACE: return P_SPACE(G->vars[xi].group);
+		default:         return P_UMAP(G->models[mi].group, emap);
 	}
-
-	*ne = 2 * _ne;
-	*nc = _nc;
 }
 
-static void s_copy_data(struct fhk_graph *G, struct fhk_subgraph *S, struct fhk_graph *H){
-	// !!! don't run this after s_copy_links !!!
-	// !!! this overwrites link data         !!!
+static fhk_map g_extmapi(struct fhk_graph *G, xidx xi, xidx mi, fhk_extmap emap){
+	switch(emap){
+		case FHKM_IDENT: return P_IDENT;
+		case FHKM_SPACE: return P_SPACE(G->models[mi].group);
+		default:         return P_UMAPI(G->vars[xi].group, emap);
+	}
+}
+
+static bool g_mretbuf(struct fhk_graph *G, xidx mi){
+	// if the model being selected implies it will be always chosen for each return edge,
+	// we can skip the the temp buffer and write directly to var memory.
+	// some of these special cases are:
+	//     (1) model returns only 1 variable and exactly 1 instance of that variable
+	//     (2) model is the only model for each return variable AND the map is an interval
 	
-	for(size_t i=0;i<G->nv;i++){
-		if(S->r_vars[i] != FHKR_SKIP)
-			memcpy(&H->vars[S->r_vars[i]], &G->vars[i], sizeof(*G->vars));
+	struct fhk_model *m = &G->models[mi];
+
+	// (1)
+	if(m->p_return == 1 && P_ISIDENT(m->returns[0].map))
+		return false;
+
+	// (2)
+	for(int64_t i=0;i<m->p_return;i++){
+		struct fhk_var *x = &G->vars[m->returns[i].idx];
+		if(x->n_mod != 1 || P_ISUSER(m->returns[i].map))
+			return true;
 	}
 
-	for(size_t i=0;i<G->nm;i++){
-		if(S->r_models[i] != FHKR_SKIP)
-			memcpy(&H->models[S->r_models[i]], &G->models[i], sizeof(*G->models));
-	}
+	return false;
 }
 
-static void s_copy_links(void **p, struct fhk_graph *G, struct fhk_subgraph *S, struct fhk_graph *H){
-	// see d_copy_links for comments about the allocation strategy.
-	// the difference here is that we don't need to create the temp links on a scratch space
-	// because we have them already computed in G.
-	
-	// Note: param/return edge_params don't need to be fixed because all params and returns
-	// must be preserved
-
-	// zero these to know if we have alloc'd them
-	for(size_t i=0;i<H->nm;i++){
-		struct fhk_model *m = &H->models[i];
-		m->n_param = 0;
-		m->n_check = 0;
-		m->n_return = 0;
-		m->params = NULL;
-		m->returns = NULL;
-	}
-
-#define copymp(_mG, _mH)                                                   \
-	do {                                                                   \
-		_mH->params = *p;                                                  \
-		for(size_t _i=0;_i<_mG->n_param;_i++){                             \
-			fhk_edge _e = _mG->params[_i];                                 \
-			if(S->r_vars[_e.idx] == FHKR_SKIP)                             \
-				continue;                                                  \
-			_e.idx = S->r_vars[_e.idx];                                    \
-			_mH->params[_mH->n_param++] = _e;                              \
-		}                                                                  \
-		*p += _mH->n_param * sizeof(*_mH->params);                         \
-	} while(0)
-
-#define copymc(_mG, _mH)                                                   \
-	do {                                                                   \
-		_mH->checks = *p;                                                  \
-		for(size_t _i=0;_i<_mG->n_check;_i++){                             \
-			struct fhk_check *_c = &_mG->checks[_i];                       \
-			if(S->r_vars[_c->edge.idx] == FHKR_SKIP)                       \
-				continue;                                                  \
-			_mH->checks[_mH->n_check] = *_c;                               \
-			_mH->checks[_mH->n_check].edge.idx = S->r_vars[_c->edge.idx];  \
-			_mH->n_check++;                                                \
-		}                                                                  \
-		*p += _mH->n_check * sizeof(*_mH->checks);                         \
-	} while(0)
-
-#define copymbw(_mG, _mH)                                                  \
-	do {                                                                   \
-		copymp(_mG, _mH);                                                  \
-		copymc(_mG, _mH);                                                  \
-	} while(0)
-
-#define copymr(_mG, _mH)                                                   \
-	do {                                                                   \
-		_mH->returns = *p;                                                 \
-		for(size_t _i=0;_i<_mG->n_return;_i++){                            \
-			fhk_edge _e = _mG->returns[_i];                                \
-			if(S->r_vars[_e.idx] == FHKR_SKIP)                             \
-				continue;                                                  \
-			_e.idx = S->r_vars[_e.idx];                                    \
-			_mH->returns[_mH->n_return++] = _e;                            \
-		}                                                                  \
-		*p += _mH->n_return * sizeof(*_mH->returns);                       \
-	} while(0)
-
-#define copyv(_vm, _nvm, _mv, _mvcopy)                                     \
-	for(size_t i=0;i<G->nv;i++){                                           \
-		if(S->r_vars[i] == FHKR_SKIP)                                      \
-			continue;                                                      \
-		                                                                   \
-		struct fhk_var *xG = &G->vars[i];                                  \
-		struct fhk_var *xH = &H->vars[S->r_vars[i]];                       \
-		xH->_nvm = 0;                                                      \
-		xH->_vm = *p;                                                      \
-		                                                                   \
-		for(size_t j=0;j<xG->_nvm;j++){                                    \
-			xidx miG = xG->_vm[j].idx;                                     \
-			if(S->r_models[miG] == FHKR_SKIP)                              \
-				continue;                                                  \
-			xH->_vm[xH->_nvm++] = xG->_vm[j];                              \
-		}                                                                  \
-		                                                                   \
-		*p += xH->_nvm * sizeof(*xH->_vm);                                 \
-		for(size_t j=0;j<xH->_nvm;j++){                                    \
-			struct fhk_model *mG = &G->models[xH->_vm[j].idx];             \
-			xidx miH = S->r_models[xH->_vm[j].idx];                        \
-			struct fhk_model *mH = &H->models[miH];                        \
-			xH->_vm[j].idx = miH;                                          \
-			if(LIKELY(!mH->_mv))                                           \
-				_mvcopy(mG, mH);                                           \
-		}                                                                  \
-	}
-
-	copyv(models, n_mod, params, copymbw);     // backward links
-	copyv(fwd_models, n_fwd, returns, copymr); // forward links
-
-	// remaining
-	for(size_t i=0;i<G->nm;i++){
-		if(S->r_models[i] == FHKR_SKIP)
-			continue;
-
-		struct fhk_model *mG = &G->models[i];
-		struct fhk_model *mH = &H->models[S->r_models[i]];
-
-		if(UNLIKELY(!mH->params))  copymbw(mG, mH);
-		if(UNLIKELY(!mH->returns)) copymr(mG, mH);
-	}
-
-#undef copymp
-#undef copymc
-#undef copymbw
-#undef copymr
-#undef copyv
-}
-
-#if FHK_DEBUG
-
-static void s_copy_ds(const char **dest, const char **src, fhk_idx *rt, size_t n){
-	for(size_t i=0;i<n;i++){
-		if(rt[i] == FHKR_SKIP)
-			continue;
-		dest[rt[i]] = src[i];
-	}
-}
-
-static void s_copy_dsyms(void **p, struct fhk_graph *G, struct fhk_subgraph *S, struct fhk_graph *H){
-	if(G->dsym.v_names || G->dsym.m_names)
-		*p = ALIGN(*p, sizeof(void *));
-
-	if(G->dsym.v_names){
-		H->dsym.v_names = *p;
-		*p += H->nv * sizeof(*H->dsym.v_names);
-		s_copy_ds(H->dsym.v_names, G->dsym.v_names, S->r_vars, G->nv);
-	}else{
-		H->dsym.v_names = NULL;
-	}
-
-	if(G->dsym.m_names){
-		H->dsym.m_names = *p;
-		*p += H->nm * sizeof(*H->dsym.m_names);
-		s_copy_ds(H->dsym.m_names, G->dsym.m_names, S->r_models, G->nm);
-	}else{
-		H->dsym.m_names = NULL;
-	}
-}
-
-#endif
-
-static size_t g_alloc_size(size_t nv, size_t nm, size_t ne, size_t nc){
-	// this assumes no padding between allocs.
-	// everything is aligned to 8 so np.
-	// note that you must also count reverse edges in ne.
-	return sizeof(struct fhk_graph)
-		+ nv * sizeof(struct fhk_var)
-		+ nm * sizeof(struct fhk_model)
-		+ ne * sizeof(fhk_edge)
-		+ nc * sizeof(struct fhk_check);
-}
-
-static struct fhk_graph *g_alloc_base(void **p, fhk_idx nv, fhk_idx nm){
-	*p = ALIGN(*p, alignof(struct fhk_graph));
-
-	struct fhk_graph *G = *p;
-	*p += sizeof(*G);
-
-	G->nv = nv;
-	G->nm = nm;
-
-	G->vars = *p;
-	*p += nv * sizeof(*G->vars);
-
-	G->models = *p;
-	*p += nm * sizeof(*G->models);
-
-	return G;
-}
-
-static void g_compute_flags(struct fhk_graph *G){
-	for(size_t i=0;i<G->nm;i++){
-		struct fhk_model *m = &G->models[i];
+static void g_mflags(struct fhk_graph *G){
+	for(int64_t i=0;i<G->nm;i++){
+		struct fhk_model *m = &G->models[~i];
 		m->flags = 0;
 
-		if(m->n_return == 1 && FHK_MAP_TAG(m->returns[0].map) == FHKM_IDENT)
+		if(!g_mretbuf(G, ~i))
 			m->flags |= M_NORETBUF;
 	}
 }
 
-static void g_reorder_edges(struct fhk_graph *G){
-	// TODO: could do even smarter reordering here, eg. put most expensive parameters/checks first
-
-	for(size_t i=0;i<G->nm;i++){
-		struct fhk_model *m = &G->models[i];
-
+static void g_reorder_edges(struct fhk_graph *G, struct fhk_def *D){
 #define swap(a, b) do { typeof(a) _a = (a); (a) = (b); (b) = _a; } while(0)
+	for(int64_t i=0;i<G->nm;i++){
+		struct fhk_model *m = &G->models[~i];
 
-		// swap non-given params to front
-		m->n_cparam = 0;
-		for(size_t j=0;j<m->n_param;j++){
-			struct fhk_var *x = &G->vars[m->params[j].idx];
-
-			// not given
-			if(x->n_mod){
-				swap(m->params[m->n_cparam], m->params[j]);
-				m->n_cparam++;
+		// sort computed params by cost difference (in reverse order, because
+		// that's how the solver iterates them)
+		for(int64_t j=0;j<m->p_cparam;j++){
+			for(int64_t k=j+1;k<m->p_cparam;k++){
+				if(D->vars[m->params[j].idx].cdiff > D->vars[m->params[k].idx].cdiff)
+					swap(m->params[j], m->params[k]);
 			}
+			dv("%s -> %s (#%ld) delta: %g\n",
+					fhk_dsym(G, ~i),
+					fhk_dsym(G, m->params[j].idx),
+					j, D->vars[m->params[j].idx].cdiff);
 		}
 
-		// same with checks
-		m->n_ccheck = 0;
-		for(size_t j=0;j<m->n_check;j++){
-			struct fhk_var *x = &G->vars[m->checks[j].edge.idx];
 
-			if(x->n_mod){
-				swap(m->checks[m->n_ccheck], m->checks[j]);
-				m->n_ccheck++;
+		// and shadows by penalty
+		for(int64_t j=m->p_shadow;j;j++){
+			for(int64_t k=j+1;k;k++){
+				if(m->shadows[j].penalty < m->shadows[k].penalty)
+					swap(m->shadows[j], m->shadows[k]);
 			}
+			dv("%s => %s (#%ld) penalty: %g\n",
+					fhk_dsym(G, ~i),
+					fhk_dsym(G, m->shadows[j].idx),
+					j, m->shadows[j].penalty);
 		}
 	}
-
 #undef swap
 }
 
-static void g_compute_ng(struct fhk_graph *G){
-	int32_t maxg = -1;
+static void g_count_ng(struct fhk_graph *G){
+	int64_t maxg = -1;
 	
-	for(size_t i=0;i<G->nv;i++) maxg = max(maxg, G->vars[i].group);
-	for(size_t i=0;i<G->nm;i++) maxg = max(maxg, G->models[i].group);
+	for(int64_t i=0;i<G->nv;i++) maxg = max(maxg, G->vars[i].group);
+	for(int64_t i=0;i<G->nm;i++) maxg = max(maxg, G->models[~i].group);
 
 	G->ng = maxg+1;
 }
 
-static void g_compute_nu(struct fhk_graph *G){
-	int32_t maxu = -1;
+static void g_count_nu(struct fhk_graph *G){
+	int64_t maxu = -1;
 
-#define checku(map) if((FHK_MAP_TAG(map) == FHKM_USER)) maxu = max(maxu, ((int32_t)(map) & UMAP_INDEX))
-	// it's enough to only check m->v links, inverse maps have same index set
-	for(size_t i=0;i<G->nm;i++){
-		struct fhk_model *m = &G->models[i];
-		for(size_t j=0;j<m->n_param;j++)  checku(m->params[j].map);
-		for(size_t j=0;j<m->n_return;j++) checku(m->returns[j].map);
-		for(size_t j=0;j<m->n_check;j++)  checku(m->checks[j].edge.map);
+#define checku(map) if(P_ISUSER(map)) maxu = max(maxu, ((int32_t)P_UIDX(map)))
+	// it's enough to only check v->m edges, inverse maps have same index set
+	for(int64_t i=0;i<G->nv;i++){
+		struct fhk_var *x = &G->vars[i];
+		for(int64_t j=0;j<x->n_mod;j++) checku(x->models[j].map);
+		for(int64_t j=0;j<x->n_fwd;j++) checku(x->fwds[j].map);
 	}
 #undef checku
 
 	G->nu = maxu+1;
+}
+
+static void *vec_alloc(vec **v, uint32_t num){
+	void *p;
+	uint32_t alloc, pos;
+
+	if(*v){
+		p = &vec_header(*v);
+		alloc = vec_header(*v).alloc;
+		pos = vec_header(*v).pos;
+	}else{
+		p = NULL;
+		alloc = 0;
+		pos = 0;
+	}
+
+	if(pos+num > alloc){
+		do {
+			alloc = alloc ? (2*alloc) : 64;
+		} while(pos+num > alloc);
+
+		p = realloc(p, alloc + sizeof(vec_header(*v)));
+		if(!p)
+			return NULL;
+
+		*v = p + sizeof(vec_header(*v));
+		vec_header(*v).alloc = alloc;
+	}
+
+	vec_header(*v).pos = pos+num;
+	return (*v)->data + pos;
 }

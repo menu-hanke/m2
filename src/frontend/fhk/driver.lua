@@ -1,94 +1,15 @@
--- this module is the Lua counterpart/"glue" for driver.c/h.
--- the idea is to generate a lua function that will setup the necessary state
--- (see driver.h and mapping.lua) and jump to fhkD_continue.
-
-require "fhk.ctypes"
-local code = require "code"
+local transform = require "fhk.transform"
 local ctypes = require "fhk.ctypes"
 local ffi = require "ffi"
 local C = ffi.C
 
----- status ----------------------------------------
-
-local fhkD_status_ct = ffi.metatype("fhkD_status", {
-	__index = {
-		fmt_error = function(self, ecode, symbols)
-			if ecode == C.FHKDE_CONV then return "type conversion error" end
-			if ecode == C.FHKDE_MOD then
-				return string.format("model call error: %s", require("model").error())
-			end
-			if ecode == C.FHKDE_FHK then
-				return string.format("fhk failed: %s", ctypes.fmt_error(
-					ctypes.status_arg(self.e_status).s_ei, symbols))
-			end
-
-			assert(false)
-		end
-	}
-})
-
----- driver loop ----------------------------------------
-
-local dvbuild_mt = { __index={} }
 local umem_mt = { __index={} }
-
-local function builder()
-	return setmetatable({
-		givens       = {},
-		models       = {},
-		s_given      = 0,
-		s_models     = 0
-	}, dvbuild_mt)
-end
 
 local function umem()
 	return setmetatable({
 		fields          = {},
 		ctype_callbacks = {}
 	}, umem_mt)
-end
-
-function dvbuild_mt.__index:given(idx, create)
-	self.givens[idx] = create
-	self.s_given = math.max(self.s_given, idx+1)
-end
-
-function dvbuild_mt.__index:model(idx, create)
-	self.models[idx] = create
-	self.s_models = math.max(self.s_models, idx+1)
-end
-
-function dvbuild_mt.__index:create_mapping(alloc)
-	local umem = umem()
-
-	local vars = ffi.cast("fhkD_given *",
-		alloc(ffi.sizeof("fhkD_given")*self.s_given, ffi.alignof("fhkD_given")))
-	
-	for i=0, self.s_given-1 do
-		if self.givens[i] then
-			vars[i].trace = false
-			self.givens[i](vars+i, umem)
-		end
-	end
-
-	local models = ffi.cast("fhkD_model *",
-		alloc(ffi.sizeof("fhkD_model")*self.s_models, ffi.alignof("fhkD_model")))
-	
-	for i=0, self.s_models-1 do
-		if self.models[i] then
-			models[i].trace = false
-			self.models[i](models+i, umem)
-		end
-	end
-
-	local M = ffi.cast("fhkD_mapping *",
-		alloc(ffi.sizeof("fhkD_mapping"), ffi.alignof("fhkD_mapping")))
-	
-	M.vars = vars
-	M.models = models
-	M.maps = nil -- TODO
-
-	return M, umem
 end
 
 function umem_mt.__index:scalar(ctype, init)
@@ -132,82 +53,73 @@ function umem_mt.__index:ctype()
 	return self._ctype
 end
 
-local function continue_loop(opt)
-	local symbols, trace = opt.symbols, opt.trace
-	return function(D)
-		while true do
-			local status = C.fhkD_continue(D)
+local function build(nodeset, alloc)
+	-- put given variables first
+	local vorder = {}
+	for _,var in pairs(nodeset.vars) do
+		table.insert(vorder, var)
+	end
+	table.sort(vorder, function(a, b) return a.create and not b.create end)
 
-			if status == C.FHKD_OK then
-				return
-			elseif status == C.FHKDL_TRACE then
-				trace(D, ctypes.status(D.tr_status))
-			elseif status < 0 then
-				return D.status:fmt_error(status, symbols)
-			else
-				assert(false)
-			end
+	local G, mapping = transform.build(nodeset, { vars=vorder }, alloc)
+
+	local maxgiven = 0
+
+	for i=0, G.nv-1 do
+		if mapping.nodes[i].create then
+			maxgiven = i
 		end
 	end
-end
 
--- opt:
---     alloc    : alloc(size, align) -- _static_ allocator, this must outlive the driver
---     trace?   : driver tracer
---     symbols? : var/model symbols for error messages
---
--- this generates a function that inits umem and hands control to the driver loop.
--- note: this is per-subgraph, not per-solver.
--- note: the solver must have a shape table set when entering the generated function, this function
---       will error if the solver requests shape.
-function dvbuild_mt.__index:compile(opt)
-	local M, umem = self:create_mapping(opt.alloc)
-	local caller = code.new()
+	local M = ffi.cast("fhkD_mapping *",
+		alloc(ffi.sizeof("fhkD_mapping"), ffi.alignof("fhkD_mapping")))
 
-	caller:emit([[
-		local ffi = require "ffi"
-		local C, cast = ffi.C, ffi.cast
-		local M, loop, umem_ctp = M, loop, umem_ctp
-	]])
+	assert(ffi.alignof("fhkD_given") == ffi.alignof("fhkD_model"))
+	local nodes = alloc(ffi.sizeof("fhkD_model")*G.nm + ffi.sizeof("fhkD_given")*(maxgiven+1),
+		ffi.alignof("fhkD_given"))
+	
+	-- this also assigns M.vars, see driver.h
+	M.models = ffi.cast("fhkD_model *", nodes) + G.nm
+	M.maps = nil -- TODO
 
-	for i=1, #umem.fields do
-		caller:emitf("local __init_%d = umem.fields[%d].init", i, i)
-	end
-
-	local uct = umem:ctype()
-	assert(ffi.alignof(uct) <= 16)
-
-	caller:emitf([[
-		return function(state, solver, arena)
-			local D = C.fhkD_create_driver(M, %d, solver, arena)
-			local u = cast(umem_ctp, D.umem)
-	]], ffi.sizeof(uct))
-
-	for i,field in ipairs(umem.fields) do
-		caller:emitf("u.%s = __init_%d(state)", field.name, i)
-	end
-
-	caller:emit([[
-			return loop(D)
+	local umem = umem()
+	
+	for i=0, maxgiven do
+		if mapping.nodes[i].create then
+			M.vars[i].trace = false
+			mapping.nodes[i].create(M.vars+i, umem, nodeset)
 		end
-	]])
-
-	local df = caller:compile({
-		require  = require,
-		M        = M,
-		loop     = continue_loop(opt),
-		umem     = umem,
-		umem_ctp = ffi.typeof("$*", uct)
-	}, string.format("=(driverinit@%p)", self))()
-
-	if opt.trace and not opt.jit then
-		jit.off(df)
+	end
+	
+	for i=-G.nm, -1 do
+		M.models[i].trace = false
+		mapping.nodes[i].create(M.models+i, umem, nodeset)
 	end
 
-	return df
+	return G, mapping, M, umem
 end
 
----- models calls ----------------------------------------
+local function loop(sym, trace)
+	local function continue(D)
+		local status = C.fhkD_continue(D)
+
+		if status == C.FHKD_OK then
+			return
+		elseif status == C.FHKDL_TRACE then
+			trace(D, ctypes.status(D.tr_status))
+		elseif status < 0 then
+			return D.status:fmt_error(status, sym)
+		else
+			assert(false)
+		end
+
+		return continue(D)
+	end
+
+	return continue
+end
+
+------ models calls ----------------------------------------
 
 local function conv(g_sig, m_sig, alloc)
 	local convs = {}
@@ -289,12 +201,32 @@ ffi.metatype("fhkD_given", {
 	}
 })
 
+------ status ----------------------------------------
+
+ffi.metatype("fhkD_status", {
+	__index = {
+		fmt_error = function(self, ecode, sym)
+			if ecode == C.FHKDE_CONV then return "type conversion error" end
+			if ecode == C.FHKDE_MOD then
+				return string.format("model call error: %s", require("model").error())
+			end
+			if ecode == C.FHKDE_FHK then
+				local _, arg = ctypes.status(self.e_status)
+				return string.format("fhk failed: %s", ctypes.errstr(arg.s_ei, sym))
+			end
+
+			assert(false)
+		end
+	}
+})
+
 --------------------------------------------------------------------------------
 
 return {
-	builder           = builder,
-	conv              = conv,
-	mcall             = mcall,
-	vrefk             = vrefk,
-	vrefu             = vrefu
+	build = build,
+	loop  = loop,
+	conv  = conv,
+	mcall = mcall,
+	vrefk = vrefk,
+	vrefu = vrefu
 }

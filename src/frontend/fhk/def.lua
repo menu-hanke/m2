@@ -1,284 +1,275 @@
-local conv = require "model.conv"
+local graph = require "fhk.graph"
 local model = require "model"
+local conv = require "model.conv"
 local misc = require "misc"
 local ffi = require "ffi"
 local C = ffi.C
 
--- this is the frontend graph definition, not an fhk graph def.
--- in particular, this contains only models. variables come from the simulator
--- (ie. only the models with computable variables will be chosen for the simulation).
+local defaultkc = {
+	k = 1,
+	c = 1.5
+}
 
-local gdef_mt = { __index = {} }
-local gmod_mt = { __index = {k=1, c=1.5} }
-local link_mt = { __index = {astype = conv.typemask()}}
-
-local function gdef()
-	return setmetatable({
-		models = {},
-		costs  = {},
-		calibs = {},
-		labels = {}
-	}, gdef_mt)
-end
-
-function gdef_mt.__index:model(name, attr)
-	if self.models[name] then
-		error(string.format("Duplicate definition of model '%s'", name))
+local function getmodel(nodeset, name)
+	local mod = nodeset.models[name]
+	if not mod then
+		mod = graph.model(name)
+		nodeset.models[name] = mod
 	end
 
-	local mod = setmetatable({
-		name    = name,
-		params  = {},
-		returns = {},
-		checks  = {}
-	}, gmod_mt)
-
-	for _,a in ipairs(attr) do
-		a(mod)
-	end
-
-	self.models[name] = mod
 	return mod
 end
 
-function gmod_mt.__index:add_param(target, subset, astype)
-	table.insert(self.params, setmetatable({
-		target = target or error(string.format("%s: missing parameter name", self.name)),
-		subset = subset,
-		astype = astype
-	}, link_mt))
+local function getimpl(impls, name)
+	local impl = impls[name]
+	if not impl then
+		impl = { sigmask=conv.sigmask() }
+		impls[name] = impl
+	end
+
+	return impl
 end
 
-function gmod_mt.__index:add_return(target, subset, astype)
-	table.insert(self.returns, setmetatable({
-		target = target or error(string.format("%s: missing return name", self.name)),
-		subset = subset,
-		astype = astype
-	}, link_mt))
-end
-
-function gmod_mt.__index:add_check(target, subset, constraint, name)
-	table.insert(self.checks, {
-		target     = target or error(string.format("%s: missing check target")),
-		subset     = subset,
-		create_constraint = constraint or error(string.format("%s: missing check constraint (%s)", self.name, target)),
-		name       = name,
-		penalty    = math.huge -- TODO
-	})
-end
-
-function gmod_mt.__index:check()
-	if not self.impl then error(string.format("%s: missing impl", self.name)) end
-	if #self.returns == 0 then error(string.format("%s: model doesn't return anything", self.name)) end
-end
-
-function gdef_mt.__index:copylabels(lab)
-	for name,l in pairs(lab) do
-		if self.labels[name] and self.labels[name] ~= l then
-			error(string.format("Redefinition of label '%s': %s -> %s", name, self.labels[name], l))
-		end
-		self.labels[name] = l
+local function touchvar(nodeset, name)
+	if not nodeset.vars[name] then
+		nodeset.vars[name] = graph.var(name)
 	end
 end
 
-function gdef_mt.__index:L(x)
-	if type(x) == "table" then
-		local ret = {}
-		for k,v in pairs(x) do
-			ret[k] = self:L(v)
-		end
-		return ret
-	end
-
-	return self.labels[x] or error(string.format("Undefined label: '%s'", x))
-end
-
-function gdef_mt.__index:set_constraint(val, inverse)
-	val = type(val) ~= "table" and {val} or val
-
-	return function(cst, typ)
-		local mask = 0ULL
-
-		for i,v in ipairs(val) do
-			v = type(v) == "number" and v or self:L(v)
-			if type(v) ~= "number" or v < 0 or v >= 64 then
-				error(string.format("not a valid bit: %s", v))
-			end
-			mask = bit.bor(mask, bit.lshift(1ULL, v))
-		end
-
-		if inverse then
-			mask = bit.bnot(mask)
-		end
-
-		if typ == C.MT_UINT8 then
-			cst:set_u8_mask64(mask)
-		else
-			error(string.format("set constraint isn't applicable to %s", conv.nameof(typ)))
-		end
-	end
-end
-
-function gdef_mt.__index:fp_constraint(x, cmp)
-	if cmp == "<" or cmp == ">" then
-		error("TODO (use nextafter and ge/le constraint)")
-	end
-
-	return function(cst, typ)
-		if typ == C.MT_FLOAT then
-			cst:set_cmp_fp32(cmp, x)
-		else
-			assert(typ == C.MT_DOUBLE)
-			cst:set_cmp_fp64(cmp, x)
-		end
-	end
-end
-
-local function apply_edges(f, x)
+local function apply_edgef(opt, x, ...)
 	if type(x) == "string" then
-		f({target=x})
-		return
-	end
-
-	-- it's of the form {target="...", subset="...", ...}
-	if #x == 0 then
-		f(x)
-		return
-	end
-
-	-- it's a nested list eg. params { "...", { ... } }
-	for i,e in ipairs(x) do
-		apply_edges(f, e)
+		misc.merge({target=x}, opt):f(...)
+	else
+		for i,e in ipairs(x) do
+			apply_edgef(x.opt and misc.merge(misc.merge({}, opt), x.opt) or opt, e, ...)
+		end
 	end
 end
 
 local edgef_mt = {
-	__call = function(self, mod)
-		apply_edges(function(e) self._apply(mod, e, self) end, self._edges)
+	__call = function(self, ...)
+		apply_edgef({}, self, ...)
 	end
 }
 
-local function edge_f(f)
-	return function(x)
-		return setmetatable({_apply=f, _edges=x}, edgef_mt)
+local function toedgef(decl, f)
+	return setmetatable({
+		decl,
+		opt = { f=f }
+	}, edgef_mt)
+end
+
+local modifier_mt = {
+	__mul = function(other, self)
+		return setmetatable({ other, opt=self }, edgef_mt)
 	end
+}
+
+local function modifier(opt)
+	return setmetatable(opt, modifier_mt)
 end
 
-local function toedge(x)
-	return type(x) == "string" and {target=x} or x
+local function gettarget(edge)
+	if type(edge) == "string" then return edge end
+	return gettarget(edge[1])
 end
 
-local function modifier(f)
-	return setmetatable({}, {
-		__mul = function(x)
-			return f(toedge(x))
+local function params(decl)
+	return toedgef(decl, function(edge, mod, nodeset, impls)
+		table.insert(mod.params, edge)
+		touchvar(nodeset, edge.target)
+		if edge.tm then
+			local impl = getimpl(impls, mod.name)
+			impl.sigmask.params[#mod.params] = impl.sigmask.params[#mod.params]:intersect(edge.tm)
 		end
-	})
-end
-
-local function cst_modifier(cst)
-	return modifier(function(x)
-		x.constraint = cst
-		return x
 	end)
 end
 
-local gdef_func = setmetatable({
-	params = edge_f(function(mod, edge, defaults)
-		mod:add_param(edge.target,
-			edge.subset or defaults.subset,
-			edge.astype or defaults.astype
-		)
-	end),
-
-	returns = edge_f(function(mod, edge, defaults)
-		mod:add_return(edge.target,
-			edge.subset or defaults.subset,
-			edge.astype or defaults.astype
-		)
-	end),
-
-	check = edge_f(function(mod, edge, defaults)
-		mod:add_check(edge.target,
-			edge.subset or defaults.subset,
-			edge.constraint or defaults.constraint
-		)
-	end),
-
-	-- TODO: allow reading costs from file
-	cost = function(kc)
-		return function(mod)
-			mod.k = kc.k
-			mod.c = kc.c
+local function returns(decl)
+	return toedgef(decl, function(edge, mod, nodeset, impls)
+		table.insert(mod.returns, edge)
+		touchvar(nodeset, edge.target)
+		if edge.tm then
+			local impl = getimpl(impls, mod.name)
+			impl.sigmask.returns[#mod.returns] = impl.sigmask.returns[#mod.returns]:intersect(edge.tm)
 		end
-	end,
+	end)
+end
 
-	set = function(def)
-		return modifier(function(x)
-			x.subset = def
-			return x
-		end)
-	end,
+local function shadowname(target, guard, arg)
+	-- poor man's interning, but at least we get descriptive names as a bonus
+	arg = type(arg) == "table" and table.concat(arg, ",") or tostring(arg)
+	return string.format("%s %s %s", target, guard, arg)
+end
 
-	as = function(typ)
-		typ = conv.typemask(typ)
-		return modifier(function(x)
-			x.astype = typ
-			return x
-		end)
-	end,
+local function check(name)
+	return toedgef(name, function(edge, mod, nodeset)
+		edge.penalty = edge.penalty or math.huge
+		local shadow = shadowname(
+			edge.target,
+			edge.guard or error(string.format("check edge is missing a guard (%s -> %s)",
+				mod.name, edge.target)),
+			edge.arg
+		)
+		edge.var = edge.target
+		edge.target = shadow
+		touchvar(nodeset, edge.var)
 
-	impl = setmetatable({}, {
-		__index = function(self, name)
-			local def = model.lang(name).def
-			self[name] = function(...)
-				local args = {...}
-				return function(model)
-					model.impl = def(unpack(args))
-				end
+		if not nodeset.shadows[shadow] then
+			nodeset.shadows[shadow] = graph.shadow(shadow, edge.var, edge.guard, edge.arg)
+		end
+
+		table.insert(mod.shadows, edge)
+	end)
+end
+
+local function cost(kc)
+	return function(mod)
+		mod.k = kc.k or mod.k
+		mod.c = kc.c or mod.c
+	end
+end
+
+local function set(map)
+	return modifier({map=map})
+end
+
+local function as(ty)
+	return modifier({tm=conv.typemask(ty)})
+end
+
+local function tonumset(set, labels)
+	set = type(set) == "table" and set or {set}
+
+	local r = {}
+
+	for _,v in ipairs(set) do
+		table.insert(r, (type(v) == "number" and v or labels[v])
+			or error(string.format("missing label: %s", v)))
+	end
+
+	return r
+end
+
+local function tomask(set)
+	local mask = 0ULL
+
+	for _,v in ipairs(set) do
+		if v < 0 or v > 63 then
+			error(string.format("bitset value overflow: %s", v))
+		end
+
+		mask = bit.bor(mask, bit.lshift(1ULL, v))
+	end
+
+	return mask
+end
+
+local function is(mask)
+	return modifier({ guard="&", arg=mask })
+end
+
+-- try saying it out loud: label table
+local labtab_mt = {
+	__call = function(self, lab)
+		for k,x in pairs(lab) do
+			if type(x) == "number" then
+				self[k] = x
+			elseif type(x) == "table" then
+				self(x)
 			end
-			return self[name]
 		end
-	})
-}, {__index=_G})
+	end
+}
 
--- this gives a dsl-like environment that can be used in config files
-local function gdef_env(def)
+local function gdef_env(nodeset, impls)
+	local labels = setmetatable({}, labtab_mt)
+
 	local env = setmetatable({
 
 		model = function(name)
+			local mod = getmodel(nodeset, name)
+			mod.k = mod.k or defaultkc.k
+			mod.c = mod.c or defaultkc.c
+
+			-- TODO: if it's a redefinition, only allow changing cost (and impl?), otherwise
+			-- error out
+
 			return function(attrs)
-				def:model(name, attrs):check()
+				for _,a in ipairs(attrs) do
+					a(mod, nodeset, impls)
+				end
 			end
 		end,
 
 		derive = function(x)
+			local name = gettarget(x)
+			local mod = getmodel(nodeset, name)
+			mod.k = 0
+			mod.c = 1
+
 			return function(attrs)
-				local name = type(x) == "string" and x or x.target
-				local mod = def:model(name, attrs)
-				mod.k = 0
-				mod.c = 1
+				for _,a in ipairs(attrs) do
+					a(mod, nodeset, impls)
+				end
 				if #mod.returns == 0 then
-					gdef_func.returns(x)(mod)
+					returns(x)(mod, nodeset, impls)
 				end
-				if #mod.checks > 0 then
-					error(string.format("model '%s' of derived var can't contain checks", name))
-				end
-				mod:check()
 			end
 		end,
 
-		is = function(cst) return cst_modifier(def:set_constraint(cst)) end,
-		is_not = function(cst) return cst_modifier(def:set_constraint(cst, true)) end,
-		ge = function(x) return cst_modifier(def:fp_constraint(x, ">=")) end,
-		gt = function(x) return cst_modifier(def:fp_constraint(x, ">")) end,
-		le = function(x) return cst_modifier(def:fp_constraint(x, "<=")) end,
-		lt = function(x) return cst_modifier(def:fp_constraint(x, "<")) end
+		impl = setmetatable({}, {
+			__index = function(self, name)
+				local def = model.lang(name).def
+				self[name] = function(...)
+					local args = {...}
+					return function(mod, _, impls)
+						local oldmask = impls[mod.name] and impls[mod.name].sigmask
+						impls[mod.name] = def(unpack(args))
+						if not oldmask then return end
+						local sm = impls[mod.name].sigmask
+						for i=1, #mod.params do
+							local tm = rawget(oldmask.params, i)
+							if tm then
+								sm.params[i] = sm.params[i]:intersect(tm)
+							end
+						end
+						for i=1, #mod.returns do
+							local tm = rawget(oldmask.returns, i)
+							if tm then
+								sm.returns[i] = sm.returns[i]:intersect(tm)
+							end
+						end
+					end
+				end
+				return self[name]
+			end
+		}),
 
-	}, { __index=gdef_func })
+		labels  = labels,
+		params  = params,
+		returns = returns,
+		check   = check,
+		cost    = cost,
+		set     = set,
+		as      = as,
+		is      = function(set) return is(tomask(tonumset(set, labels))) end,
+		is_not  = function(set) return is(bit.bnot(tomask(tonumset(set, labels)))) end,
+		ge      = function(x) return modifier({ guard=">=", arg=x }) end,
+		gt      = function(x) return modifier({ guard=">", arg=x }) end,
+		le      = function(x) return modifier({ guard="<=", arg=x }) end,
+		lt      = function(x) return modifier({ guard="<", arg=x }) end
+
+	}, { __index=_G })
 
 	env.read = function(fname) return misc.dofile_env(env, fname) end
 	return env
+end
+
+local function gdef(nodeset, impls)
+	return {
+		nodeset = graph.nod
+	}
 end
 
 local function read(...)
@@ -293,7 +284,6 @@ local function read(...)
 end
 
 return {
-	create  = gdef,
-	env     = gdef_env,
-	read    = read
+	env  = gdef_env,
+	read = read
 }

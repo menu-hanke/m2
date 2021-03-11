@@ -4,16 +4,13 @@ sim.o: sim.c def.h mem.h sim.h conf.h
 vec.o: vec.c vec.h sim.h def.h conf.h
 vgrid.o: vgrid.c vgrid.h vec.h sim.h grid.h def.h
 vmath.o: vmath.c vmath.h
-fhk/build.o: fhk/build.c fhk/fhk.h fhk/../mem.h fhk/../def.h fhk/graph.h \
- fhk/def.h
+fhk/build.o: fhk/build.c fhk/fhk.h fhk/../mem.h fhk/../def.h fhk/def.h
 fhk/co_libco.o: fhk/co_libco.c fhk/fhk.h fhk/../mem.h fhk/../def.h fhk/def.h \
  fhk/co_libco.h
-fhk/debug.o: fhk/debug.c fhk/fhk.h fhk/../mem.h fhk/../def.h fhk/graph.h \
- fhk/def.h
-fhk/reduce.o: fhk/reduce.c fhk/fhk.h fhk/../mem.h fhk/../def.h fhk/graph.h \
- fhk/def.h
-fhk/solve.o: fhk/solve.c fhk/fhk.h fhk/../mem.h fhk/../def.h fhk/graph.h \
- fhk/def.h fhk/co.h
+fhk/debug.o: fhk/debug.c fhk/fhk.h fhk/../mem.h fhk/../def.h fhk/def.h
+fhk/prune.o: fhk/prune.c fhk/fhk.h fhk/../mem.h fhk/../def.h fhk/def.h
+fhk/solve.o: fhk/solve.c fhk/fhk.h fhk/../mem.h fhk/../def.h fhk/def.h \
+ fhk/co.h
 model/conv.o: model/conv.c model/../def.h model/../mem.h model/model.h \
  model/conv.h
 model/mlib.o: model/mlib.c model/model.h model/../mem.h model/../def.h
@@ -34,5 +31,5 @@ frontend/m2_cdef.lua: frontend/m2_cdef.lua.h frontend/../sim.h \
  frontend/../mem.h frontend/../def.h frontend/../vmath.h \
  frontend/../model/model.h frontend/../model/conv.h \
  frontend/../model/model_Const.h frontend/../model/model_Lua.h \
- frontend/../model/model_R.h frontend/../fhk/fhk.h \
- frontend/../fhk/graph.h frontend/fhk/driver.h
+ frontend/../model/model_R.h frontend/../fhk/fhk.h frontend/../fhk/def.h \
+ frontend/fhk/driver.h

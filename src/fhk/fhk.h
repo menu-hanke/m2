@@ -11,8 +11,10 @@
 
 // smallest types that fit (see def.h)
 typedef uint16_t fhk_grp;
-typedef uint16_t fhk_idx;
+typedef int16_t  fhk_idx;
+typedef uint16_t fhk_nidx;
 typedef uint16_t fhk_inst;
+typedef int32_t  fhk_map;
 
 typedef struct fhk_eref {
 	fhk_idx idx;
@@ -20,22 +22,64 @@ typedef struct fhk_eref {
 } fhk_eref;
 
 enum {
-	FHK_NREF = 0xffff
+	FHK_NINST = 0xffff, // invalid instance
+	FHK_NIDX  = 0x7fff  // invalid variable/model/map
 };
 
-//       tag
-//      ^^^^^
-//      00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F 10 11 12 13 14 15 16 17 18 19 1A 1B 1C 1D 1E 1F
-// user  0  0  i [----- source group (13 bits) -------] [----------- map index (16 bits) -------------]
-// ident 0  1
-// space 1  0                                            0  0  0 [----- target group (13 bits) -------]
-typedef uint32_t fhk_map;
-#define FHK_TAG_MAP(tag) (((tag)<<30) & 0xffffffff)
-#define FHK_MAP_TAG(map) ((map)>>30)
+typedef uint16_t fhk_extmap;
 
-typedef int64_t fhk_subset;
-#define FHK_RANGE(from, to) (((to)<<16)|(from))
-#define FHK_SS(n,ranges)    ((fhk_subset)(((n-1))<<49)|(1ULL<<48)|((uintptr_t)(ranges)))
+// subset representation.
+// note: * any non-zero subset is assumed non-empty. non-zero empty set representations
+//         will cause surprises.
+//       * size and interval number are the amount if items remaining after current.
+//         0 is valid and means this is the last one.
+//       * intervals pointed to by a complex subset must be non-overlapping and sorted
+//         in increasing order.
+//
+//             +--------+--------+--------+--------+
+//             | 63..48 | 47..32 | 31..16 | 15..0  |
+// +-----------+--------+--------+--------+--------+
+// | empty set |   0    |   0    |   0    |   0    |
+// +-----------+--------+--------+--------+--------+
+// | interval  |   -1   | -size  | first  |   0    |
+// +-----------+--------+--------+--------+--------+
+// | complex   |     interval pointer     | n.ival |
+// +-----------+--------------------------+--------+
+typedef uint64_t fhk_subset;
+
+// ---- error handling ----------------------------------------
+
+// error info. 48 bits to fit fhk_status.
+//
+// +--------+--------+--------+-------+-------+
+// | 47..32 | 31..16 | 15..12 | 11..8 |  7..0 |
+// +--------+--------+--------+-------+-------+
+// | info 2 | info 1 | tag 2  | tag 1 | ecode |
+// +--------+--------+--------+-------+-------+
+typedef uint64_t fhk_ei;
+
+#define FHK_ECODE(ei)  ((ei) & 0xff)
+#define FHK_ETAG1(ei)  (((ei) >> 8) & 0xf)
+#define FHK_ETAG2(ei)  (((ei) >> 12) & 0xf)
+#define FHK_EINFO1(ei) (((ei) >> 16) & 0xffff)
+#define FHK_EINFO2(ei) (((ei) >> 32) & 0xffff)
+
+enum {
+	// ecode
+	FHKE_NYI = 1,    // s      not yet implemed
+	FHKE_INVAL,      // s b    user value was stupid
+	FHKE_OVERWRITE,  // s      overwrite not allowed
+	FHKE_DEPTH,      // s      max recursion depth
+	FHKE_NVALUE,     // s      no value
+	FHKE_MEM,        // spb    failed to allocate memory
+	FHKE_CHAIN,      // sp     no chain with finite cost
+
+	// tag
+	FHKEI_I = 1,     //        index
+	FHKEI_J,         //        instance
+	FHKEI_G,         //        group
+	FHKEI_P          //        usermap
+};
 
 // ---- solver status ----------------------------------------
 
@@ -83,14 +127,7 @@ typedef union fhk_sarg {
 	fhk_grp s_group;
 
 	// FHK_ERROR
-	struct {
-		unsigned ecode : 4;
-		unsigned where : 4;
-		unsigned tag1  : 4;
-		unsigned tag2  : 4;
-		unsigned v1    : 16;
-		unsigned v2    : 16;
-	} s_ei;
+	fhk_ei s_ei;
 } fhk_sarg;
 
 static_assert(sizeof(fhk_sarg) == sizeof(uint64_t));
@@ -99,111 +136,82 @@ static_assert(sizeof(fhk_sarg) == sizeof(uint64_t));
 #define fhk_modcall typeof(*((fhk_sarg *)0)->s_modcall)
 #define fhk_mcedge  typeof(*((fhk_modcall *)0)->edges)
 #define fhk_mapcall typeof(*((fhk_sarg *)0)->s_mapcall)
-#define fhk_ei      typeof(*((fhk_sarg *)0)->s_ei)
-
-enum {
-	// s_ei.ecode
-	FHKE_NYI = 1,    // not yet implemented
-	FHKE_INVAL,      // user gave something stupid
-	FHKE_REWRITE,    // rewrite of given value
-	FHKE_DEPTH,      // max recursion depth exceeded
-	FHKE_VALUE,      // value not given
-	FHKE_MEM,        // failed to allocate memory
-	FHKE_CHAIN,      // no chain with finite cost
-
-	// s_ei.where
-	FHKF_SOLVER = 1, // main solver
-	FHKF_CYCLE,      // cycle solver
-	FHKF_SHAPE,      // shape table
-	FHKF_GIVE,       // given variable
-	FHKF_MEM,        // external memory
-	FHKF_MAP,        // mapping
-	FHKF_SCRATCH,    // scratch buffer
-
-	// s_ei.tag{1,2} -- s_ei.v{1,2} is the corresponding value
-	FHKEI_NONE = 0,
-	FHKEI_G,         // group
-	FHKEI_V,         // var idx
-	FHKEI_M,         // model idx
-	FHKEI_P,         // map idx
-	FHKEI_I,         // instance
-};
 
 // ---- solver structures ----------------------------------------
 
 // constraints
 
-typedef struct fhk_cst {
-	float penalty;
-	uint8_t op;
-	union {
-		float f32;
-		double f64;
-		uint64_t u64;
-	} arg;
-} fhk_cst;
-
-#define fhk_carg typeof(((fhk_cst *)0)->arg)
+typedef union {
+	float f32;
+	double f64;
+	uint64_t u64;
+} fhk_shvalue;
 
 enum {
 	// cst.op                      action(x)
 	// ------                      ---------
+	FHKC_GEF32,                 // x->f32 >= arg.f32
+	FHKC_LEF32,                 // x->f32 <= arg.f32
 	FHKC_GEF64,                 // x->f64 >= arg.f64
 	FHKC_LEF64,                 // x->f64 <= arg.f64
-	FHKC__NUM_FP,
-	FHKC_GEF32 = FHKC__NUM_FP, // x->f32 >= arg.f32
-	FHKC_LEF32,                // x->f32 <= arg.f32
-
-	FHKC_U8_MASK64,            // ((1ULL << x->u8) & arg.u64) != 0
-	FHKC__NUM
+	FHKC_U8_MASK64              // ((1ULL << x->u8) & arg.u64) != 0
 };
 
 // mappings
 
 enum {
-	// mapping                          action
-	// ---------------------------      -----------------
-	FHKM_USER  = FHK_TAG_MAP(0x00),     // yield FHKS_MAPCALL(I)
-	FHKM_IDENT = FHK_TAG_MAP(0x01),     // i -> {i}
-	FHKM_SPACE = FHK_TAG_MAP(0x02)      // i -> X
+	FHKM_IDENT = 0xffff,
+	FHKM_SPACE = 0xfffe,
+	// usermap: your id (at most G_MAXUMAP)
 };
+
+// ---- solver request ----------------------------------------
+
+enum {
+	// flag                  action
+	// ----------------      ----------
+	FHKF_NPACK = 0x1,     // don't pack return buffer, use it as solver memory
+};
+
+typedef struct fhk_req {
+	fhk_idx idx;
+	uint8_t flags;
+	fhk_subset ss;
+	void *buf;
+} fhk_req;
 
 // ---- subgraph selection ----------------------------------------
 
-typedef struct fhk_subgraph {
-	fhk_idx *r_vars;
-	fhk_idx *r_models;
-} fhk_subgraph;
-
+// fhk_prune flags
 enum {
-	// v_flags             action
-	// -------------       ----------
-	FHKR_GIVEN = 0x1,   // will be given in the subgraph
-	FHKR_ROOT  = 0x2,   // must include in subgraph (selection root)
+	// flag               action
+	// --------------     -------------------
+	FHKF_GIVEN  = 0x1,   //  >v     pretend this variable is given -- delete all models that return it
+	FHKF_SKIP   = 0x2,   // <>vm    skip this variable/model from the graph completely
+	FHKF_SELECT = 0x4,   // <>vm    force inclusion of this var/model w/ full chain
 
-	// r_vars/r_models
-	FHKR_SKIP  = FHK_NREF // skipped from subgraph
 };
 
-// ---- graph builder ----------------------------------------
+// ---- def objects ----------------------------------------
+
+typedef uint64_t fhk_obj;
 
 enum {
-	FHKDE_MEM = 1,  // failed to allocate memory
-	FHKDE_INVAL,    // invalid value
-	FHKDE_IDX       // graph is too large (ran out of indices)
+	FHKO_ERROR,
+	FHKO_MODEL,
+	FHKO_VAR,
+	FHKO_SHADOW
 };
+
+#define FHKO_TAG(obj) ((obj) >> 60)
 
 // ------------------------------------------------------------
 
 typedef struct fhk_graph fhk_graph;
 typedef struct fhk_solver fhk_solver;
 typedef struct fhk_def fhk_def;
-
-typedef struct fhk_req {
-	fhk_idx idx;
-	fhk_subset ss;
-	void *buf;
-} fhk_req;
+typedef struct fhk_prune fhk_prune;
+typedef float fhk_cbound[2];
 
 fhk_solver *fhk_create_solver(fhk_graph *G, arena *arena, size_t nv, fhk_req *rq);
 fhk_status fhk_continue(fhk_solver *S);
@@ -212,32 +220,33 @@ void fhkS_shape(fhk_solver *S, fhk_grp group, fhk_inst size);
 void fhkS_shape_table(fhk_solver *S, fhk_inst *shape);
 void fhkS_give(fhk_solver *S, fhk_idx xi, fhk_inst inst, void *vp);
 void fhkS_give_all(fhk_solver *S, fhk_idx xi, void *vp);
-void fhkS_use_mem(fhk_solver *S, fhk_idx xi, void *vp);
 
 // inspection functions (this is a private api and should probably be moved in its own file).
 // don't rely on these, they are only exposed for debugging.
-float fhkSi_costv(fhk_solver *S, fhk_idx xi, fhk_inst inst);
-float fhkSi_costm(fhk_solver *S, fhk_idx mi, fhk_inst inst);
-fhk_inst fhkSi_shape(fhk_solver *S, fhk_grp group);
-fhk_eref fhkSi_chain(fhk_solver *S, fhk_idx xi, fhk_inst inst);
-void *fhkSi_value(fhk_solver *S, fhk_idx xi, fhk_inst inst);
-fhk_graph *fhkSi_G(fhk_solver *S);
+float fhkI_cost(fhk_solver *S, fhk_idx idx, fhk_inst inst);
+fhk_inst fhkI_shape(fhk_solver *S, fhk_grp group);
+fhk_eref fhkI_chain(fhk_solver *S, fhk_idx xi, fhk_inst inst);
+void *fhkI_value(fhk_solver *S, fhk_idx xi, fhk_inst inst);
+fhk_graph *fhkI_G(fhk_solver *S);
 
-fhk_subgraph *fhk_reduce(fhk_graph *G, arena *arena, uint8_t *v_flags, fhk_idx *fail);
+fhk_prune *fhk_create_prune(fhk_graph *G);
+void fhk_destroy_prune(fhk_prune *P);
+uint8_t *fhk_prune_flags(fhk_prune *P);
+fhk_cbound *fhk_prune_bounds(fhk_prune *P);
+fhk_ei fhk_prune_run(fhk_prune *P);
 
 fhk_def *fhk_create_def();
 void fhk_destroy_def(fhk_def *D);
-void fhk_reset_def(fhk_def *D);
 size_t fhk_graph_size(fhk_def *D);
+fhk_idx fhk_graph_idx(fhk_def *D, fhk_obj obj);
 fhk_graph *fhk_build_graph(fhk_def *D, void *p);
-int fhk_def_add_model(fhk_def *D, fhk_idx *idx, fhk_grp group, float k, float c);
-int fhk_def_add_var(fhk_def *D, fhk_idx *idx, fhk_grp group, uint16_t size);
-int fhk_def_add_param(fhk_def *D, fhk_idx model, fhk_idx var, fhk_map map);
-int fhk_def_add_return(fhk_def *D, fhk_idx model, fhk_idx var, fhk_map map);
-int fhk_def_add_check(fhk_def *D, fhk_idx model, fhk_idx var, fhk_map map, fhk_cst *cst);
+void fhk_destroy_graph(fhk_graph *G);
+fhk_obj fhk_def_add_model(fhk_def *D, fhk_grp group, float k, float c, float cmin);
+fhk_obj fhk_def_add_var(fhk_def *D, fhk_grp group, uint16_t size, float cdiff);
+fhk_obj fhk_def_add_shadow(fhk_def *D, fhk_obj var, uint8_t guard, fhk_shvalue arg);
+fhk_ei fhk_def_add_param(fhk_def *D, fhk_obj model, fhk_obj var, fhk_extmap map);
+fhk_ei fhk_def_add_return(fhk_def *D, fhk_obj model, fhk_obj var, fhk_extmap map);
+fhk_ei fhk_def_add_check(fhk_def *D, fhk_obj model, fhk_obj shadow, fhk_extmap map, float penalty);
 
-size_t fhk_subgraph_size(fhk_graph *G, fhk_subgraph *S);
-fhk_graph *fhk_build_subgraph(fhk_graph *G, fhk_subgraph *S, void *p);
-
-void fhk_set_dsym(fhk_graph *G, const char **v_names, const char **m_names);
+void fhk_set_dsym(fhk_graph *G, const char **dsym);
 bool fhk_is_debug();
