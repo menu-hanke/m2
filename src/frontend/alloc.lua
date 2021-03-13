@@ -11,17 +11,20 @@ local function cts(ct, cp)
 	return ct, cp
 end
 
-ffi.metatype("arena", { __index = {
-	reset   = ffi.C.arena_reset,
-	destroy = ffi.C.arena_destroy,
-	alloc   = ffi.C.arena_alloc,
-	malloc  = ffi.C.arena_malloc,
-	new     = function(self, ct, ne, cp)
-		if ne == 0 then return end
-		ct, cp = cts(ct, cp)
-		return ffi.cast(cp, self:alloc(ffi.sizeof(ct) * (ne or 1), ffi.alignof(ct)))
-	end
-}})
+ffi.metatype("arena", {
+	__index = {
+		reset   = ffi.C.arena_reset,
+		destroy = ffi.C.arena_destroy,
+		alloc   = ffi.C.arena_alloc,
+		malloc  = ffi.C.arena_malloc,
+		new     = function(self, ct, ne, cp)
+			if ne == 0 then return end
+			ct, cp = cts(ct, cp)
+			return ffi.cast(cp, self:alloc(ffi.sizeof(ct) * (ne or 1), ffi.alignof(ct)))
+		end
+	},
+	__call = ffi.C.arena_alloc
+})
 
 local function malloc(ct, ne, cp)
 	if ne == 0 then return end

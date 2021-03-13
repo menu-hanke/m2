@@ -364,12 +364,6 @@ local function wrapmapf(f)
 	end
 end
 
-local function aallocu32(arena)
-	return function(n)
-		return arena:new("uint32_t", n)
-	end
-end
-
 local function decl_model(decl)
 	decl = type(decl) == "string" and {decl} or decl
 	local signature = decl[1]:gsub("%s", "")
@@ -435,7 +429,6 @@ end
 
 local function driver(S, mapping)
 	local arena = alloc.arena()
-	local allocu32 = aallocu32(arena)
 
 	while true do
 		local status = S:continue()
@@ -453,7 +446,7 @@ local function driver(S, mapping)
 			assert(false) -- shape table should be pregiven
 		elseif code == C.FHKS_MAPCALL or code == C.FHKS_MAPCALLI then
 			local mp = arg.s_mapcall
-			mp.ss[0] = mapping.u[mp.mref.idx][code - C.FHKS_MAPCALL + 1](mp.mref.inst, allocu32)
+			mp.ss[0] = mapping.u[mp.mref.idx][code - C.FHKS_MAPCALL + 1](mp.mref.inst, arena)
 		elseif code == C.FHKS_VREF then
 			local vref = arg.s_vref
 			error(string.format("solver tried to evaluate non-given variable: %s:%d",
@@ -494,7 +487,6 @@ end
 local function check_solution(G, ng, meta)
 	local request = {}
 	local arena = alloc.arena()
-	local allocu32 = aallocu32(arena)
 
 	for name,values in pairs(meta.solution) do
 		local x = meta.def.vars[toname(name)]
@@ -504,7 +496,7 @@ local function check_solution(G, ng, meta)
 			_values = values,
 			idx = meta.mapping[x],
 			flags = C.FHKF_NPACK,
-			ss = defsubset(values, allocu32),
+			ss = defsubset(values, arena),
 			buf = ffi.new(ffi.typeof("$[?]", x.ctype), #values)
 		})
 	end

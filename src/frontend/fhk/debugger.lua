@@ -335,8 +335,6 @@ function testsolver_mt.__index:runner(P, V, check)
 	plan.add_solver(P, V, solver, plan.decl_solver(roots))
 
 	return function(data, params)
-		params._solver_anchor = {}
-
 		for _,var in ipairs(self) do
 			local ss = {}
 
@@ -346,9 +344,7 @@ function testsolver_mt.__index:runner(P, V, check)
 				end
 			end
 
-			local subset, _ref = ctypes.ssfromidx(ss)
-			table.insert(params._solver_anchor, _ref)
-			params[var.subset] = subset
+			params[var.subset] = ss
 		end
 
 		local ok, result = pcall(solver, params)

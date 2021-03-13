@@ -28,7 +28,6 @@ local function inject(env, def)
 	}
 
 	local allocf = env.m2.sim:allocator("frame")
-	local allocu32 = function(n) return ffi.cast("uint32_t *", allocf(4*n, 4)) end
 
 	-- don't use misc.delegate here so `p` and `def` won't be kept alive
 	env.m2.fhk = {
@@ -45,7 +44,7 @@ local function inject(env, def)
 		end,
 
 		subset         = function(idx)
-			return ctypes.ssfromidx(idx, allocu32)
+			return ctypes.ssfromidx(idx, allocf)
 		end,
 
 		composite      = view.composite,

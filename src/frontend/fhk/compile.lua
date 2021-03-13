@@ -52,7 +52,8 @@ local function solver_init(G, roots, static_alloc, runtime_alloc)
 		local ffi = require "ffi"
 		local C, cast = ffi.C, ffi.cast
 		local fhk_ct = require "fhk.ctypes"
-		local space, size = fhk_ct.space, fhk_ct.ss_size
+		local space, size, ssfromidx = fhk_ct.space, fhk_ct.ss_size, fhk_ct.ssfromidx
+		local type = type
 		local G, req = G, req
 		local res_ctp = res_ctp
 
@@ -67,17 +68,26 @@ local function solver_init(G, roots, static_alloc, runtime_alloc)
 			out:emitf([[
 				local buf = alloc(%d, %d)
 				req[%d].buf = buf
-				local g_init = compile.graph_init()]],
+			]],
 			ctypes.ss_size(v.subset)*ffi.sizeof(v.ctype), ffi.alignof(v.ctype),
 			i-1)
 		elseif v.subset then
 			out:emitf([[
-				local buf = alloc(size(state[__subset_%d])*%d, %d)
-				req[%d].ss = state[__subset_%d]
+				local ss = state[__subset_%d]
+				local num
+				if type(ss) == "table" then
+					num = #ss
+					ss = ssfromidx(ss, arena)
+				else
+					num = size(ss)
+				end
+				local buf = alloc(num*%d, %d)
+				req[%d].ss = ss
 				req[%d].buf = buf
 			]],
-			i, ffi.sizeof(v.ctype), ffi.alignof(v.ctype),
-			i-1, i,
+			i,
+			ffi.sizeof(v.ctype), ffi.alignof(v.ctype),
+			i-1,
 			i-1)
 		else
 			-- fast path for space
@@ -107,6 +117,7 @@ local function solver_init(G, roots, static_alloc, runtime_alloc)
 
 	return out:compile({
 		require = require,
+		type    = type,
 		req     = req,
 		G       = G,
 		res_ctp = ffi.typeof("$*", res_ct),

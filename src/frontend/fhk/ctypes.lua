@@ -182,7 +182,7 @@ local function complex(ip, n)
 	return bor(lshift(ip, 16), n)
 end
 
-local function ssfromidx_complex(idx, i, start, pos, allocu32)
+local function ssfromidx_complex(idx, i, start, pos, alloc)
 	local intervals = { pkrange(start, pos) }
 	start = idx[i]
 	pos = start
@@ -201,16 +201,16 @@ local function ssfromidx_complex(idx, i, start, pos, allocu32)
 
 	intervals[#intervals+1] = pkrange(start, pos)
 
-	local ip = allocu32(#intervals)
+	local ip = ffi.cast("int32_t *", alloc(4*#intervals, 4))
 
 	for i=1, #intervals do
 		ip[i-1] = intervals[i]
 	end
 
-	return complex(ffi.cast("uintptr_t", ip), #intervals-1), ip
+	return complex(ffi.cast("uintptr_t", ip), #intervals-1)
 end
 
-local function ssfromidx(idx, allocu32)
+local function ssfromidx(idx, alloc)
 	if #idx == 0 then
 		return 0
 	end
@@ -225,20 +225,12 @@ local function ssfromidx(idx, allocu32)
 		if p == pos+1 then
 			pos = p
 		else
-			return ssfromidx_complex(idx, i, start, pos, allocu32)
+			return ssfromidx_complex(idx, i, start, pos, alloc)
 		end
 		i = i+1
 	end
 
 	return ss1(start, pos)
-end
-
-local function ffi_allocu32(n)
-	return ffi.new("uint32_t[?]", n)
-end
-
-local function ssfromidx_ffi(idx)
-	return ssfromidx(idx, ffi_allocu32)
 end
 
 local function ss_numi(ss)
