@@ -146,11 +146,11 @@ static_assert(8*sizeof(fhk_map) >= G_UMAPBITS);
 // error handling
 #define E_META(n,f,x)       ((FHKEI_##f << (4*((n)+1))) | ((uint64_t)(x) << (16*(n))))
 
-typedef uint64_t xgrp;   // group
-typedef int64_t  xidx;   // index
-typedef uint64_t xinst;  // instance
-typedef uint64_t xmap;   // mapping
-typedef uint64_t xuref;  // usermap
+typedef uint32_t xgrp;   // group
+typedef int32_t  xidx;   // index
+typedef uint32_t xinst;  // instance
+typedef uint32_t xmap;   // mapping
+typedef uint32_t xuref;  // usermap
 
 #define min(a, b) ({ typeof(a) _a = (a); typeof(b) _b = (b); _a < _b ? _a : _b; })
 #define max(a, b) ({ typeof(a) _a = (a); typeof(b) _b = (b); _a > _b ? _a : _b; })

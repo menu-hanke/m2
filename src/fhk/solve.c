@@ -771,12 +771,12 @@ static void S_vexpandbe(struct fhk_solver *S, xidx xi, xinst inst){
 static void S_mexpandbe(struct fhk_solver *S, xidx mi, xinst inst){
 	struct fhk_model *m = &S->G->models[mi];
 
-	for(int64_t i=m->p_shadow;i;i++){
+	for(int32_t i=m->p_shadow;i;i++){
 		S_vexpandss(S, m->shadows[i].idx);
 		S_pexpand(S, m->shadows[i].map, inst);
 	}
 
-	for(int64_t i=0;i<m->p_cparam;i++){
+	for(int32_t i=0;i<m->p_cparam;i++){
 		S_vexpandsp(S, m->params[i].idx);
 		S_pexpand(S, m->params[i].map, inst);
 	}
@@ -1502,7 +1502,7 @@ static void S_compute_value(struct fhk_solver *S, xidx xi, xinst inst){
 	assert(m_sp->state & SP_CHAIN);
 	m_sp->state |= SP_VALUE;
 
-	for(int64_t i=0;i<m->p_cparam;i++){
+	for(int32_t i=0;i<m->p_cparam;i++){
 		fhk_edge e = m->params[i];
 		opt_ssiter osi = p_ssiter(S, e.map, m_inst);
 		if(UNLIKELY(!OSI_VALID(osi)))
@@ -1510,7 +1510,7 @@ static void S_compute_value(struct fhk_solver *S, xidx xi, xinst inst){
 		S_get_computed_si(S, OSI_SI(osi), e.idx);
 	}
 
-	for(int64_t i=m->p_cparam;i<m->p_param;i++){
+	for(int32_t i=m->p_cparam;i<m->p_param;i++){
 		fhk_edge e = m->params[i];
 		S_get_given(S, e.idx, e.map, m_inst);
 	}
@@ -1521,7 +1521,7 @@ static void S_compute_value(struct fhk_solver *S, xidx xi, xinst inst){
 	cm->np = m->p_param;
 	cm->nr = m->p_return;
 
-	for(int64_t i=0;i<m->p_param;i++){
+	for(int32_t i=0;i<m->p_param;i++){
 		fhk_edge e = m->params[i];
 		S_collect_mape(S, &cm->edges[e.a], e.idx, e.map, m_inst);
 	}
