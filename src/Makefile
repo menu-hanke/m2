@@ -64,7 +64,7 @@ ifeq (builtin,$(FHK_CO))
 else ifeq (libco,$(FHK_CO))
 	M2_O += fhk/co_libco.o
 	M2_LIBS += $(LIBCO_LIB)
-	FHK_CCDEF += -DFHK_CO_LIBCO
+	FHK_CCDEF += -DFHK_CO_LIBCO $(LIBCO_CFLAGS)
 endif
 
 MODEL_O = model/mlib.o model/conv.o model/model_Const.o
@@ -157,7 +157,7 @@ fhk/%.o: fhk/%.c
 	$(CC) $(FHK_CFLAGS) -c $< -o $@
 
 fhk/co_libco.o: fhk/co_libco.c
-	$(CC) $(FHK_CFLAGS) $(LIBCO_CFLAGS) -c $< -o $@
+	$(CC) $(FHK_CFLAGS) -c $< -o $@
 
 model/model_R.o: model/model_R.c
 	$(CC) $(CFLAGS) $(R_CFLAGS) -c $< -o $@

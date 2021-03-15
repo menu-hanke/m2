@@ -413,7 +413,7 @@ fhk_solver *fhk_create_solver(struct fhk_graph *G, arena *arena, size_t nv, stru
 #if FHK_CO_BUILTIN
 	fhk_co_init(&S->C, stack, MAX_COSTACK, &S_solve);
 #else
-	fhk_co_init(&S->C, &S_solve);
+	fhk_co_init(&S->C, MAX_COSTACK, &S_solve);
 #endif
 
 	memset(S->s_mstate - G->nm, 0, G->nm * sizeof(*S->s_mstate));
@@ -444,7 +444,7 @@ static void fhkS_setshape(struct fhk_solver *S, xgrp group, xinst shape){
 		return;
 	}
 
-	dv("shape[%zu] -> %zu\n", group, shape);
+	dv("shape[%u] -> %u\n", group, shape);
 	S->g_shape[group] = shape;
 }
 
@@ -579,7 +579,7 @@ struct fhk_graph *fhkI_G(struct fhk_solver *S){
 }
 
 AINLINE static void J_shape(struct fhk_solver *S, xgrp group){
-	dv("-> SHAPE   %zu\n", group);
+	dv("-> SHAPE   %u\n", group);
 	fhkJ_yield(&S->C, FHKS_SHAPE | A_SARG(.s_group=group));
 }
 
@@ -589,7 +589,7 @@ AINLINE static void J_mapcall(struct fhk_solver *S, uint64_t inv, fhk_mapcall *m
 }
 
 AINLINE static void J_vref(struct fhk_solver *S, xidx xi, xinst inst){
-	dv("-> VREF    %s:%zu\n", fhk_dsym(S->G, xi), inst);
+	dv("-> VREF    %s:%u\n", fhk_dsym(S->G, xi), inst);
 	fhkJ_yield(&S->C, FHKS_VREF | A_SARG(.s_vref={.idx=xi, .inst=inst}));
 }
 
@@ -641,13 +641,16 @@ static void J_exit(struct fhk_solver *S, fhk_status status){
 #else
 	fhk_co_done(&S->C);
 	fhkJ_yield(&S->C, status);
+	__builtin_unreachable();
 #endif
 }
 
+#if FHK_CO_BUILTIN
 __attribute__((cold))
 static void SE_exit(struct fhk_solver *S){
 	J_exit(S, S->e_status);
 }
+#endif
 
 __attribute__((cold))
 static void E_exit(struct fhk_solver *S, fhk_status status){
@@ -655,6 +658,7 @@ static void E_exit(struct fhk_solver *S, fhk_status status){
 	S->e_status = status;
 	fhk_co_jmp(&S->C, &SE_exit);
 #else
+	S->C.status = status;
 	fhk_co_done(&S->C);
 #endif
 }
@@ -863,7 +867,7 @@ static void S_getumap(struct fhk_solver *S, xmap map, xinst inst){
 	if(UNLIKELY(cache[inst] == SS_UNDEF))
 		JE_nmap(S, P_UIDX(map), inst);
 
-	dv("umap %c%zu:%zu -> 0x%lx\n", (map & P_UINV) ? '<' : '>', P_UIDX(map), inst, cache[inst]);
+	dv("umap %c%u:%u -> 0x%lx\n", (map & P_UINV) ? '<' : '>', P_UIDX(map), inst, cache[inst]);
 }
 
 AINLINE static fhk_inst S_shape(struct fhk_solver *S, xgrp group){
@@ -957,7 +961,7 @@ static void S_select_chain(struct fhk_solver *S, xidx _x_i, xinst _x_inst){
 
 x_solve:  // -> X_i, X_inst, X_beta
 	{
-		dv("%s:%zu -- enter solver (depth: %ld  beta: %g)\n",
+		dv("%s:%u -- enter solver (depth: %ld  beta: %g)\n",
 				fhk_dsym(S->G, X_i), X_inst, X-S->x_state, X_beta);
 
 		ssp *sp = &S->s_vstate[X_i][X_inst];
@@ -1134,7 +1138,7 @@ candidate:
 
 		xidx mi = m_cand->m_i;
 
-		dv("%s:%u [%s:%zu] -- candidate low bound: %g (%g)  beta: %g (%g)\n",
+		dv("%s:%u [%s:%u] -- candidate low bound: %g (%g)  beta: %g (%g)\n",
 				fhk_dsym(S->G, X->d_xi), X->d_xinst,
 				fhk_dsym(S->G, mi), m_inst,
 				m_cost, costf_invS(&S->G->models[mi], m_cost),
@@ -1570,7 +1574,7 @@ unpackvalue:
 		memcpy(S->s_value[xi] + sz*inst, src, sz);
 	}
 
-	dv("%s:%zu -- solved value [%s]\n", fhk_dsym(S->G, xi), inst, dstrvalue(S, xi, inst));
+	dv("%s:%u -- solved value [%s]\n", fhk_dsym(S->G, xi), inst, dstrvalue(S, xi, inst));
 }
 
 AINLINE static void S_get_computed_si(struct fhk_solver *S, ssiter it, xidx xi){
