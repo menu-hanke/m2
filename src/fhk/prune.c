@@ -10,8 +10,8 @@
 #include <math.h>
 #include <assert.h>
 
-#define xnonempty(p) (!P_ISUSER(p)) /* nonempty for nonempty space */
-#define colorsym(c)  ((c) ? "< HIGH" : "> LOW ")
+#define xnonempty(G,map) (!MAP_ISUSER(map,(G)->ng)) /* nonempty for nonempty space */
+#define colorsym(c)      ((c) ? "< HIGH" : "> LOW ")
 
 #define HSIZE     64                /* initial heap size */
 #define GRAY      0                 /* lowest min cost possible */
@@ -171,7 +171,7 @@ static void prune_init_mstate(struct fhk_prune *P){
 		ms->p_miss[BLACK] = m->p_param;
 
 		for(int64_t j=0;j<m->p_param;j++)
-			ms->p_miss[GRAY] += xnonempty(m->params[j].map);
+			ms->p_miss[GRAY] += xnonempty(P->G, m->params[j].map);
 	}
 }
 
@@ -218,7 +218,7 @@ static void prune_bound_var(struct fhk_prune *P, xidx xi, float cost, xcolor col
 
 	for(int64_t i=0;i<x->n_fwd;i++){
 		fhk_edge *e = &x->fwds[i];
-		if(color == GRAY && !xnonempty(e->map))
+		if(color == GRAY && !xnonempty(P->G, e->map))
 			continue;
 		P->bound[e->idx][color] += cost;
 		mstate *ms = &P->mstate[e->idx];
@@ -250,7 +250,7 @@ static void prune_bound_model(struct fhk_prune *P, xidx mi, xcolor color){
 
 	for(int64_t i=0;i<m->p_return;i++){
 		fhk_edge *e = &m->returns[i];
-		if(color == GRAY || xnonempty(e->map))
+		if(color == GRAY || xnonempty(P->G, e->map))
 			prune_insert_var(P, e->idx, cost, color);
 	}
 }

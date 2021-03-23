@@ -1,7 +1,297 @@
 local code = require "code"
+local misc = require "misc"
 local ctypes = require "fhk.ctypes"
 local ffi = require "ffi"
 local C = ffi.C
+
+local function dispatch_template(dispinfo, upv, src, chunkname)
+	upv = upv or {}
+	local out = code.new()
+
+	out:emit([[
+		local C, D, J = C, dispinfo.dispatch, dispinfo.jumptable
+	]])
+
+	for name,_ in pairs(upv) do
+		out:emitf("local %s = %s", name, name)
+	end
+
+	out:emit("return function(S, A)")
+	out:emit(src)
+	out:emit([[
+		return J[C.fhkD_continue(S, D)](S, A)
+		end
+	]])
+
+	return out:compile(misc.merge({dispinfo=dispinfo, C=C}, upv),
+		string.format("=(dispatch@%s)", chunkname))()
+end
+
+local function setvalue_constptr(dispinfo, xi, ptr, num, name)
+	return dispatch_template(
+		dispinfo,
+		nil,
+		-- tonumber is safe here, double can fit 52 bits
+		string.format("C.fhkD_setvaluei_u64(S, %d, 0, %d, 0x%x)", xi, num, tonumber(ptr)),
+		string.format("%s->%p", name or xi, ptr)
+	)
+end
+
+local function setvalue_userfunc_offset(dispinfo, xi, f, offset, name)
+	return dispatch_template(
+		dispinfo,
+		{_f=f},
+		string.format([[
+			local inst = D.arg_ref.inst
+			local ptr = _f(inst, A)
+			C.fhkD_setvaluei_offset(S, %d, inst, 1, ptr, %d)
+		]], xi, offset or 0),
+		string.format("%s->%s+%s", name or xi, f, offset)
+	)
+end
+
+local function setvalue_array_userfunc(dispinfo, xi, f, name)
+	return dispatch_template(
+		dispinfo,
+		{_f=f},
+		string.format([[
+			local ptr, inst, num = _f(D.arg_ref.inst, A)
+			C.fhkS_setvaluei(S, %d, inst, num, ptr)
+		]], xi),
+		string.format("%s->%s", name or xi, f)
+	)
+end
+
+local function setvalue_soa_constptr(dispinfo, xi, ptr, band, name)
+	return dispatch_template(
+		dispinfo,
+		{_ptr=ptr},
+		string.format("C.fhkS_setvaluei(S, %d, 0, #_ptr, _ptr.%s)", xi, band),
+		string.format("%s->%p#%s", name or xi, ptr, band)
+	)
+end
+
+local function setvalue_soa_userfunc(dispinfo, xi, f, band, name)
+	return dispatch_template(
+		dispinfo,
+		{_f=f},
+		string.format([[
+			local ptr, inst = _f(D.arg_ref.inst, A)
+			C.fhkS_setvaluei(S, %d, inst, #ptr, ptr.%s)
+		]], xi, band),
+		string.format("%s->%s#%s", name or xi, f, band)
+	)
+end
+
+-- TODO: move this somewhere else (modcall.lua ?)
+local tonumber = tonumber
+local cedge_mt = {
+	__index = function(self, i)
+		return self.p[i]
+	end,
+
+	__newindex = function(self, i, v)
+		self.p[i] = v
+	end,
+
+	__len = function(self)
+		return tonumber(self.n)
+	end
+}
+
+local totable_f = [[
+	return function(self)
+		local tab = {}
+		for i=0, #self-1 do
+			tab[i+1] = self[i]
+		end
+		return tab
+	end
+]]
+
+local fromtable_f = [[
+	return function(self, tab)
+		for i=0, #self-1 do
+			self[i] = tab[i+1]
+		end
+	end
+]]
+
+local function specialize_edge_ct(ctype)
+	return ffi.metatype(ffi.typeof([[
+		struct {
+			$ *p;
+			size_t n;
+		}	
+	]], ctype), cedge_mt)
+end
+
+local cedge_ct = setmetatable({}, {
+	__index = function(self, ctype)
+		local ctid = tonumber(ctype)
+		local ct = rawget(self, ctid)
+		if ct then return ct end
+		self[ctid] = {
+			ctype = specialize_edge_ct(ctype),
+			-- specialize for each ctype
+			totable = load(totable_f)(),
+			fromtable = load(fromtable_f)()
+		}
+		return self[ctid]
+	end
+})
+
+local function signature_ctype(signature)
+	assert(ffi.offsetof(ctypes.modcall, "edges") == ffi.sizeof("uintptr_t"))
+
+	local fields = { "uintptr_t ___header;" }
+	local ctypes = {}
+
+	for i,p in ipairs(signature.params) do
+		table.insert(fields, string.format("$ param%d;", i))
+		table.insert(ctypes, cedge_ct[p.ctype].ctype)
+	end
+
+	for i,r in ipairs(signature.returns) do
+		table.insert(fields, string.format("$ return%d;", i))
+		table.insert(ctypes, cedge_ct[r.ctype].ctype)
+	end
+
+	return ffi.typeof(string.format("struct { %s }", table.concat(fields, "\n")), unpack(ctypes))
+end
+
+local function modcall_lua() error("TODO") end
+
+local function modcall_lua_ffi(dispinfo, signature, f, name)
+	assert(#signature.returns > 0)
+	
+	local params, returns = {}, {}
+
+	for i,p in ipairs(signature.params) do
+		if p.scalar then
+			table.insert(params, string.format("call.param%d[0]", i))
+		else
+			table.insert(params, string.format("call.param%d", i))
+		end
+	end
+
+	for i,r in ipairs(signature.returns) do
+		if r.scalar then
+			table.insert(returns, string.format("call.return%d[0]", i))
+		else
+			table.insert(params, string.format("call.return%d", i))
+		end
+	end
+
+	return dispatch_template(
+		dispinfo,
+		{
+			_signature_ctp = ffi.typeof("$*", signature_ctype(signature)),
+			_f = f,
+			cast = ffi.cast,
+		},
+		string.format([[
+			local call = cast(_signature_ctp, D.arg_ptr)
+			%s _f(%s)
+		]],
+		#returns > 0 and string.format("%s =", table.concat(returns, ", ")) or "",
+		table.concat(params, ", ")),
+		string.format("modcall-lua-ffi@%s", name or f)
+	)
+end
+
+local function modcall_const(dispinfo, signature, returns)
+	assert(#returns == #signature.returns)
+
+	local np = #signature.params-1
+	local src, upv = code.new(), {}
+
+	upv.modcall_ct = ctypes.modcall_p
+	src:emit("local call = cast(modcall_ct, D.arg_ptr)")
+
+	for i,r in ipairs(returns) do
+		local ctype = signature.returns[i].ctype
+
+		if type(r) == "table" then
+			r = ffi.new(ffi.typeof("$[?]", ctype), #r, r)
+		end
+
+		if type(r) == "cdata" then
+			-- TODO: should support scalar cdata
+			upv.copy = ffi.copy
+			upv[string.format("return%d", i)] = r
+			src:emitf(
+				"copy(call.edges[%d].p, return%d, call.edges[%d].n*%d)",
+				np+i, i, np+i, ffi.sizeof(ctype)
+			)
+		elseif type(r) == "number" then
+			upv.cast = ffi.cast
+			upv[string.format("return%d_ctype", i)] = ffi.typeof("$*", ctype)
+			src:emitf(
+				"cast(return%d_ctype, call.edges[%d].p)[0] = %d",
+				i, np+i, r
+			)
+		else
+			error(string.format("unhandled constant: %s", r))
+		end
+	end
+
+	return dispatch_template(dispinfo, upv, tostring(src), string.format("modcall-const@%p", returns))
+end
+
+-- TODO: maybe this should alloc the map on the solver arena?
+local function mapcall_i(dispinfo, idx, map)
+	return dispatch_template(
+		dispinfo,
+		{ _map = map, },
+		string.format([[
+			local inst = D.arg_ref.inst
+			C.fhkS_setmap(S, %d, inst, _map(inst))
+		]], idx),
+		string.format("imapcall%d@%p", idx, map)
+	)
+end
+
+local function mapcall_k(dispinfo, idx, map)
+	return dispatch_template(
+		dispinfo,
+		{ _map = map },
+		string.format("C.fhkS_setmap(S, %d, 0, _map())", idx),
+		string.format("kmapcall%d@%p", idx, map)
+	)
+end
+
+local function solver_trampoline(name)
+	-- TODO: the error handling code doesn't belong here. it would be nicer to have
+	-- pushstate/popstate work in a way that doesn't require a protected call
+	-- (ie. eliminate popstate and only have pushstate/getstate). return from the
+	-- xpcall isn't compiled (and it produces less nice backtraces).
+	-- this doesn't really have a performance impact because most of the time is spent
+	-- in the solver, but it would be nicer to not have to do this.
+
+	return code.new()
+		:emit([[
+			local _solve, _pushstate, _popstate
+			local xpcall, traceback, error = xpcall, traceback, error
+			return function(A)
+				local ok, x = xpcall(_solve, traceback, A, _pushstate(A))
+				_popstate()
+				if not ok then error(x) end
+				return x
+			end
+		]])
+		:compile({
+			xpcall    = xpcall,
+			traceback = debug.traceback,
+			error     = error
+		}, string.format("=(solver-trampoline@%s)", name or "?"))()
+end
+
+local function bind_trampoline(trampoline, solve, pushstate, popstate)
+	code.setupvalue(trampoline, "_solve", solve)
+	code.setupvalue(trampoline, "_pushstate", pushstate)
+	code.setupvalue(trampoline, "_popstate", popstate)
+end
 
 local function solver_ctype(roots)
 	local fields, ctypes = {}, {}
@@ -20,60 +310,47 @@ end
 --     ctype (required)    type in result cdata
 --     subset              subset to solve.
 --                         cdata -> fixed subset
---                         non-cdata -> read key (index table or cdata) from state
+--                         non-cdata -> read key (index table or cdata) from A
 --                         nil -> solve full space (requires shape table)
 --     nopack              set FHKF_NPACK (don't pack result, requires shape table)
 --     group               group index, required if subset is implicit space or nopack is set
-local function solver_init(G, roots, static_alloc, runtime_alloc)
+local function solver(dispinfo, alloc, roots, name)
 	local res_ct = solver_ctype(roots)
 
-	local req = ffi.cast("struct fhk_req *", static_alloc(
-		#roots*ffi.sizeof("struct fhk_req"), ffi.alignof("struct fhk_req")
-	))
-
-	for i,v in ipairs(roots) do
-		req[i-1].idx = v.idx
-		req[i-1].flags = 0
-		req[i-1].buf = nil
-		if type(v.subset) == "cdata" then
-			req[i-1].ss = v.subset
-		end
-	end
-
-	local out = code.new()
+	local src = code.new()
 
 	for i,v in ipairs(roots) do
 		if v.subset and type(v.subset) ~= "cdata" then
-			out:emitf("local __subset_%d = roots[%d].subset", i, i)
+			src:emitf("local __subset_%d = roots[%d].subset", i, i)
 		end
 	end
 
-	out:emitf([[
-		local ffi = require "ffi"
-		local C, cast = ffi.C, ffi.cast
-		local fhk_ct = require "fhk.ctypes"
-		local space, size, ssfromidx = fhk_ct.space, fhk_ct.ss_size, fhk_ct.ssfromidx
-		local type = type
-		local G, req = G, req
-		local res_ctp = res_ctp
+	src:emitf([[
+		local C, cast, type = C, cast, type
+		local D, J = dispinfo.dispatch, dispinfo.jumptable
+		local space, size, ssfromidx = space, size, ssfromidx
+		local res_ct = res_ct
+		local _alloc = alloc
 
-		return function(arena, state, shape)
-			local res = cast(res_ctp, alloc(%d, %d))
+		return function(A, S, arena, shape)
+			local result = cast(res_ct, _alloc(%d, %d))
 	]], ffi.sizeof(res_ct), ffi.alignof(res_ct))
 
 	for i,v in ipairs(roots) do
-		out:emit("do")
-		
-		if type(v.subset) == "cdata" then
-			out:emitf([[
-				local buf = alloc(%d, %d)
-				req[%d].buf = buf
+		local cts, cta = ffi.sizeof(v.ctype), ffi.alignof(v.ctype)
+
+		src:emit("do")
+
+		if type(v.subset) == "cdata" then -- const subset
+			src:emitf([[
+				local buf = _alloc(%d, %d)
+				C.fhkS_setroot(S, %d, %s, buf)
 			]],
-			ctypes.ss_size(v.subset)*ffi.sizeof(v.ctype), ffi.alignof(v.ctype),
-			i-1)
-		elseif v.subset then
-			out:emitf([[
-				local ss = state[__subset_%d]
+			ctypes.ss_size(v.subset)*cts, cta,
+			v.idx, v.subset)
+		elseif v.subset then -- keyed subset
+			src:emitf([[
+				local ss = A[__subset_%d]
 				local num
 				if type(ss) == "table" then
 					num = #ss
@@ -81,152 +358,42 @@ local function solver_init(G, roots, static_alloc, runtime_alloc)
 				else
 					num = size(ss)
 				end
-				local buf = alloc(num*%d, %d)
-				req[%d].ss = ss
-				req[%d].buf = buf
+				local buf = _alloc(num*%d, %d)
+				C.fhkS_setroot(S, %d, ss, buf)
 			]],
 			i,
-			ffi.sizeof(v.ctype), ffi.alignof(v.ctype),
-			i-1,
-			i-1)
-		else
-			-- fast path for space
-			-- TODO: compute the space/size only once per group?
-			out:emitf([[
-				local buf = alloc(shape[%d]*%d, %d)
-				req[%d].ss = space(shape[%d])
-				req[%d].buf = buf
+			cts, cta,
+			v.idx)
+		else -- implicit space
+			src:emitf([[
+				local buf = _alloc(shape[%d]*%d, %d)
+				C.fhkS_setroot(S, %d, space(shape[%d]), buf)
 			]],
-			v.group, ffi.sizeof(v.ctype), ffi.alignof(v.ctype),
-			i-1, v.group,
-			i-1)
+			v.group, cts, cta,
+			v.idx, v.group)
 		end
 
-		out:emitf([[
-			res.%s = buf
-			end
-		]], v.name)
+		src:emitf("result.%s = buf end", v.name)
 	end
 
-	out:emitf([[
-		local solver = C.fhk_create_solver(G, arena, %d, req)
-		C.fhkS_shape_table(solver, shape)
-		return solver, res
-		end
-	]], #roots)
-
-	return out:compile({
-		require = require,
-		type    = type,
-		req     = req,
-		G       = G,
-		res_ctp = ffi.typeof("$*", res_ct),
-		alloc   = runtime_alloc,
-		roots   = roots
-	}, string.format("=(initsolver@%p)", roots))()
-end
-
--- obtain should return an arena
-local function graph_init(shapef, obtain)
-	if not shapef[0] then return obtain end
-	local maxshape = #shapef
-
-	local out = code.new()
-
-	for i=0, maxshape do
-		out:emitf("local __shape_%d = shapef[%d]", i, i)
-	end
-
-	out:emitf([[
-		local ffi = require "ffi" 
-		local C, cast = ffi.C, ffi.cast
-		local fhk_idxp = ffi.typeof "fhk_idx *"
-		local obtain = obtain
-
-		return function(state)
-			local arena = obtain()
-			local shape = cast(fhk_idxp, C.arena_alloc(arena, %d, %d))
-	]], (maxshape+1)*ffi.sizeof("fhk_idx"), ffi.alignof("fhk_idx"))
-
-	for i=0, maxshape do
-		out:emitf("shape[%d] = __shape_%d(state)", i, i)
-	end
-
-	out:emit([[
-			return arena, shape
+	src:emit([[
+		J[C.fhkD_continue(S, D)](S, A)
+		return result
 		end
 	]])
 
-	return out:compile({
-		require = require,
-		shapef  = shapef,
-		obtain  = obtain
-	}, string.format("=(subgraphinit@%p)", shapef))()
-end
-
-local function driver(M, umem, loop, alloc, release)
-	local out = code.new()
-
-	out:emit([[
-		local ffi = require "ffi"
-		local C, cast = ffi.C, ffi.cast
-		local M, loop, umem_ctp = M, loop, umem_ctp
-	]])
-
-	for i=1, #umem.fields do
-		out:emitf("local __init_%d = umem.fields[%d].init", i, i)
-	end
-
-	local uct = umem:ctype()
-	assert(ffi.alignof(uct) <= 16)
-
-	out:emitf([[
-		return function(arena, state, solver)
-			local D = C.fhkD_create_driver(M, %d, solver, arena)
-			local u = cast(umem_ctp, D.umem)
-	]], ffi.sizeof(uct))
-
-	for i,field in ipairs(umem.fields) do
-		out:emitf("u.%s = __init_%d(state)", field.name, i)
-	end
-
-	out:emit([[
-			local err = loop(D)
-			release(arena)
-			if err then error(err) end
-		end
-	]])
-
-	return out:compile({
-		require  = require,
-		M        = M,
-		loop     = loop,
-		umem     = umem,
-		umem_ctp = ffi.typeof("$*", uct),
-		release  = release,
-		error    = error,
-	}, string.format("=(driverinit@%p)", M))()
-end
-
-local function solver_template()
-	-- load is used to compile a new root trace
-	-- see: https://github.com/luafun/luafun/pull/33
-	return load([[
-		local _init, _create, _driver
-
-		return function(state)
-			local arena, shape = _init(state)
-			local solver, result = _create(arena, state, shape)
-			_driver(arena, state, solver)
-			return result
-		end
-	]])()
-end
-
-local function bind_solver(template, init, create, driver)
-	code.setupvalue(template, "_init", init)
-	code.setupvalue(template, "_create", create)
-	code.setupvalue(template, "_driver", driver)
+	return src:compile({
+		C            = C,
+		cast         = ffi.cast,
+		type         = type,
+		dispinfo     = dispinfo,
+		space        = ctypes.space,
+		size         = ctypes.ss_size,
+		ssfromidx    = ctypes.ssfromidx,
+		res_ct       = ffi.typeof("$*", res_ct),
+		alloc        = alloc,
+		roots        = roots
+	}, string.format("=(solver@%s)", name or string.format("%p", roots)))()
 end
 
 local function uniq(funs)
@@ -267,11 +434,8 @@ local function shapefunc(funs)
 		]], i)
 	end
 
-	-- hack: `if true` needed or the ::fail:: is a syntax error
 	out:emit([[
-			if true then
-				return shape
-			end
+			do return shape end
 ::fail::
 			error(string.format("groups disagree about shape: %d != %d", shape, s))
 		end
@@ -280,11 +444,63 @@ local function shapefunc(funs)
 	return out:compile({funs=funs, error=error}, string.format("=(groupshape@%p)", funs))()
 end
 
+local function pushstate_uncached(G, shapef, obtain)
+	local src = code.new()
+
+	local i = 0
+	while shapef[i] do
+		src:emitf("local __shape_%d = shapef[%d]", i, i)
+		i = i+1
+	end
+
+	src:emitf([[
+		local C, G = C, G
+		local cast = cast
+		local _obtain = obtain
+
+		return function(A)
+			local arena = _obtain()
+			local shape = cast("fhk_inst *", C.arena_alloc(arena, %d, %d))
+	]], i*ffi.sizeof("fhk_inst"), ffi.alignof("fhk_inst"))
+
+	for j=0, i-1 do
+		src:emitf("shape[%d] = __shape_%d(A)", j, j)
+	end
+
+	src:emit("local S = C.fhk_create_solver(G, arena)")
+
+	for j=0, i-1 do
+		src:emitf("C.fhkS_setshape(S, %d, shape[%d])", j, j)
+	end
+
+	src:emit([[
+			return S, arena, shape
+		end
+	]])
+
+	return src:compile({
+		C      = C,
+		G      = G,
+		cast   = ffi.cast,
+		obtain = obtain,
+		shapef = shapef
+	}, string.format("=(pushstate-uncached@%p)", shapef))()
+end
+
 return {
-	graph_init        = graph_init,
-	solver_init       = solver_init,
-	driver            = driver,
-	solver_template   = solver_template,
-	bind_solver       = bind_solver,
-	shapefunc         = shapefunc
+	setvalue_constptr        = setvalue_constptr,
+	setvalue_userfunc_offset = setvalue_userfunc_offset,
+	setvalue_array_userfunc  = setvalue_array_userfunc,
+	setvalue_soa_constptr    = setvalue_soa_constptr,
+	setvalue_soa_userfunc    = setvalue_soa_userfunc,
+	modcall_lua              = modcall_lua,
+	modcall_lua_ffi          = modcall_lua_ffi,
+	modcall_const            = modcall_const,
+	mapcall_i                = mapcall_i,
+	mapcall_k                = mapcall_k,
+	solver_trampoline        = solver_trampoline,
+	bind_trampoline          = bind_trampoline,
+	solver                   = solver,
+	shapefunc                = shapefunc,
+	pushstate_uncached       = pushstate_uncached
 }

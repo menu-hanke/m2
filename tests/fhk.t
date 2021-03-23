@@ -67,13 +67,11 @@ test_solver_computed_check = _(function()
 end)
 
 test_solver_complex_parameter = _(function()
-	umap {
-		"even",
-		cf { 0, 2 },
-		function(inst) return (inst%2==0) and {0} or {} end
-	}
-
 	graph {
+		u { "even",
+			ufunc(cf { 0, 2 }, "k"),
+			ufunc(function(inst) return (inst%2==0) and {0} or {} end, "i")
+		},
 		m { "g# a:even -> g#x", dot }
 	}
 
@@ -135,6 +133,15 @@ test_solver_offset_collect = _(function()
 
 	given { a = {1, 2, 3} }
 	solution { x = {na, 2, 3} }
+end)
+
+test_solver_modcall_emptyset = _(function()
+	graph {
+		m { "g# a:@space -> g#x", cf{1} }
+	}
+
+	given { a = {} }
+	solution { ["g#x"] = {1} }
 end)
 
 test_solver_bound_retry = _(function()
@@ -212,21 +219,17 @@ test_solver_set_computed_constraint = _(function()
 end)
 
 test_solver_set_computed_param = _(function()
-	umap {
-		"first",
-		cf {0},
-		function(inst) return inst == 0 and {0} or {} end
-	}
-
-	umap {
-		"second",
-		cf {1},
-		function(inst) return inst == 1 and {0} or {} end
-	}
-
 	graph {
-		m { "g# ->g#a:first", 123 },
-		m { "g# ->g#a:second", 456 },
+		u { "first",
+			ufunc(cf{0}, "k"),
+			ufunc(function(inst) return inst == 0 and {0} or {} end, "i")
+		},
+		u { "second",
+			ufunc(cf{1}, "k"),
+			ufunc(function(inst) return inst == 1 and {0} or {} end, "i")
+		},
+		m { "default# ->g#a:first", 123 },
+		m { "default# ->g#a:second", 456 },
 		m { "default# g#a:second->x", id }
 	}
 
@@ -339,6 +342,42 @@ test_solver_checkall_over64 = _(function()
 
 	given { w = { n=100, buf=ws } }
 	solution { x = xs }
+end)
+
+test_solver_umap_association = _(function()
+	local G = {}
+	local data = {}
+	local xs = {}
+
+	local num = 20
+
+	for i=1, num do
+		table.insert(G, u {
+			string.format("umap%d_g", i),
+			ufunc(function() return {i-1} end, "i"),
+			ufunc(function(inst) return inst == i-1 and {i-1} or {} end, "i")
+		})
+
+		table.insert(G, u {
+			string.format("umap%d_default", i),
+			ufunc(function() return {i-1} end, "i"),
+			ufunc(function(inst) return inst == i-1 and {i-1} or {} end, "i")
+		})
+
+		table.insert(G, m {
+			string.format("h# g%d#x%d:umap%d_g->default#x:umap%d_default", i, i, i, i),
+			id
+		})
+
+		data[i] = i
+		xs[string.format("g%d#x%d", i, i)] = data
+	end
+
+	n.h = num
+
+	graph(G)
+	given(xs)
+	solution { x = data }
 end)
 
 test_prune_omit_model = _(function()

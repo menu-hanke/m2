@@ -45,25 +45,23 @@ local function shedge(target, map, penalty)
 	}
 end
 
-local function shallowmerge(dest, src)
-	for k,v in pairs(src) do
-		if dest[k] then
-			error(string.format("duplicate node: '%s'", k))
-		end
-		dest[k] = v
-	end
+local function umap(map, inverse, flags)
+	return {
+		map     = map,
+		inverse = inverse,
+		flags   = flags
+	}
 end
 
-local function merge(...)
-	local ret = nodeset()
-	
-	for _,ns in ipairs({...}) do
-		shallowmerge(ret.models, ns.models)
-		shallowmerge(ret.vars, ns.vars)
-		shallowmerge(ret.shadows, ns.shadows)
-	end
+local function ufunc(create, flags)
+	return {
+		create = create,
+		flags  = flags
+	}
+end
 
-	return ret
+local function isconst(flags)
+	return flags:match("k")
 end
 
 local function groupof(name)
@@ -71,12 +69,14 @@ local function groupof(name)
 end
 
 return {
-	nodeset = nodeset,
-	model   = model,
-	var     = var,
-	shadow  = shadow,
-	edge    = edge,
-	shedge  = shedge,
-	merge   = merge,
-	groupof = groupof
+	nodeset  = nodeset,
+	model    = model,
+	var      = var,
+	shadow   = shadow,
+	edge     = edge,
+	shedge   = shedge,
+	umap     = umap,
+	ufunc    = ufunc,
+	isconst  = isconst,
+	groupof  = groupof
 }

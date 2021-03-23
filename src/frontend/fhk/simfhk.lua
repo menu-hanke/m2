@@ -3,17 +3,18 @@ local plan = require "fhk.plan"
 local ctypes = require "fhk.ctypes"
 local compile = require "fhk.compile"
 local debugger = require "fhk.debugger"
+local edgemaps = require "fhk.edgemaps"
 local graph = require "fhk.graph"
 local view = require "fhk.view"
 local ffi = require "ffi"
 local C = ffi.C
 
 local function inject(env, def)
-	local p = plan.create({
+	local p = {
 		static_alloc  = env.m2.sim:allocator("static"),
 		runtime_alloc = env.m2.sim:allocator("frame"),
 		trace         = cli.verbosity <= -2 and debugger.tracer,
-	})
+	}
 
 	local modview = view.modelset_view(def.impls, p.static_alloc)
 
@@ -23,7 +24,7 @@ local function inject(env, def)
 
 			-- for gc
 			p = nil
-			modview = nil
+			modview.impls = nil
 		end
 	}
 
@@ -38,9 +39,10 @@ local function inject(env, def)
 		end,
 
 		solver         = function(view, ...)
-			local template = compile.solver_template()
-			plan.add_solver(p, view, template, plan.decl_solver({...}))
-			return template
+			local solver = plan.decl_solver({...})
+			local trampoline = compile.solver_trampoline(plan.desc_solver(solver))
+			plan.add_solver(p, view, trampoline, solver)
+			return trampoline
 		end,
 
 		subset         = function(idx)
@@ -52,11 +54,11 @@ local function inject(env, def)
 		struct_view    = view.struct_view,
 		array_view     = view.array_view,
 		soa_view       = view.soa_view,
+		size_view      = view.size_view,
 		fixed_size     = view.fixed_size,
-		match_edges    = view.match_edges,
-		space          = view.space,
-		only           = view.only,
-		ident          = view.ident,
+		edge_view      = view.edge_view,
+		ufunc          = edgemaps.ufunc,
+		umap           = edgemaps.umap,
 		tracer         = function(trace) p.trace = trace end
 	}
 end

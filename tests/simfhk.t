@@ -47,26 +47,29 @@ test_struct_view = _(function()
 	model "s#model" {
 		params {"s#x", "s#y"},
 		returns {"s#z", "s#w"} *as "double",
-		impl.Lua("models", "id")
+		impl.LuaJIT("models", "id")
 	}
 end, function()
 	local struct_ct = ffi.typeof "struct { double x; double y; }"
 	local struct = struct_ct(1, 2)
 
 	local unbound = m2.fhk.view()
-		:add(m2.fhk.match_edges { {"=>%1", m2.fhk.ident }})
-		:add(m2.fhk.group("s", m2.fhk.struct_view(struct_ct, "inst")))
+		:add(m2.fhk.edge_view("=>$", "ident"))
+		:add(m2.fhk.group("s",
+			m2.fhk.struct_view(struct_ct, function(_, state) return state.struct end),
+			m2.fhk.fixed_size(1)
+		))
 	
 	local solver_unbound = m2.fhk.solver(unbound, "s#z", "s#w")
 	
 	local bound = m2.fhk.view()
-		:add(m2.fhk.match_edges { {"=>%1", m2.fhk.ident }})
+		:add(m2.fhk.edge_view("=>$", "ident"))
 		:add(m2.fhk.group("s", m2.fhk.struct_view(struct_ct, struct)))
 	
 	local solver_bound = m2.fhk.solver(bound, "s#z", "s#w")
 
 	function m2.export.test()
-		local res_unbound = solver_unbound({inst=struct})
+		local res_unbound = solver_unbound({struct=struct})
 		assert(res_unbound.s_z[0] == 1 and res_unbound.s_w[0] == 2)
 
 		local res_bound = solver_bound()
@@ -78,20 +81,23 @@ test_soa_view = _(function()
 	model "s#model" {
 		params { "s#x", "s#y" },
 		returns { "s#z", "s#w"} *as "double",
-		impl.Lua("models", "id")
+		impl.LuaJIT("models", "id")
 	}
 end, function()
 	local soa_ct = m2.soa.from_bands { x="double", y="double" }
 	local soa = m2.new_soa(soa_ct)
 
 	local unbound = m2.fhk.view()
-		:add(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
-		:add(m2.fhk.group("s", m2.fhk.soa_view(soa_ct, "inst")))
+		:add(m2.fhk.edge_view("=>$", "ident"))
+		:add(m2.fhk.group("s",
+			m2.fhk.soa_view(soa_ct, function(_, state) return state.soa, 0 end),
+			m2.fhk.size_view(function(state) return #state.soa end)
+		))
 	
 	local solver_unbound = m2.fhk.solver(unbound, "s#z", "s#w")
 
 	local bound = m2.fhk.view()
-		:add(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+		:add(m2.fhk.edge_view("=>$", "ident"))
 		:add(m2.fhk.group("s", m2.fhk.soa_view(soa_ct, soa)))
 	
 	local solver_bound = m2.fhk.solver(bound, "s#z", "s#w")
@@ -103,7 +109,7 @@ end, function()
 		x[1] = 2; y[1] = 200
 		x[2] = 3; y[2] = 300
 
-		local res_unbound = solver_unbound({inst=soa})
+		local res_unbound = solver_unbound({soa=soa})
 		assert(
 			res_unbound.s_z[0] == 1 and res_unbound.s_w[0] == 100 and
 			res_unbound.s_z[1] == 2 and res_unbound.s_w[1] == 200 and
@@ -123,7 +129,7 @@ test_mixed_view = _(function()
 	model "plot#ba_sum" {
 		params {"plot#time", "tree#ba"},
 		returns "plot#ba" *as "double",
-		impl.Lua("models", "ba_sum")
+		impl.LuaJIT("models", "ba_sum")
 	}
 end, function()
 	local Plot = ffi.typeof "struct { double time; }"
@@ -133,11 +139,11 @@ end, function()
 	local trees = m2.new_soa(Trees)
 
 	local subgraph = m2.fhk.view()
-		:add(m2.fhk.match_edges {
-			{ "=>%1",       m2.fhk.ident },
-			{ "plot=>tree", m2.fhk.space }
-		})
-		:add(m2.fhk.group("plot", m2.fhk.struct_view(Plot, plot)))
+		:add(m2.fhk.edge_view("=>$", "ident"))
+		:add(m2.fhk.group("plot",
+			m2.fhk.edge_view("=>tree", "space"),
+			m2.fhk.struct_view(Plot, plot)
+		))
 		:add(m2.fhk.group("tree", m2.fhk.soa_view(Trees, trees)))
 	
 	local solver = m2.fhk.solver(subgraph, "plot#ba")
@@ -160,15 +166,17 @@ test_empty_space = _(function()
 	model "g#model" {
 		params "g#x",
 		returns "g#y" *as "double",
-		impl.Lua("models", "id")
+		impl.LuaJIT("models", "id")
 	}
 end, function()
 	local ct = m2.soa.from_bands { y = "double" }
 	local inst = m2.new_soa(ct)
 
+	-- g#x is typeless.
+	-- this is ok, because it's unreachable and should be pruned.
 	local solver = m2.fhk.solver(
 		m2.fhk.view()
-			:add(m2.fhk.match_edges {{"=>%1", m2.fhk.ident}})
+			:add(m2.fhk.edge_view("=>$", "ident"))
 			:add(m2.fhk.group("g", m2.fhk.soa_view(ct, inst))),
 		"g#y"
 	)
@@ -180,7 +188,7 @@ end)
 
 test_missing_shape = _(gmodel_gx_Const(), function()
 	m2.fhk.solver(
-		m2.fhk.view():add(m2.fhk.match_edges {{"=>%1", m2.fhk.ident}}),
+		m2.fhk.view():add(m2.fhk.edge_view("=>$", "ident")),
 		"g#x"
 	)
 
@@ -189,7 +197,7 @@ end)
 
 test_missing_var = _(gmodel_gx_Const(), function()
 	m2.fhk.solver(
-		m2.fhk.view():add(m2.fhk.match_edges {{"=>%1", m2.fhk.ident}}),
+		m2.fhk.view():add(m2.fhk.edge_view("=>$", "ident")),
 		"g#y"
 	)
 	
@@ -204,7 +212,7 @@ test_unreachable_var = _(function()
 	}
 end, function()
 	m2.fhk.solver(
-		m2.fhk.view():add(m2.fhk.match_edges {{"=>%1", m2.fhk.ident}}),
+		m2.fhk.view():add(m2.fhk.edge_view("=>$", "ident")),
 		"g#y"
 	)
 
@@ -219,7 +227,7 @@ test_unreachable_shadow = _(function()
 	}
 end, function()
 	m2.fhk.solver(
-		m2.fhk.view():add(m2.fhk.match_edges {{"=>%1", m2.fhk.ident}}),
+		m2.fhk.view():add(m2.fhk.edge_view("=>$", "ident")),
 		"g#y"
 	)
 
@@ -253,12 +261,12 @@ test_missing_type = _(function()
 end, function()
 	m2.fhk.solver(
 		m2.fhk.view()
-			:add(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+			:add(m2.fhk.edge_view("=>$", "ident"))
 			:add(m2.fhk.group("g", m2.fhk.fixed_size(1))),
 		"g#x"
 	)
 	
-	return fails "no unique type for 'g#x'"
+	return fails "no chain with finite cost.*g#x"
 end)
 
 test_dupe_view = _(function()
@@ -269,12 +277,13 @@ test_dupe_view = _(function()
 	}
 end, function()
 	local ct = ffi.typeof "struct { double x; }"
+	local data = ct()
 
 	m2.fhk.solver(
 		m2.fhk.view()
-			:add(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
-			:add(m2.fhk.group("g", m2.fhk.struct_view(ct, "a")))
-			:add(m2.fhk.group("g", m2.fhk.struct_view(ct, "b"))),
+			:add(m2.fhk.edge_view("=>$", "ident"))
+			:add(m2.fhk.group("g", m2.fhk.struct_view(ct, data)))
+			:add(m2.fhk.group("g", m2.fhk.struct_view(ct, data))),
 		"g#y"
 	)
 	
@@ -284,8 +293,8 @@ end)
 test_dupe_edge = _(gmodel_gx_Const(), function()
 	m2.fhk.solver(
 		m2.fhk.view()
-			:add(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
-			:add(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+			:add(m2.fhk.edge_view("=>$", "ident"))
+			:add(m2.fhk.edge_view("=>$", "ident"))
 			:add(m2.fhk.group("g", m2.fhk.fixed_size(1))),
 		"g#x"
 	)
@@ -295,7 +304,7 @@ end)
 
 test_composite_view = _(gmodel_gx_Const(), function()
 	local view1 = m2.fhk.group("g", m2.fhk.fixed_size(1))
-	local view2 = m2.fhk.match_edges {{"=>%1", m2.fhk.ident}}
+	local view2 = m2.fhk.edge_view("=>$", "ident")
 
 	local view = m2.fhk.view():add(m2.fhk.composite(view1, view2))
 	local solver = m2.fhk.solver(view, "g#x")
@@ -314,12 +323,12 @@ test_derive = _(function()
 	model "g#model" {
 		params "g#y",
 		returns "g#z" *as "double",
-		impl.Lua("models", "id")
+		impl.LuaJIT("models", "id")
 	}
 end, function()
 	local solver = m2.fhk.solver(
 		m2.fhk.view()
-			:add(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+			:add(m2.fhk.edge_view("=>$", "ident"))
 			:add(m2.fhk.group("g", m2.fhk.fixed_size(1))),
 		"g#z"
 	)
@@ -336,7 +345,7 @@ test_builtin_set = _(function()
 			"v#x" *set "all"
 		},
 		returns "g#sum" *set "ident" *as "double",
-		impl.Lua("models", "ba_sum")
+		impl.LuaJIT("models", "ba_sum")
 	}
 end, function()
 	local g_ct = ffi.typeof "struct { double x; }"
@@ -412,7 +421,7 @@ end, function()
 
 	local solver = m2.fhk.solver(
 		m2.fhk.view()
-			:add(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+			:add(m2.fhk.edge_view("=>$", "ident"))
 			:add(m2.fhk.group("g", m2.fhk.struct_view(g_ct, g))),
 		"g#x", "g#y", "g#z"
 	)
@@ -486,7 +495,7 @@ end, function()
 
 	local solver = m2.fhk.solver(
 		m2.fhk.view()
-			:add(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+			:add(m2.fhk.edge_view("=>$", "ident"))
 			:add(m2.fhk.group("v", m2.fhk.soa_view(v_ct, v))),
 		{ "v#y", subset="sub" }
 	)
@@ -511,13 +520,13 @@ test_solver_fail_chain = _(function()
 end, function()
 	local solver = m2.fhk.solver(
 		m2.fhk.view()
-			:add(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+			:add(m2.fhk.edge_view("=>$", "ident"))
 			:add(m2.fhk.group("g", m2.fhk.fixed_size(1))),
 		"g#x"
 	)
 	
 	function m2.export.test()
-		assert(fails(solver, "fhk failed: no chain with finite cost.*g#x"))
+		assert(fails(solver, "no chain with finite cost.*g#x"))
 	end
 end)
 
@@ -534,7 +543,7 @@ test_invalid_check = _(function()
 end, function()
 	m2.fhk.solver(
 		m2.fhk.view()
-			:add(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+			:add(m2.fhk.edge_view("=>$", "ident"))
 			:add(m2.fhk.group("g", m2.fhk.fixed_size(1))),
 		"g#x"
 	)
@@ -545,12 +554,12 @@ end)
 test_model_crash = _(function()
 	model "g#mody" {
 		returns "g#y" *as "double",
-		impl.Lua("models", "runtime_error")
+		impl.LuaJIT("models", "runtime_error")
 	}
 end, function()
 	local solver = m2.fhk.solver(
 		m2.fhk.view()
-			:add(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+			:add(m2.fhk.edge_view("=>$", "ident"))
 			:add(m2.fhk.group("g", m2.fhk.fixed_size(1))),
 		"g#y"
 	)
@@ -560,28 +569,29 @@ end, function()
 	end
 end)
 
-test_R_impl = _(function()
-	derive ("g#x" *as "double") {
-		impl.R("models.r", "ret1")
-	}
-end, function()
-	local solver = m2.fhk.solver(
-		m2.fhk.view()
-			:add(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
-			:add(m2.fhk.group("g", m2.fhk.fixed_size(1))),
-		"g#x"
-	)
-	
-	function m2.export.test()
-		local solution = solver()
-		assert(solution.g_x[0] == 1)
-	end
-end)
+-- TODO
+--test_R_impl = _(function()
+--	derive ("g#x" *as "double") {
+--		impl.R("models.r", "ret1")
+--	}
+--end, function()
+--	local solver = m2.fhk.solver(
+--		m2.fhk.view()
+--			:add(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+--			:add(m2.fhk.group("g", m2.fhk.fixed_size(1))),
+--		"g#x"
+--	)
+--	
+--	function m2.export.test()
+--		local solution = solver()
+--		assert(solution.g_x[0] == 1)
+--	end
+--end)
 
 test_alias = _(gmodel_gx_Const(), function()
 	local solver = m2.fhk.solver(
 		m2.fhk.view()
-			:add(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+			:add(m2.fhk.edge_view("=>$", "ident"))
 			:add(m2.fhk.group("g", m2.fhk.fixed_size(1))),
 		{ "g#x", alias="var0" }
 	)
@@ -611,7 +621,7 @@ end, function()
 
 	local solver = m2.fhk.solver(
 		m2.fhk.view()
-			:add(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+			:add(m2.fhk.edge_view("=>$", "ident"))
 			:add(m2.fhk.group("g", m2.fhk.struct_view(ct, g))),
 		"g#x"
 	)
@@ -628,50 +638,106 @@ end, function()
 	end
 end)
 
-test_tracing = _(function()
-	model "g#model" {
-		params "g#y",
-		returns "g#x" *as "double",
-		impl.Lua("models", "id")
+-- TODO
+--test_tracing = _(function()
+--	model "g#model" {
+--		params "g#y",
+--		returns "g#x" *as "double",
+--		impl.Lua("models", "id")
+--	}
+--end, function()
+--
+--	local num = 0
+--
+--	m2.fhk.tracer(function(ctx)
+--		for _,node in pairs(ctx.nodeset.models) do
+--			ctx.M.models[ctx.mapping.nodes[node]].trace = true
+--		end
+--		for _,node in pairs(ctx.nodeset.vars) do
+--			if node.create then
+--				ctx.M.vars[ctx.mapping.nodes[node]].trace = true
+--			end
+--		end
+--
+--		return function(D, status, arg)
+--			if num == 0 then assert(status == ffi.C.FHKS_VREF and arg.s_vref.idx == 0) end
+--			if num == 1 then assert(status == ffi.C.FHKS_MODCALL and arg.s_modcall.mref.idx == -1) end
+--			if num > 1 then assert(false) end
+--			num = num+1
+--		end
+--	end)
+--
+--	local g_ct = ffi.typeof [[
+--		struct {
+--			double y;
+--		}
+--	]]
+--
+--	local g = g_ct(0)
+--
+--	local solver = m2.fhk.solver(
+--		m2.fhk.view()
+--			:add(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
+--			:add(m2.fhk.group("g", m2.fhk.struct_view(g_ct, g))),
+--		"g#x"
+--	)
+--
+--	function m2.export.test()
+--		solver()
+--		assert(num == 2)
+--	end
+--end)
+
+test_hierarchy_map = _(function()
+	derive ("container#sum" *as "double") {
+		params "element#y" *set "container->elements",
+		impl.LuaJIT("models", "sum_vec")
+	}
+
+	derive ("element#y" *as "double") {
+		params {
+			"container#w",
+			"element#x"
+		},
+		impl.LuaJIT("models", "prod_scalar")
 	}
 end, function()
-	local num = 0
+	local container_ct = ffi.typeof "struct { double w; }"
+	local element_ct = ffi.typeof "struct { double x; }"
 
-	m2.fhk.tracer(function(ctx)
-		for _,node in pairs(ctx.nodeset.models) do
-			ctx.M.models[ctx.mapping.nodes[node]].trace = true
-		end
-		for _,node in pairs(ctx.nodeset.vars) do
-			if node.create then
-				ctx.M.vars[ctx.mapping.nodes[node]].trace = true
-			end
-		end
+	local containers = ffi.new(ffi.typeof("$[2]", container_ct), { {w=1}, {w=-2} })
+	local elements = ffi.new(ffi.typeof("$[10]", element_ct), {
+		{ x=7 }, { x=3 }, { x=5 }, { x=5 },
+		{ x=6 }, { x=0 }, { x=8 }
+	})
 
-		return function(D, status, arg)
-			if num == 0 then assert(status == ffi.C.FHKS_VREF and arg.s_vref.idx == 0) end
-			if num == 1 then assert(status == ffi.C.FHKS_MODCALL and arg.s_modcall.mref.idx == -1) end
-			if num > 1 then assert(false) end
-			num = num+1
-		end
-	end)
+	local c2e = { [0]={0, 1, 2, 3}, {4, 5, 6} }
+	local e2c = { [0]= 0, 0, 0, 0,   1, 1, 1  }
 
-	local g_ct = ffi.typeof [[
-		struct {
-			double y;
-		}
-	]]
-
-	local g = g_ct(0)
+	local f_c2e = m2.fhk.ufunc(function(inst) return m2.fhk.subset(c2e[inst]) end)
+	local f_e2c = m2.fhk.ufunc(function(inst) return m2.fhk.subset{e2c[inst]} end)
+	local map_c2e = m2.fhk.umap(f_c2e, f_e2c)
+	local map_e2c = m2.fhk.umap(f_e2c, f_c2e)
 
 	local solver = m2.fhk.solver(
 		m2.fhk.view()
-			:add(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
-			:add(m2.fhk.group("g", m2.fhk.struct_view(g_ct, g))),
-		"g#x"
+			:add(m2.fhk.edge_view("=>$", "ident"))
+			:add(m2.fhk.group("container",
+				m2.fhk.edge_view("=> element :container->elements", map_c2e),
+				m2.fhk.struct_view(container_ct, function(inst) return containers[inst] end),
+				m2.fhk.fixed_size(2)
+			))
+			:add(m2.fhk.group("element",
+				m2.fhk.edge_view("=> container", map_e2c, true),
+				m2.fhk.struct_view(element_ct, function(inst) return elements[inst] end),
+				m2.fhk.fixed_size(7)
+			)),
+		"container#sum"
 	)
 
 	function m2.export.test()
-		solver()
-		assert(num == 2)
+		local sum = solver()
+		assert(sum.container_sum[0] == 1*(7+3+5+5))
+		assert(sum.container_sum[1] == -2*(6+0+8))
 	end
 end)

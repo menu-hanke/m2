@@ -1,6 +1,8 @@
 local ffi = require "ffi"
+local ctfromid = require("fhk.infer").ctfromid
+local reflect = require "lib.reflect"
 local C = ffi.C
-local bor, band, lshift, rshift = bit.bor, bit.band, bit.lshift, bit.rshift
+local bor, band, lshift, rshift, bnot = bit.bor, bit.band, bit.lshift, bit.rshift, bit.bnot
 
 ---- error handling ----------------------------------------
 
@@ -110,10 +112,10 @@ ffi.metatype("fhk_def", {
 ffi.metatype("fhk_solver", {
 	__index = {
 		continue    = C.fhk_continue,
-		shape       = C.fhkS_shape,
-		shape_table = C.fhkS_shape_table,
-		give        = C.fhkS_give,
-		give_all    = C.fhkS_give_all
+		setroot     = C.fhkS_setroot,
+		setshape    = C.fhkS_setshape,
+		setvaluei   = C.fhkS_setvaluei,
+		setmap      = C.fhkS_setmap
 	}
 })
 
@@ -154,6 +156,8 @@ ffi.metatype("fhk_prune", {
 -- these functions are lua translations of the macros in fhk/solve.c
 -- note: all intervals are inclusive
 
+local emptyset = 0x00010000ull
+
 local function pkrangens(from, nsize1)
 	return bor(lshift(nsize1, 16), from)
 end
@@ -163,7 +167,7 @@ local function pkrange(from, to)
 end
 
 local function ss1ns(from, nsize1)
-	return bor(bor(lshift(ffi.cast("int64_t", nsize1), 32), lshift(from, 16)), 0xffff000000000000ull)
+	return bor(0xfffffffe00000000ull, pkrangens(from, nsize1))
 end
 
 local function ss1(from, to)
@@ -172,9 +176,9 @@ end
 
 local function space(n)
 	if n > 0 then
-		return ss1ns(0, 1-n)
+		return lshift(bnot(ffi.cast("uint64_t", n)), 16) + 0xfffffffc00020000ull
 	else
-		return 0
+		return emptyset
 	end
 end
 
@@ -212,7 +216,7 @@ end
 
 local function ssfromidx(idx, alloc)
 	if #idx == 0 then
-		return 0
+		return emptyset
 	end
 
 	table.sort(idx)
@@ -233,7 +237,7 @@ local function ssfromidx(idx, alloc)
 	return ss1(start, pos)
 end
 
-local function ss_numi(ss)
+local function ss_cnumi(ss)
 	return tonumber(band(ss, 0xffff))
 end
 
@@ -242,7 +246,7 @@ local function ss_cptr(ss)
 end
 
 local function ss_size(ss)
-	local n = ss_numi(ss)
+	local n = ss_cnumi(ss)
 	if n == 0 then
 		return 1 + band(-rshift(ss, 32), 0xffff)
 	else
@@ -257,7 +261,14 @@ local function ss_size(ss)
 	end
 end
 
+---- mapping ----------------------------------------
+local function map_user(map, inverse)
+	return bor(lshift(band(inverse, 0xff), 8), band(map, 0xff))
+end
+
 --------------------------------------------------------------------------------
+
+local modcall_ct = ctfromid(reflect.typeof("fhk_sarg"):member("s_modcall").type.element_type.typeid)
 
 return {
 	errstr        = errstr,
@@ -269,5 +280,8 @@ return {
 	ssfromidx     = ssfromidx,
 	ssfromidx_ffi = ssfromidx_ffi,
 	ss_size       = ss_size,
-	shvalue       = ffi.typeof "fhk_shvalue"
+	map_user      = map_user,
+	shvalue       = ffi.typeof "fhk_shvalue",
+	modcall       = modcall_ct,
+	modcall_p     = ffi.typeof("$*", modcall_ct),
 }

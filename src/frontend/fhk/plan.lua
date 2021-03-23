@@ -2,39 +2,8 @@ local compile = require "fhk.compile"
 local driver = require "fhk.driver"
 local transform = require "fhk.transform"
 local graph = require "fhk.graph"
+local mem = require "fhk.mem"
 local alloc = require "alloc"
-
-local function arenapool()
-	local pool = {}
-
-	local function obtain()
-		local arena = pool[#pool]
-		if arena then
-			pool[#pool] = nil
-			return arena
-		end
-
-		-- this default size might be a bit excessive, but it's just virtual memory anyway.
-		return alloc.arena(2^20)
-	end
-
-	local function release(arena)
-		arena:reset()
-		pool[#pool+1] = arena
-	end
-
-	return obtain, release
-end
-
-local function plan(init)
-	init = init or {}
-	if not init.pool_obtain then
-		local obtain, release = arenapool()
-		init.pool_obtain = obtain
-		init.pool_release = release
-	end
-	return init
-end
 
 local function decl_root(solver, name, opt)
 	opt = opt or {}
@@ -68,11 +37,19 @@ local function decl_solver(roots)
 	return solver
 end
 
-local function add_solver(plan, view, template, solver)
+local function desc_solver(solver)
+	local names = {}
+	for _,v in ipairs(solver) do
+		table.insert(names, v.target)
+	end
+	return table.concat(names, ",")
+end
+
+local function add_solver(plan, view, trampoline, solver)
 	table.insert(plan, {
-		view     = view,
-		template = template,
-		solver   = solver
+		view       = view,
+		trampoline = trampoline,
+		solver     = solver
 	})
 end
 
@@ -107,6 +84,7 @@ local function get_roots(vsdef, nodeset, mapping)
 end
 
 local function materialize(plan, nodeset)
+	local obtain, release = mem.shared_arena()
 	local views = {}
 
 	for _,vsdef in ipairs(plan) do
@@ -118,30 +96,39 @@ local function materialize(plan, nodeset)
 
 	for view, vs in pairs(views) do
 		local ns = prune_nodeset(transform.materialize(nodeset, view), vs)
-		local G, mapping, M, umem = driver.build(ns, plan.static_alloc)
-		local syms = transform.symbols(mapping)
-		local tracer = plan.trace and plan.trace {
-			view    = view,
-			nodeset = ns,
-			G       = G,
-			mapping = mapping,
-			M       = M,
-			symbols = syms,
-		}
-		local g_init = compile.graph_init(transform.shape(mapping, view), plan.pool_obtain)
-		local dvr = compile.driver(M, umem, driver.loop(syms, tracer), plan.static_alloc,
-			plan.pool_release)
+		local ginfo, dispinfo = driver.build(ns, plan.static_alloc)
+		local pushstate = compile.pushstate_uncached(
+			ginfo.G,
+			transform.shape(ginfo.mapping, view),
+			obtain
+		)
+		--local tracer = plan.trace and plan.trace {
+		--	view    = view,
+		--	nodeset = ns,
+		--	G       = G,
+		--	mapping = mapping,
+		--	M       = M,
+		--	symbols = syms,
+		--}
 		for _,vsdef in ipairs(vs) do
-			local solver = compile.solver_init(G, get_roots(vsdef, ns, mapping),
-				plan.static_alloc, plan.runtime_alloc)
-			compile.bind_solver(vsdef.template, g_init, solver, dvr)
+			compile.bind_trampoline(
+				vsdef.trampoline,
+				compile.solver(
+					dispinfo,
+					plan.runtime_alloc,
+					get_roots(vsdef, ns, ginfo.mapping),
+					desc_solver(vsdef.solver)
+				),
+				pushstate,
+				release
+			)
 		end
 	end
 end
 
 return {
-	create      = plan,
 	decl_solver = decl_solver,
+	desc_solver = desc_solver,
 	add_solver  = add_solver,
 	materialize = materialize
 }

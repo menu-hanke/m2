@@ -24,7 +24,6 @@ model/model_SimoC.o: model/model_SimoC.c model/model_SimoC.h model/mlib.h \
  model/../def.h
 frontend/fhk/driver.o: frontend/fhk/driver.c frontend/fhk/../../fhk/fhk.h \
  frontend/fhk/../../fhk/../mem.h frontend/fhk/../../fhk/../def.h \
- frontend/fhk/../../model/conv.h frontend/fhk/../../model/model.h \
  frontend/fhk/driver.h
 frontend/m2_cdef.lua: frontend/m2_cdef.lua.h frontend/../sim.h \
  frontend/../vec.h frontend/../grid.h frontend/../vgrid.h \

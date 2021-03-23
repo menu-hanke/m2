@@ -1,7 +1,7 @@
 local compile = require "fhk.compile"
 local graph = require "fhk.graph"
 local ctypes = require "fhk.ctypes"
-local conv = require "model.conv"
+local infer = require "fhk.infer"
 local ffi = require "ffi"
 local C = ffi.C
 
@@ -9,9 +9,6 @@ ffi.cdef [[
 	float nextafterf(float from, float to);
 	double nextafter(double from, double to);
 ]]
-
--- see materialize_types()
-local empty_ct = ffi.typeof "uint8_t[0]"
 
 local function materialize_edge(model, var, edge, view)
 	if not var then return end
@@ -22,7 +19,9 @@ end
 
 local function materialize_types(nodeset)
 	for _,v in pairs(nodeset.vars) do
-		v.tm = conv.typemask(v.ctype):intersect(conv.typemask("scalar"))
+		if v.ctype then
+			v.ts = infer.typeset(v.ctype)
+		end
 	end
 
 	local isret = {}
@@ -30,20 +29,24 @@ local function materialize_types(nodeset)
 		for _,e in ipairs(m.returns) do
 			local x = nodeset.vars[e.target]
 			isret[x] = true
-			if e.tm then
-				x.tm = x.tm:intersect(e.tm)
+			if e.ts then
+				x.ts = infer.intersect(x.ts, e.ts)
 			end
 		end
 	end
 
 	local notype = {}
 	for name,v in pairs(nodeset.vars) do
-		if not (v.ctype or isret[v]) then
-			notype[name] = true
-			v.ctype = empty_ct
+		if v.ts then
+			if #v.ts ~= 1 then
+				error(string.format("no unique type for '%s' (choices: %s)", name, infer.tostring(v.ts)))
+			end
+			v.ctype = infer.ctfromid(v.ts[1])
 		else
-			local ty = v.tm:uniq() or error(string.format("no unique type for '%s'", name))
-			v.ctype = conv.ctypeof(ty)
+			-- it's ok to include this in the graph, it will either be pruned or cause an error
+			-- during model creation.
+			notype[name] = true
+			assert(v.ctype == nil)
 		end
 	end
 
@@ -51,14 +54,11 @@ local function materialize_types(nodeset)
 		return
 	end
 
-	-- this is a bit hacky. we now have vars in the graph which are neither given or returned
-	-- by a model. this means: (1) we can't infer their ctype, (2) they must be pruned because
-	-- they can never have a value. it's ok to leave them with a 0-size ctype, because
-	-- the solver can never touch them and the pruner will remove them. however, we must be
-	-- careful, because now it's impossible to instantiate shadows for them. we have to fix
-	-- the graph by deleting shadows of these typeless variables and add penalties manually.
-	-- the other option would be to add a guard that always fails to fhk, but that's an
-	-- even uglier solution.
+	-- this is a bit hacky. we now have vars that don't have a ctype, which means they will
+	-- never have a value. this means (1) they are uncomputable, (2) their shadows can
+	-- never be materialized.
+	-- it's perfecly fine to have variables that can never be touched, so we don't error
+	-- out here. however, we must now remove the unmaterializable shadows.
 	
 	local delete = {}
 	for name,s in pairs(nodeset.shadows) do
@@ -139,8 +139,8 @@ local function materialize(nodeset, view)
 	end
 
 	for name,mod in pairs(nodeset.models) do
-		local sigmask, create = view:model(mod)
-		if not sigmask then goto skip end
+		local sigset, create = view:model(mod)
+		if not sigset then goto skip end
 
 		local m = graph.model(name, {
 			create = create,
@@ -152,14 +152,14 @@ local function materialize(nodeset, view)
 		for i,edge in ipairs(mod.params) do 
 			local e = materialize_edge(mod, ns.vars[edge.target], edge, view)
 			if not e then goto skip end
-			e.tm = sigmask.params[i]
+			e.ts = sigset.params and sigset.params[i]
 			table.insert(m.params, e)
 		end
 
 		for i,edge in ipairs(mod.returns) do
 			local e = materialize_edge(mod, ns.vars[edge.target], edge, view)
 			if not e then goto skip end
-			e.tm = sigmask.returns[i]
+			e.ts = sigset.returns and sigset.returns[i]
 			table.insert(m.returns, e)
 		end
 
@@ -242,6 +242,40 @@ local function copydsym(mapping, alloc)
 	return dsym
 end
 
+local function map_group(mapping, group, gnum)
+	if not mapping.groups[group] then
+		mapping.groups[group] = gnum
+		mapping.groups[gnum] = group
+		gnum = gnum+1
+	end
+
+	return gnum
+end
+
+local function map_ufunc(mapping, ufunc, inum, knum)
+	if not mapping.umaps[ufunc] then
+		local idx
+		if graph.isconst(ufunc.flags) then
+			idx, knum = knum, knum+1
+		else
+			idx, inum = inum-1, inum-1
+		end
+
+		mapping.umaps[ufunc] = idx
+		mapping.umaps[idx] = ufunc
+	end
+
+	return inum, knum
+end
+
+local function edgemap(mapping, map)
+	if type(map) == "number" then
+		return map
+	end
+
+	return ctypes.map_user(mapping.umaps[map.map], mapping.umaps[map.inverse])
+end
+
 -- nodeset must be materialized.
 -- order is a hack to enable building a graph with given variables first.
 local function build(nodeset, order, alloc)
@@ -251,31 +285,20 @@ local function build(nodeset, order, alloc)
 		nodes  = {}
 	}
 
-	local gnum, unum = 0, 0
+	local gnum, inum, knum = 0, 0, 0
 
 	for _,node in pairs(nodeset.vars) do
-		local group = graph.groupof(node.name)
-		if not mapping.groups[group] then
-			mapping.groups[group] = gnum
-			mapping.groups[gnum] = group
-			gnum = gnum+1
-		end
+		gnum = map_group(mapping, graph.groupof(node.name), gnum)
 	end
 
 	for _,node in pairs(nodeset.models) do
-		local group = graph.groupof(node.name)
-		if not mapping.groups[group] then
-			mapping.groups[group] = gnum
-			mapping.groups[gnum] = group
-			gnum = gnum+1
-		end
+		gnum = map_group(mapping, graph.groupof(node.name), gnum)
 
 		for _,es in ipairs({node.params, node.returns, node.shadows}) do
 			for _,e in ipairs(es) do
-				if type(e.map) ~= "number" and not mapping.umaps[e.map] then
-					mapping.umaps[e.map] = unum
-					mapping.umaps[unum] = e.map
-					unum = unum+1
+				if e.map and type(e.map) ~= "number" then
+					inum, knum = map_ufunc(mapping, e.map.map, inum, knum)
+					inum, knum = map_ufunc(mapping, e.map.inverse, inum, knum)
 				end
 			end
 		end
@@ -285,7 +308,8 @@ local function build(nodeset, order, alloc)
 	local D = ffi.gc(C.fhk_create_def(), C.fhk_destroy_def)
 
 	for _,v in iter_order(order and order.vars or nodeset.vars) do
-		objs[v] = D:add_var(mapping.groups[graph.groupof(v.name)], ffi.sizeof(v.ctype), v.cdiff)
+		objs[v] = D:add_var(mapping.groups[graph.groupof(v.name)],
+			v.ctype and ffi.sizeof(v.ctype) or 0, v.cdiff)
 	end
 
 	for _,s in iter_order(order and order.shadows or nodeset.shadows) do
@@ -297,15 +321,15 @@ local function build(nodeset, order, alloc)
 		objs[m] = obj
 
 		for _,e in ipairs(m.params) do
-			D:add_param(obj, objs[nodeset.vars[e.target]], mapping.umaps[e.map] or e.map)
+			D:add_param(obj, objs[nodeset.vars[e.target]], edgemap(mapping, e.map))
 		end
 
 		for _,e in ipairs(m.returns) do
-			D:add_return(obj, objs[nodeset.vars[e.target]], mapping.umaps[e.map] or e.map)
+			D:add_return(obj, objs[nodeset.vars[e.target]], edgemap(mapping, e.map))
 		end
 
 		for _,e in ipairs(m.shadows) do
-			D:add_check(obj, objs[nodeset.shadows[e.target]], mapping.umaps[e.map] or e.map, e.penalty)
+			D:add_check(obj, objs[nodeset.shadows[e.target]], edgemap(mapping, e.map), e.penalty)
 		end
 	end
 
@@ -353,9 +377,15 @@ local function _prune(nodeset, retain, mapping, P)
 	end
 
 	for _,v in pairs(nodeset.vars) do
+		local idx = mapping.nodes[v]
+
 		if v.create then
-			local idx = mapping.nodes[v]
 			flags[idx] = bit.bor(flags[idx], C.FHKF_GIVEN)
+		end
+
+		-- typeless variables can never be touched, so we explicitly ask them to be removed
+		if not v.ctype then
+			flags[idx] = bit.bor(flags[idx], C.FHKF_SKIP)
 		end
 	end
 

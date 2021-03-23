@@ -10,11 +10,13 @@
 #include <assert.h>
 
 // smallest types that fit (see def.h)
-typedef uint16_t fhk_grp;
-typedef int16_t  fhk_idx;
-typedef uint16_t fhk_nidx;
-typedef uint16_t fhk_inst;
-typedef int32_t  fhk_map;
+typedef int16_t  fhk_idx;        // element (variable, model, shadow, map) index
+typedef uint16_t fhk_nidx;       // index counter
+typedef uint16_t fhk_inst;       // instance
+typedef uint8_t  fhk_grp;        // group
+typedef int8_t   fhk_map;        // internal map
+typedef uint8_t  fhk_nmap;       // map counter
+typedef int32_t fhk_extmap;      // external map (mapping+inverse)
 
 typedef struct fhk_eref {
 	fhk_idx idx;
@@ -23,29 +25,22 @@ typedef struct fhk_eref {
 
 enum {
 	FHK_NINST = 0xffff, // invalid instance
+	FHK_NGRP  = 0xff, // invalid group
 	FHK_NIDX  = 0x7fff  // invalid variable/model/map
 };
 
-typedef uint16_t fhk_extmap;
-
 // subset representation.
-// note: * any non-zero subset is assumed non-empty. non-zero empty set representations
-//         will cause surprises.
-//       * size and interval number are the amount if items remaining after current.
-//         0 is valid and means this is the last one.
-//       * intervals pointed to by a complex subset must be non-overlapping and sorted
-//         in increasing order.
 //
 //             +--------+--------+--------+--------+
 //             | 63..48 | 47..32 | 31..16 | 15..0  |
 // +-----------+--------+--------+--------+--------+
-// | empty set |   0    |   0    |   0    |   0    |
+// | empty set |   0    |   0    |   1    |   0    |
 // +-----------+--------+--------+--------+--------+
-// | interval  |   -1   | -size  | first  |   0    |
+// | interval  |   -1   |  mark  | -size  | first  | * size is inclusive: 0 is valid
 // +-----------+--------+--------+--------+--------+
-// | complex   |     interval pointer     | n.ival |
-// +-----------+--------------------------+--------+
-typedef uint64_t fhk_subset;
+// | complex   |     interval pointer     | n.ival | * interval number is exclusive and non-zero.
+// +-----------+--------------------------+--------+   intervals must be sorted and distinct.
+typedef int64_t fhk_subset;
 
 // ---- error handling ----------------------------------------
 
@@ -92,12 +87,11 @@ enum {
 	// FHK_CODE(status)         FHK_ARG(status)         action
 	// ----------------         ---------------         ------
 	FHK_OK = 0,              //                         stop
+	FHK_ERROR,               // s_ei                    stop
 	FHKS_SHAPE,              // s_shape                 call fhkS_shape(_table)
-	FHKS_MAPCALL,            // s_mapcall               write mapping to s_mapcall->ss
-	FHKS_MAPCALLI,           // s_mapcall               write inverse mapping to s_mapcall->ss
-	FHKS_VREF,               // s_vref                  call fhkS_give(_all)
+	FHKS_VREF,               // s_vref                  call fhkS_vrefi
+	FHKS_MAPCALL,            // s_mapcall               call fhkS_setmap
 	FHKS_MODCALL,            // s_modcall               write values to return edges [np, np+nr)
-	FHK_ERROR                // s_ei                    stop
 };
 
 // each field here must fit in 48 bits
@@ -107,16 +101,13 @@ typedef union fhk_sarg {
 	// FHKS_VREF
 	fhk_eref s_vref;
 
-	// FHKS_MAPCALL(I)
-	struct {
-		fhk_eref mref;
-		fhk_subset *ss;
-	} *s_mapcall;
+	// FHKS_MAPCALL
+	fhk_eref s_mapcall;
 
 	// FHKS_MODCALL
 	struct {
-		uint8_t np, nr;
 		fhk_eref mref;
+		uint8_t np, nr;
 		struct {
 			void *p;
 			size_t n;
@@ -132,10 +123,8 @@ typedef union fhk_sarg {
 
 static_assert(sizeof(fhk_sarg) == sizeof(uint64_t));
 
-#define fhk_vref    typeof(((fhk_sarg *)0)->s_vref)
 #define fhk_modcall typeof(*((fhk_sarg *)0)->s_modcall)
 #define fhk_mcedge  typeof(*((fhk_modcall *)0)->edges)
-#define fhk_mapcall typeof(*((fhk_sarg *)0)->s_mapcall)
 
 // ---- solver structures ----------------------------------------
 
@@ -157,29 +146,6 @@ enum {
 	FHKC_U8_MASK64              // ((1ULL << x->u8) & arg.u64) != 0
 };
 
-// mappings
-
-enum {
-	FHKM_IDENT = 0xffff,
-	FHKM_SPACE = 0xfffe,
-	// usermap: your id (at most G_MAXUMAP)
-};
-
-// ---- solver request ----------------------------------------
-
-enum {
-	// flag                  action
-	// ----------------      ----------
-	FHKF_NPACK = 0x1,     // don't pack return buffer, use it as solver memory
-};
-
-typedef struct fhk_req {
-	fhk_idx idx;
-	uint8_t flags;
-	fhk_subset ss;
-	void *buf;
-} fhk_req;
-
 // ---- subgraph selection ----------------------------------------
 
 // fhk_prune flags
@@ -189,13 +155,15 @@ enum {
 	FHKF_GIVEN  = 0x1,   //  >v     pretend this variable is given -- delete all models that return it
 	FHKF_SKIP   = 0x2,   // <>vm    skip this variable/model from the graph completely
 	FHKF_SELECT = 0x4,   // <>vm    force inclusion of this var/model w/ full chain
-
 };
 
 // ---- def objects ----------------------------------------
 
 typedef uint64_t fhk_obj;
 
+#define FHKO_TAG(obj) ((obj) >> 60)
+
+// def object tags
 enum {
 	FHKO_ERROR,
 	FHKO_MODEL,
@@ -203,7 +171,12 @@ enum {
 	FHKO_SHADOW
 };
 
-#define FHKO_TAG(obj) ((obj) >> 60)
+// external map definitions
+#define FHKMAP_USER(map,inverse) ((((inverse) & 0xff) << 8) | ((map) & 0xff))
+enum {
+	FHKMAP_IDENT = 0x10000,
+	FHKMAP_SPACE = 0x10001
+};
 
 // ------------------------------------------------------------
 
@@ -213,13 +186,13 @@ typedef struct fhk_def fhk_def;
 typedef struct fhk_prune fhk_prune;
 typedef float fhk_cbound[2];
 
-fhk_solver *fhk_create_solver(fhk_graph *G, arena *arena, size_t nv, fhk_req *rq);
+fhk_solver *fhk_create_solver(fhk_graph *G, arena *arena);
 fhk_status fhk_continue(fhk_solver *S);
 
-void fhkS_shape(fhk_solver *S, fhk_grp group, fhk_inst size);
-void fhkS_shape_table(fhk_solver *S, fhk_inst *shape);
-void fhkS_give(fhk_solver *S, fhk_idx xi, fhk_inst inst, void *vp);
-void fhkS_give_all(fhk_solver *S, fhk_idx xi, void *vp);
+void fhkS_setroot(fhk_solver *S, fhk_idx xi, fhk_subset ss, void *buf);
+void fhkS_setshape(fhk_solver *S, fhk_grp group, fhk_inst shape);
+void fhkS_setvaluei(fhk_solver *S, fhk_idx xi, fhk_inst inst, uint32_t n, void *vp);
+void fhkS_setmap(fhk_solver *S, fhk_extmap map, fhk_inst inst, fhk_subset ss);
 
 // inspection functions (this is a private api and should probably be moved in its own file).
 // don't rely on these, they are only exposed for debugging.

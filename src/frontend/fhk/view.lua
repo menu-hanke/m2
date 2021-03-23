@@ -1,7 +1,6 @@
 local compile = require "fhk.compile"
 local graph = require "fhk.graph"
-local driver = require "fhk.driver"
-local conv = require "model.conv"
+local modcall = require "fhk.modcall"
 local reflect = require "lib.reflect"
 local ffi = require "ffi"
 local C = ffi.C
@@ -116,6 +115,12 @@ function group_mt.__index:model(mod)
 	end
 end
 
+function group_mt.__index:edge(model, var, edge)
+	if self.view.edge and graph.groupof(model.name) == self.name then
+		return self.view:edge(model, var, edge)
+	end
+end
+
 function group_mt.__index:shape(name)
 	if name == self.name and self.view.shape then
 		return self.view:shape()
@@ -132,49 +137,39 @@ local scalar_shape = fixshape(1)
 
 local struct_view_mt = { __index={} }
 
-local function struct_view(ctype, inst)
+local function struct_view(ctype, source)
 	return setmetatable({
-		refct = reflect.typeof(ctype),
-		inst  = inst
+		refct  = reflect.typeof(ctype),
+		source = source
 	}, struct_view_mt)
-end
-
-function struct_view_mt.__index:ref_umem(umem)
-	if not umem[self] then
-		local inst = self.inst
-		umem[self] = umem:scalar(ffi.typeof("void *"), function(state)
-			return state[inst]       ---> ctype *
-		end)
-	end
-
-	return umem[self]
 end
 
 function struct_view_mt.__index:var(var, name)
 	local field = self.refct:member(name or var.name)
 	if not field then return end
 
-	local create
-	if type(self.inst) == "cdata" then
-		local ptr = ffi.cast("uint8_t *", self.inst) + field.offset
-		create = function(dv)
-			dv:set_vrefk(ptr)  ---> ptr
-		end
-	else
-		local offset = field.offset
-		create = function(dv, umem)
-			local field = self:ref_umem(umem)
-			umem:on_ctype(function(ctype)
-				dv:set_vrefu(ffi.offsetof(ctype, field), offset)   ---> *udata + offset
-			end)
+	return field.type, function(dispatch, idx)
+		if type(self.source) == "cdata" then
+			return compile.setvalue_constptr(
+				dispatch, idx,
+				ffi.cast("uintptr_t", ffi.cast("void *", self.source)) + field.offset,
+				1,
+				var.name
+			)
+		else
+			return compile.setvalue_userfunc_offset(
+				dispatch,
+				idx,
+				self.source,
+				field.offset,
+				var.name
+			)
 		end
 	end
-
-	return field.type, create
 end
 
 function struct_view_mt.__index:shape(group)
-	if not group then
+	if type(self.source) == "cdata" and not group then
 		return scalar_shape
 	end
 end
@@ -183,232 +178,153 @@ end
 
 local array_view_mt = { __index={} }
 
-local function array_view(objs)
-	return setmetatable({objs = objs}, array_view_mt)
-end
-
-function array_view_mt.__index:ref_umem(umem, name)
-	-- this could technically be called multiple times if multiple variables resolve
-	-- to the same name (think aliases etc.)
-
-	if not umem[self] then
-		umem[self] = {}
-	end
-
-	if not umem[self][name] then
-		umem[self][name] = umem:scalar(ffi.typeof("void *", function(state)
-			return state[name]    ---> obj *
-		end))
-	end
-
-	return gen[self][name]
+local function array_view(ctype, name, source, size)
+	return setmetatable({
+		ctype  = ctype,
+		refct  = reflect.typeof(ctype),
+		name   = name,
+		source = source,
+		size   = size
+	}, array_view_mt)
 end
 
 function array_view_mt.__index:var(var, name)
 	name = name or var.name
-	local obj = self.objs[name]
-	if not obj then return end
+	if name ~= self.name then return end
 
-	local ct = ffi.typeof(obj)
-	local refct = reflect.typeof(ct)
-	local create
-
-	if type(obj) ~= "cdata" or obj == ct then -- it's a type
-		create = function(dv, umem)
-			local field = self:ref_umem(umem, name)
-			umem:on_ctype(function(ctype)
-				dv:set_vrefu(ffi.offset(ctype, field))     ---> udata
-			end)
-		end
-	else -- it's cdata
-		refct = refct.element_type
-		create = function(dv)
-			dv:set_vrefk(ffi.cast("void *", obj))       ---> obj
+	return self.refct, function(dispatch, idx)
+		if type(self.source) == "cdata" then
+			return compile.setvalue_constptr(dispatch, idx, self.source, self.size, var.name)
+		else
+			return compile.setvalue_array_userfunc(dispatch, idx, self.source, var.name)
 		end
 	end
-
-	return refct, create
 end
 
 ---- struct-of-arrays ----------------------------------------
 
 local soa_view_mt = { __index={} }
 
-local function soa_view(ctype, inst)
+local function soa_view(ctype, source)
 	return setmetatable({
-		refct = reflect.typeof(ctype),
-		inst  = inst
+		refct  = reflect.typeof(ctype),
+		source = source
 	}, soa_view_mt)
 end
 
-function soa_view_mt.__index:ref_umem(umem)
-	if not umem[self] then
-		local inst = self.inst
-		umem[self] = umem:scalar(ffi.typeof("void *"), function(state)
-			return state[inst]   ---> struct vec *
-		end)
-	end
-
-	return umem[self]
-end
-
 function soa_view_mt.__index:var(var, name)
-	local field = self.refct:member(name or var.name)
+	name = name or var.name
+	local field = self.refct:member(name)
 	if not field then return end
 
-	local create
-	if type(self.inst) == "cdata" then
-		local ptr = ffi.cast("uint8_t *", self.inst) + field.offset  ---> &inst->band
-		create = function(dv)
-			dv:set_vrefk(ptr, 0)     ---> *ptr
-		end
-	else
-		local offset = field.offset
-		create = function(dv, umem)
-			local field = self:ref_umem(umem)
-			umem:on_ctype(function(ctype)
-				dv:set_vrefu(ffi.offsetof(ctype, field), offset, 0) ---> *(*udata + offset)
-			end)
+	return field.type.element_type, function(dispatch, idx)
+		if type(self.source) == "cdata" then
+			return compile.setvalue_soa_constptr(dispatch, idx, self.source, name, var.name)
+		else
+			return compile.setvalue_soa_userfunc(dispatch, idx, self.source, name, var.name)
 		end
 	end
-
-	return field.type.element_type, create
 end
 
-local soa_ctp = ffi.typeof("struct vec *")
 function soa_view_mt.__index:shape(group)
 	if group then return end
 
-	if type(self.inst) == "cdata" then
-		local inst = ffi.cast(soa_ctp, self.inst)
+	if type(self.source) == "cdata" then
+		local inst = ffi.cast("struct vec *", self.source)
 		return function()
 			return inst.n_used
-		end
-	else
-		local inst = self.inst
-		return function(state)
-			return ffi.cast(soa_ctp, state[inst]).n_used
 		end
 	end
 end
 
 ---- edges ----------------------------------------
 
-local match_edges_mt = {
+local edge_view_mt = {
 	__index = {
-		edge = function(rules, model, var, edge)
-			if edge.map then return end
-			for _,f in ipairs(rules) do
-				local map, scalar = f(model, var, edge)
-				if map then return map, scalar end
-			end
+		edge = function(self, model, var, edge)
+			if self.mapname ~= edge.map then return end
+			if self.from and graph.groupof(model.name) ~= self.from then return end
+			if self.to == "$" then if graph.groupof(model.name) ~= graph.groupof(var.name) then return end
+			elseif self.to then if graph.groupof(var.name) ~= self.to then return end end
+			return self.map, self.scalar
 		end
 	}
 }
 
-local function match_edges(rules)
-	local rt = {}
+local builtin_maps = {
+	space = { map=C.FHKMAP_SPACE, scalar=false },
+	only  = { map=C.FHKMAP_SPACE, scalar=true },
+	ident = { map=C.FHKMAP_IDENT, scalar=true }
+}
 
-	for i,rule in ipairs(rules) do
-		local r,f = rule[1], rule[2]
-		local from, to = r:match("^(.-)=>(.-)$")
-		from = from == "" and "^(.*)$" or ("^" .. from .. "$")
-		to = to == "" and "^(.*)$" or ("^" .. to .. "$")
-
-		rt[i] = function(model, var, edge)
-			local mg = {graph.groupof(model.name):match(from)}
-			if #mg == 0 then return end
-
-			if not graph.groupof(var.name):match(to:gsub("(%%%d+)",
-				function(j) return mg[tonumber(j:sub(2))] end)) then
-				return
-			end
-
-			return f(model, var, edge)
-		end
+local function edge_view(rule, map, scalar)
+	if type(map) == "string" then
+		local builtin = builtin_maps[map] or error(string.format("invalid builtin map: '%s'", map))
+		map = builtin.map
+		if scalar == nil then scalar = builtin.scalar end
 	end
 
-	return setmetatable(rt, match_edges_mt)
+	local from, to, name = rule:gsub("%s", ""):match("^([^=]*)=>([^:]*):?(.*)$")
+
+	return setmetatable({
+		from    = from ~= "" and from or nil,
+		to      = to ~= "" and to or nil,
+		mapname = name ~= "" and name or nil,
+		map     = map,
+		scalar  = scalar
+	}, edge_view_mt)
 end
 
-local function space() return C.FHKM_SPACE, false end
-local function only() return C.FHKM_SPACE, true end
-local function ident() return C.FHKM_IDENT, true end
-
-local builtin_maps = {
-	all   = space,
-	only  = only,
-	ident = ident
-}
-
-local builtin_edge_view = {
-	edge = function(_, _, _, edge)
-		if edge.map and builtin_maps[edge.map] then
-			return builtin_maps[edge.map]()
-		end
-	end
-}
+local builtin_edge_view = composite(
+	edge_view("=>$ :ident", "ident"),
+	edge_view("=>  :all", "space"),
+	edge_view("=>  :only", "only")
+)
 
 ---- models ----------------------------------------
 
 local modelset_view_mt = { __index={} }
 
-local function modelset_view(impls, alloc)
-	return setmetatable({
-		impls = impls,
-		alloc = alloc
-	}, modelset_view_mt)
+local function modelset_view(impls)
+	return setmetatable({ impls = impls }, modelset_view_mt)
 end
 
 local function signature(name, nodeset)
-	-- TODO don't hardcode the size
-	local node = nodeset.models[name]
-	local sigg = ffi.gc(ffi.cast("struct mt_sig *", C.malloc(514)), C.free)
-	local sigm = ffi.gc(ffi.cast("struct mt_sig *", C.malloc(514)), C.free)
-	sigg.np = #node.params
-	sigm.np = #node.params
-	sigg.nr = #node.returns
-	sigm.nr = #node.returns
+	local signature = modcall.signature()
+	local model = nodeset.models[name]
 
-	local i = 0
-	for _,es in ipairs({node.params, node.returns}) do
-		for _,e in ipairs(es) do
-			local ty = conv.fromctype(nodeset.vars[e.target].ctype)
-			if not e.scalar then ty = conv.toset(ty) end
-			sigg.typ[i] = ty
-			sigm.typ[i] = C.mt_autoconv(ty, e.tm.mask)
-
-			if sigm.typ[i] == C.MT_INVALID then
-				error(string.format("can't autoconvert signature: %s -> %s (parameter '%s' of '%s')",
-					conv.nameof(ty), e.tm, e.target, name))
-			end
-
-			i = i+1
-		end
+	for i,e in ipairs(model.params) do
+		signature.params[i] = {
+			scalar = e.scalar,
+			ctype  = nodeset.vars[e.target].ctype
+		}
 	end
 
-	return sigg, sigm
+	for i,e in ipairs(model.returns) do
+		signature.returns[i] = {
+			scalar = e.scalar,
+			ctype  = nodeset.vars[e.target].ctype
+		}
+	end
+
+	return signature
 end
 
 function modelset_view_mt.__index:model(mod, name)
-	-- TODO cache these
-
 	name = name or mod.name
 	local impl = self.impls[name]
 	if not impl then return end
 
 	local nodename = mod.name
-	return impl.sigmask, function(dm, _, nodeset)
-		local sigg, sigm = signature(nodename, nodeset)
-		local m = impl:create(sigm)
-		dm:set_mcall(m.call, m, driver.conv(sigg, sigm, self.alloc))
+	return impl.sigset, function(dispatch, _, nodeset)
+		return impl.compile(dispatch, signature(nodename, nodeset))
 	end
 end
 
 ---- auxiliary ----------------------------------------
 
--- fixed view: does nothing but provides a shape
-local fixed_view_mt = {
+-- shape views: do nothing but provide a shape function
+local size_view_mt = {
 	__index = {
 		shape = function(self, group)
 			if not group then return self.shapef end
@@ -416,10 +332,12 @@ local fixed_view_mt = {
 	}
 }
 
+local function size_view(f)
+	return setmetatable({ shapef = f }, size_view_mt)
+end
+
 local function fixed_size(size)
-	return setmetatable({
-		shapef = fixshape(size)
-	}, fixed_view_mt)
+	return size_view(fixshape(size))
 end
 
 -- translate view: proxies a view with different names, useful for views with name
@@ -459,13 +377,10 @@ return {
 	struct_view       = struct_view,
 	array_view        = array_view,
 	soa_view          = soa_view,
-	match_edges       = match_edges,
-	builtin_maps      = builtin_maps,
+	edge_view         = edge_view,
 	builtin_edge_view = builtin_edge_view,
-	space             = space,
-	only              = only,
-	ident             = ident,
 	modelset_view     = modelset_view,
+	size_view         = size_view,
 	fixed_size        = fixed_size,
 	translate_view    = translate_view
 }

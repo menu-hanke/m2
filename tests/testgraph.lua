@@ -1,6 +1,7 @@
 local alloc = require "alloc"
 local fhk = require "fhk"
 local groupof = require("fhk.graph").groupof
+local ctypes = require "fhk.ctypes"
 local ffi = require "ffi"
 local C = ffi.C
 
@@ -15,7 +16,7 @@ local function def()
 		groups  = {}, -- [name] -> true
 		vars    = {}, -- [name] -> var
 		shadows = {}, -- [name] -> shadow
-		umaps   = {}, -- [name] -> umap
+		umaps   = {}, -- [ufunc] -> true
 	}
 end
 
@@ -54,15 +55,38 @@ local function shedge(name, map, penalty)
 	}
 end
 
-local function isbuiltinmap(map)
-	return map == IDENT or map == SPACE or map == DEFAULT
+local function ufunc(func, flags)
+	return {
+		func    = func,
+		flags   = flags or "i"
+	}
 end
 
-local function builtinextmap(map, from, to)
-	if map == IDENT then return C.FHKM_IDENT end
-	if map == SPACE then return C.FHKM_SPACE end
-	if map == DEFAULT then return groupof(from) == groupof(to) and C.FHKM_IDENT or C.FHKM_SPACE end
-	error(string.format("not a builtin map: %s", map))
+local function umap(map, inverse)
+	return {
+		map     = map,
+		inverse = inverse
+	}
+end
+
+local function umap_undeclared(name)
+	local f = ufunc(function()
+		error(string.format("undeclared umap: %s", name))
+	end, "k")
+
+	return umap(f, f)
+end
+
+local function isconst(flags)
+	return flags:match("k")
+end
+
+local function isnonconst(flags)
+	return flags:match("i")
+end
+
+local function isbuiltinmap(map)
+	return map == IDENT or map == SPACE or map == DEFAULT
 end
 
 local function toname(name)
@@ -85,7 +109,9 @@ local function include_map(def, map)
 		return
 	end
 
-	def.umaps[map] = true
+	if not def.umaps[map] then
+		def.umaps[map] = umap_undeclared(map)
+	end
 end
 
 local function add_model(def, m)
@@ -171,6 +197,36 @@ local function dsyms(mapping)
 	return s, syms
 end
 
+local function builtinextmap(map, from, to)
+	if map == IDENT then return C.FHKMAP_IDENT end
+	if map == SPACE then return C.FHKMAP_SPACE end
+	if map == DEFAULT then return groupof(from) == groupof(to) and C.FHKMAP_IDENT or C.FHKMAP_SPACE end
+	error(string.format("not a builtin map: %s", map))
+end
+
+local function tomap(map, umaps, uobj, from, to)
+	local umap = umaps[map]
+	if umap then
+		return ctypes.map_user(uobj[umap.map], uobj[umap.inverse])
+	else
+		return builtinextmap(map, from, to)
+	end
+end
+
+local function addufunc(uf, uobj, umin, umax)
+	if not uobj[uf] then
+		local pos
+		if isnonconst(uf.flags) then
+			umin, pos = umin-1, umin-1
+		else
+			umax, pos = umax+1, umax
+		end
+		uobj[uf] = pos
+		uobj[pos] = uf
+	end
+	return umin, umax
+end
+
 local function build(def)
 	local objs = { g = {}, u = {} }
 
@@ -181,11 +237,10 @@ local function build(def)
 		gnum = gnum+1
 	end
 
-	local unum = 0
-	for umap,_ in pairs(def.umaps) do
-		objs.u[umap] = unum
-		objs.u[unum] = umap
-		unum = unum+1
+	local umin, umax = 0, 0
+	for _,umap in pairs(def.umaps) do
+		umin, umax = addufunc(umap.map, objs.u, umin, umax)
+		umin, umax = addufunc(umap.inverse, objs.u, umin, umax)
 	end
 
 	local D = ffi.gc(C.fhk_create_def(), C.fhk_destroy_def)
@@ -204,18 +259,15 @@ local function build(def)
 		objs[m] = obj
 
 		for _,e in ipairs(m.params) do
-			D:add_param(obj, objs[def.vars[e.name]],
-				objs.u[e.map] or builtinextmap(e.map, e.name, def.vars[e.name].name))
+			D:add_param(obj, objs[def.vars[e.name]], tomap(e.map, def.umaps, objs.u, m.name, e.name))
 		end
 
 		for _,e in ipairs(m.returns) do
-			D:add_return(obj, objs[def.vars[e.name]],
-				objs.u[e.map] or builtinextmap(e.map, e.name, def.vars[e.name].name))
+			D:add_return(obj, objs[def.vars[e.name]], tomap(e.map, def.umaps, objs.u, m.name, e.name))
 		end
 
 		for _,e in ipairs(m.shadows) do
-			D:add_check(obj, objs[def.shadows[e.name]],
-				objs.u[e.map] or builtinextmap(e.map, e.name, def.shadows[e.name].name),
+			D:add_check(obj, objs[def.shadows[e.name]], tomap(e.map, def.umaps, objs.u, m.name, e.name),
 				e.penalty)
 		end
 	end
@@ -396,6 +448,13 @@ local function decl_model(decl)
 	end
 end
 
+local function decl_umap(decl)
+	local name, map, inverse = unpack(decl)
+	return function(def)
+		def.umaps[name] = umap(map, inverse)
+	end
+end
+
 local function decl_graph(decl)
 	local def = def()
 
@@ -403,19 +462,10 @@ local function decl_graph(decl)
 		df(def)
 	end
 
-	return def, build(def)
+	return def
 end
 
-local function decl_given(decl, def)
-	local given = {}
-
-	for name,values in pairs(decl) do
-	end
-
-	return given
-end
-
-local function defsubset(values, ...)
+local function defidx(values)
 	local idx = {}
 
 	for i,v in ipairs(values) do
@@ -424,7 +474,7 @@ local function defsubset(values, ...)
 		end
 	end
 
-	return fhk.subset(idx, ...)
+	return idx
 end
 
 local function driver(S, mapping)
@@ -444,9 +494,9 @@ local function driver(S, mapping)
 
 		if code == C.FHKS_SHAPE then
 			assert(false) -- shape table should be pregiven
-		elseif code == C.FHKS_MAPCALL or code == C.FHKS_MAPCALLI then
-			local mp = arg.s_mapcall
-			mp.ss[0] = mapping.u[mp.mref.idx][code - C.FHKS_MAPCALL + 1](mp.mref.inst, arena)
+		elseif code == C.FHKS_MAPCALL then
+			local mref = arg.s_mapcall
+			S:setmap(mref.idx, mref.inst, mapping.u[mref.idx].func(mref.inst, arena))
 		elseif code == C.FHKS_VREF then
 			local vref = arg.s_vref
 			error(string.format("solver tried to evaluate non-given variable: %s:%d",
@@ -458,7 +508,7 @@ local function driver(S, mapping)
 	end
 end
 
-local function create_shape(mapping, n, ...)
+local function infershape(mapping, n, ...)
 	for _,vs in ipairs({...}) do
 		for name,values in pairs(vs) do
 			local nv = values.n or #values
@@ -481,30 +531,25 @@ local function create_shape(mapping, n, ...)
 		end
 	end
 
-	return ffi.new("fhk_inst[?]", #shape+1, shape)
+	return shape
 end
 
 local function check_solution(G, ng, meta)
-	local request = {}
+	local bufs, indices = {}, {}
 	local arena = alloc.arena()
+	local S = C.fhk_create_solver(G, arena)
 
 	for name,values in pairs(meta.solution) do
 		local x = meta.def.vars[toname(name)]
-
-		table.insert(request, {
-			_name = name,
-			_values = values,
-			idx = meta.mapping[x],
-			flags = C.FHKF_NPACK,
-			ss = defsubset(values, arena),
-			buf = ffi.new(ffi.typeof("$[?]", x.ctype), #values)
-		})
+		indices[name] = defidx(values)
+		bufs[name] = ffi.new(ffi.typeof("$[?]", x.ctype), #indices[name])
+		S:setroot(meta.mapping[x], fhk.subset(indices[name], arena), bufs[name])
 	end
 
-	local req = ffi.new("fhk_req[?]", #request, request)
-	local S = C.fhk_create_solver(G, arena, #request, req)
-	local shape = create_shape(meta.mapping, ng, meta.solution, meta.given)
-	C.fhkS_shape_table(S, shape)
+	local shape = infershape(meta.mapping, ng, meta.solution, meta.given)
+	for g,n in pairs(shape) do
+		S:setshape(g, n)
+	end
 
 	if meta.given then
 		for name, values in pairs(meta.given) do
@@ -512,13 +557,13 @@ local function check_solution(G, ng, meta)
 			local xi = meta.mapping[meta.def.vars[name]]
 
 			if values.n then
-				C.fhkS_give_all(S, xi, values.buf)
+				S:setvaluei(xi, 0, values.n, values.buf)
 			else
 				local buf = ffi.new(ffi.typeof("$[1]", meta.def.vars[name].ctype))
 				for i,v in ipairs(values) do
 					if v ~= NA then
 						buf[0] = v
-						C.fhkS_give(S, xi, i-1, buf)
+						S:setvaluei(xi, i-1, 1, buf)
 					end
 				end
 			end
@@ -527,14 +572,13 @@ local function check_solution(G, ng, meta)
 
 	driver(S, meta.mapping)
 
-	for _,r in ipairs(request) do
-		local truth = r._values
-		local solved = r.buf
+	for name,truth in pairs(meta.solution) do
+		local solved = bufs[name]
 
-		for i,v in ipairs(truth) do
-			if v ~= NA and v ~= solved[i-1] then
+		for i,j in ipairs(indices[name]) do
+			if truth[j+1] ~= solved[i-1] then
 				error(string.format("wrong solution: %s:%d expected %s, got %s (%f)",
-					r._name, i-1, v, solved[i-1], solved[i-1]))
+					name, j, truth[j+1], solved[i-1], solved[i-1]))
 			end
 		end
 	end
@@ -594,29 +638,19 @@ local function inject(env)
 	env.v = decl_var
 	env.s = decl_shadow
 	env.m = decl_model
+	env.u = decl_umap
 	env.n = {}
 	env.na = NA
-
-	env.umaps = {}
-	env.umap = function(decl)
-		env.umaps[decl[1]] = { wrapmapf(decl[2]), wrapmapf(decl[3]) }
-	end
+	env.ufunc = function(f, flags) return ufunc(wrapmapf(f), flags) end
 
 	env.graph = function(decl)
-		local def, G, mapping = decl_graph(decl)
+		local def = decl_graph(decl)
+		local G, mapping = build(def)
 		env.G = G
 		env.meta = {
 			def     = def,
 			mapping = mapping
 		}
-		local umaps = {}
-		for idx,u in pairs(mapping.u) do
-			if type(idx) == "number" then
-				umaps[idx] = env.umaps[u] or error(string.format("umap not defined: %s (%d)", u, idx))
-				umaps[u] = idx
-			end
-		end
-		mapping.u = umaps
 	end
 
 	env.given = function(decl)

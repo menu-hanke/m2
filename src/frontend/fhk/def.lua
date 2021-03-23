@@ -1,6 +1,6 @@
 local graph = require "fhk.graph"
-local model = require "model"
-local conv = require "model.conv"
+local modcall = require "fhk.modcall"
+local infer = require "fhk.infer"
 local misc = require "misc"
 local ffi = require "ffi"
 local C = ffi.C
@@ -23,7 +23,7 @@ end
 local function getimpl(impls, name)
 	local impl = impls[name]
 	if not impl then
-		impl = { sigmask=conv.sigmask() }
+		impl = { sigset=modcall.signature() }
 		impls[name] = impl
 	end
 
@@ -78,9 +78,12 @@ local function params(decl)
 	return toedgef(decl, function(edge, mod, nodeset, impls)
 		table.insert(mod.params, edge)
 		touchvar(nodeset, edge.target)
-		if edge.tm then
+		if edge.ts then
 			local impl = getimpl(impls, mod.name)
-			impl.sigmask.params[#mod.params] = impl.sigmask.params[#mod.params]:intersect(edge.tm)
+			impl.sigset.params[#mod.params] = infer.intersect(
+				impl.sigset.params[#mod.params],
+				edge.ts
+			)
 		end
 	end)
 end
@@ -89,9 +92,12 @@ local function returns(decl)
 	return toedgef(decl, function(edge, mod, nodeset, impls)
 		table.insert(mod.returns, edge)
 		touchvar(nodeset, edge.target)
-		if edge.tm then
+		if edge.ts then
 			local impl = getimpl(impls, mod.name)
-			impl.sigmask.returns[#mod.returns] = impl.sigmask.returns[#mod.returns]:intersect(edge.tm)
+			impl.sigset.returns[#mod.returns] = infer.intersect(
+				impl.sigset.returns[#mod.returns],
+				edge.ts
+			)
 		end
 	end)
 end
@@ -135,7 +141,7 @@ local function set(map)
 end
 
 local function as(ty)
-	return modifier({tm=conv.typemask(ty)})
+	return modifier({ts=infer.typeset(ty)})
 end
 
 local function tonumset(set, labels)
@@ -220,28 +226,34 @@ local function gdef_env(nodeset, impls)
 
 		impl = setmetatable({}, {
 			__index = function(self, name)
-				local def = model.lang(name).def
 				self[name] = function(...)
-					local args = {...}
+					local impl = modcall.loader(name, ...)
+
 					return function(mod, _, impls)
-						local oldmask = impls[mod.name] and impls[mod.name].sigmask
-						impls[mod.name] = def(unpack(args))
-						if not oldmask then return end
-						local sm = impls[mod.name].sigmask
+						local sigset = impls[mod.name] and impls[mod.name].sigset
+							or modcall.signature()
+
 						for i=1, #mod.params do
-							local tm = rawget(oldmask.params, i)
-							if tm then
-								sm.params[i] = sm.params[i]:intersect(tm)
-							end
+							sigset.params[i] = infer.intersect(
+								sigset.params[i],
+								impl.sigset.params[i]
+							)
 						end
+
 						for i=1, #mod.returns do
-							local tm = rawget(oldmask.returns, i)
-							if tm then
-								sm.returns[i] = sm.returns[i]:intersect(tm)
-							end
+							sigset.returns[i] = infer.intersect(
+								sigset.returns[i],
+								impl.sigset.returns[i]
+							)
 						end
+
+						impls[mod.name] = {
+							sigset = sigset,
+							compile = impl.compile
+						}
 					end
 				end
+
 				return self[name]
 			end
 		}),

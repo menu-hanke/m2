@@ -14,7 +14,6 @@
 #include <float.h>
 
 // TODO: benchmark u32 comparisons @ candidate selector
-// TODO: benchmark ssiter3 @ candidate selector
 
 #define MAX_COST       FLT_MAX     /* max cost, nothing above will be accepted */
 #define MAX_STK        32          /* max working stack size (number of recursive variables) */
@@ -24,6 +23,7 @@
 #define NUM_SBUF       8           /* number of scratch buffer slots */
 #define SBUF_MIN_BITS  16          /* first scratch buffer size */
 #define SBUF_ALIGN     8           /* alignment of scratch mem allocations */
+#define NUM_ROOTBUF    32           /* initial root queue size */
 
 #if FHK_DEBUG
 #define AINLINE
@@ -34,53 +34,63 @@
 #define NOINLINE __attribute((noinline))
 
 // TODO: this will not work on big endian
-#define A_SARG(...)      (((fhk_sarg){__VA_ARGS__}).u64 << 16)
+#define SARG(...)        (((fhk_sarg){__VA_ARGS__}).u64 << 16)
 
 // see fhk.h for subset representation
-#define SS_UNDEF         ((fhk_subset)(~0ull))
-#define SS_NUMI(ss)      ((ss) & 0xffff)    /* note: num of *remaining* ivals, 0 is valid */
-#define SS_ISIVAL(ss)    (!SS_NUMI(ss))
-#define SS_ISCOMPLEX(ss) (!!SS_NUMI(ss))
-#define SS_CPTR(ss)      ((uint32_t*)((ss) >> 16))
-#define SS_CIVAL(ss,n)   (SS_CPTR(ss)[n])
-#define SS_IIVAL(ss)     (((ss) >> 16) & 0xffffffff)
-#define SS_NONEMPTY(ss)  (!!(ss))
+#define SS_UNDEF         ((fhk_subset)(~0ull))         /* all ones. this excludes any valid interval,
+													    * because first should be non-negative */
+#define SS_EMPTYSET      0x00010000                    /* empty set (remain=-1) */
+#define SS_ISEMPTY(ss)   ((ss) == SS_EMPTYSET)         /* is it empty? */
+#define SS_ISCOMPLEX(ss) ((int64_t)(ss) > SS_EMPTYSET) /* is it complex? (implies nonempty) */
+#define SS_ISIVAL(ss)    ((int64_t)(ss) < 0)           /* is it a nonempty interval? */
+#define SS_CPTR(ss)      ((uint32_t*)((ss) >> 16))     /* complex subset interval pointer */
+#define SS_CIVAL(ss,n)   (SS_CPTR(ss)[n])              /* nth interval */
+#define SS_CNUMI(ss)     ((ss) & 0xffff)               /* num of *remaining* ivals, 0 is valid */
+#define SS_IIVAL(ss)     ((ssiter)(ss))                /* you can just use this as an iterator */
+#define SS_PKIVAL(i,n)   (((~(n)) << 16) + (i) + 0xfffffffc00020000ull) /* pack interval */
 
-// see below for packed range repr
-#define PK_FIRST(pk)      ((pk) & 0xffff)
-#define PK_N(pk)          ((-((pk) >> 16)) & 0xffff) /* exclusive */
-#define PK_N1(pk)         (1+PK_N(pk))               /* inclusive */
+#define PK_FIRST(pki)    ((pki) & 0xffff)              /* first instance in packed range */
+#define PK_N(pki)        ((-((pki) >> 16)) & 0xffff)   /* exclusive (0xffff for empty set) */
+#define PK_NS(pki)       (-((int32_t)(pki) >> 16))     /* signed version of PK_N */
+#define PK_N1(pki)       ((1-((pki) >> 16)) & 0xffff)  /* inclusive (0 for empty set) */
 
 // packed iterator representation. this is for iterating index-by-index.
 // an iterator is always valid. use si_* functions for iterating.
 //
-// +-------------+------------+------------+----------+--------------+------------+
-// | 16 (63..48) | 9 (47..39) | 6 (38..33) | 1 (32)   | 16 (31..16)  | 16 (15..0) |
-// +-------------+------------+------------+----------+--------------+------------+
-// | uref        | uref       | next       | last     | -remaining   | current    |
-// | instance    | index      | interval   | interval | instances    | instance   |
-// |             |            | hint       | marker   | in interval  |            |
-// +-------------+------------+------------+----------+--------------+------------+
+// +------------+-------------+------------+----------+--------------+------------+
+// | 8 (63..56) | 16 (55..40) | 7 (39..33) | 1 (32)   | 16 (31..16)  | 16 (15..0) |
+// +------------+-------------+------------+----------+--------------+------------+
+// | map        | map         | next       | last     | -remaining   | current    |
+// | index      | instance    | interval   | interval | instances    | instance   |
+// |            |             | hint       | marker   | in interval  |            |
+// +------------+-------------+------------+----------+--------------+------------+
 // |           complex iterators only                 |
 // +--------------------------------------------------+
 typedef uint64_t ssiter;
 
-#define SI_UREF_BITS        (G_UMAPBITS+1)
-#define SI_HINT_BITS        (15-SI_UREF_BITS)
-#define SI_INST             PK_FIRST
-#define SI_REM(it)          (((it) >> 16) & 0xffff)
-#define SI_UREF_INST(it)    ((it) >> 48)
-#define SI_UREF(it)         (((it) >> (32+SI_HINT_BITS)) & ~((1<<SI_UREF_BITS)-1))
-#define SI_HINT(it)         (((it) >> 32) & ~((1<<SI_HINT_BITS)-1))
-#define SI_SPACE(n)         (((~(uint64_t)(n)) << 16) + 0x00020000ull)
-#define SI_RANGE(pk)        ((ssiter)(pk))
+#define SI_HINT_BITS        (15-G_UMAPBITS)         /* num of low bits of interval to store */
+#define SI_INST(it)         ((it) & 0xffff)         /* current instance */
+#define SI_REM(it)          (((it) >> 16) & 0xffff) /* remaining counter */
+#define SI_MAP(it)          (((int64_t)(it)) >> (64-G_UMAPBITS)) /* associated mapping (signed) */
+#define SI_MAP_INST(it)     (((it) >> (48-G_UMAPBITS)) & 0xffff) /* instance of mapping */
+#define SI_HINT(it)         (((it) >> 33) & ~((1<<SI_HINT_BITS)-1)) /* low bits of interval number */
+#define SI_INCR             0x00010001              /* increment current and decrement remaining */
+#define SI_NEXTMASK         0xffff0000              /* nonzero remaining? */
+#define SI_NEXTIMASK        0x100000000ull          /* more intervals left? */
 
-static_assert(G_INSTBITS+SI_UREF_BITS+SI_HINT_BITS+1+G_INSTBITS+G_INSTBITS == 8*sizeof(ssiter));
+static_assert(G_UMAPBITS+G_INSTBITS+SI_HINT_BITS+1+G_INSTBITS+G_INSTBITS == 8*sizeof(ssiter));
 
-#define SI_CFIRST(inst,uref,p) (((uint64_t)(inst) << 48) | ((uint64_t)(uref) << (32+SI_HINT_BITS)) | (p))
-#define SI_CNEXT(it,hint,last,p) (((uint64_t)(it) & ((~0ull) << (32+SI_HINT_BITS))) \
-		| (((uint64_t)(hint) & ((1ULL<<SI_HINT_BITS)-1)) << (32+SI_HINT_BITS)) \
-		| (((uint64_t)!!(last)) << 32) | (p))
+// complex iterator construction
+#define SI_CFIRST(map,inst,pki) ( \
+		((ssiter)(map) << (64-G_UMAPBITS)) \
+		| ((ssiter)(inst) << (48-G_UMAPBITS)) \
+		| (pki) )
+
+// next interval of complex iterator
+#define SI_CNEXT(it,hint,last,pki) ( \
+		((it) & ((~0ull) << (48-G_UMAPBITS))) \
+		| ((((ssiter)(hint)) & ((1ULL<<SI_HINT_BITS)-1)) << 33) \
+		| (pki) )
 
 // unfortunately compilers generate confused code with an inline function so you're going
 // to have to use this to iterate.
@@ -88,9 +98,8 @@ static_assert(G_INSTBITS+SI_UREF_BITS+SI_HINT_BITS+1+G_INSTBITS+G_INSTBITS == 8*
 // notes: (1) this overwrites `it`, (2) this accesses `S`
 #define SI_NEXT(it) \
 	{ \
-		ssiter _it_next = it + 0x00010001; \
-		if(LIKELY(it & 0xffff0000)){ it = _it_next; continue; } \
-		if(UNLIKELY(it & 0x100000000ull)){ it = si_cnexti(S, it); continue; } \
+		if(LIKELY(it & SI_NEXTMASK)){ it += SI_INCR; continue; } \
+		if(UNLIKELY(it & SI_NEXTIMASK)){ it = si_cnexti(S, it); continue; } \
 		break; \
 	}
 
@@ -111,9 +120,7 @@ typedef struct {
 #define OSI_EMPTYV     ((opt_ssiter){.valid=false})
 #define OSI_SIV(it)    ((opt_ssiter){.valid=true, .si=(it)})
 
-// non-packed iterator representation. this is when we want to iterate over ranges rather than
-// indices (eg. when memcpying ranges around). note that the complex subset field order is
-// the opposite of fhk_subset (XXX: change fhk_subset?)
+// non-packed iterator representation.
 //
 // +-------------+-------------+-------------------+
 // |     reg     |    63..16   |       15..0       |
@@ -124,12 +131,9 @@ typedef struct {
 // +-------------+-------------+-------------------+
 // | num         |      0      | iv len (1-based)  |
 // +-------------+-------------+-------------------+
-
 typedef uintptr_t ssiter3p;
 
-#define SI3P_COMPLEX(ss) ((ss << 48) | (ss >> 16))
-#define SI3P_IINCR       0x3ffff /* decrement nonzero iv num, increment iv pointer by 4 */
-
+#define SI3P_IINCR 0x3ffff /* decrement nonzero iv num, increment iv pointer by 4 */
 #define SI3_NEXTI(it,inst,num) \
 	{ \
 		if(UNLIKELY(it & 0xffff)) { si3_cnexti(&it, &inst, &num); continue; } \
@@ -189,7 +193,6 @@ typedef union {
 #define SP_MARKED(sp)         ((sp).cost < 0)
 
 typedef uint64_t bitmap;
-#define BM_ALL0 ((bitmap *)(~0ULL))
 
 // shadow state bitmap:
 //     
@@ -208,6 +211,8 @@ typedef uint64_t bitmap;
 #define XS_PARAM     0
 #define XS_SHADOW    1
 #define XS_DONE      2
+
+#define ROOT_GIVEN   1
 
 struct xmodel_bw {
 	FHK_MODEL_BW;
@@ -252,19 +257,25 @@ struct xstate {
 };
 
 struct xcand {
-	uint8_t m_ei;
-	fhk_idx m_i;
 	ssiter m_si;
-	// TODO: we can store the candidate state here and continue from it later,
-	// (store m_costS, which location gc/p/cc, and the corresponding edge)
+	ssp *m_fsp;
+	fhk_idx m_i;
+	uint8_t m_ei;
 };
 
 struct rootv {
-	fhk_idx xi;
-	fhk_inst inst, num;
-	ssiter3p ip;
 	void *buf;
+	fhk_idx xi;
+	fhk_inst inst;
+	fhk_inst end;
+	uint8_t flags;
+	// uint8_t unused
 };
+
+typedef union {
+	fhk_subset *imap;
+	fhk_subset kmap;
+} anymap;
 
 // note: scratch buffers are used for temp memory to pass complex subsets outside the solver
 // (into model caller). each consecutive scratch buffer doubles in size (except
@@ -283,16 +294,19 @@ struct fhk_solver {
 	ssp *s_mstate[0];          // model search state (must be first)
 	fhk_co C;                  // solver coroutine (must have same address as solver)
 	struct fhk_graph *G;       // search graph
-	fhk_inst *g_shape;         // shape table
 	void **s_value;            // value state
-	fhk_subset **u_map;        // user mapping cache
+	anymap *s_mapstate;        // mapping state
 	struct xstate x_state[MAX_STK]; // work stack
 	struct xcand x_cand[MAX_CANDSTK]; // candidate stack
 	uint64_t b_off;            // scratch alloc position
 	void *b_mem[NUM_SBUF];     // scratch memory (for passing arguments outside solver)
 	arena *arena;              // allocator
-	size_t r_nv;               // root count
-	struct rootv *r_roots;     // roots
+	uint16_t r_num;            // root queue position
+	uint16_t r_size;           // root queue size
+	fhk_inst bm0_size;         // size of interned all-0 bitmap
+	// uint16_t unused
+	struct rootv *r_buf;       // root queue
+	bitmap *bm0_intern;        // interned all-0 bitmap
 #if FHK_CO_BUILTIN
 	fhk_status e_status;       // exit status
 #endif
@@ -308,7 +322,7 @@ static_assert(offsetof(struct fhk_solver, C) == 0);
 #define RBUF(mi,m,inst)  (((void **) S->s_value[(mi)]) + (inst)*(m)->p_return)
 
 static void J_shape(struct fhk_solver *S, xgrp group);
-static void J_mapcall(struct fhk_solver *S, uint64_t inv, fhk_mapcall *mc);
+static void J_mapcall(struct fhk_solver *S, xmap map, xinst inst);
 static void J_vref(struct fhk_solver *S, xidx xi, xinst inst);
 static void J_modcall(struct fhk_solver *S, fhk_modcall *mc);
 
@@ -316,17 +330,14 @@ static void JE_maxdepth(struct fhk_solver *S, xidx xi, xinst inst);
 static void JE_nyi(struct fhk_solver *S);
 static void JE_nvalue(struct fhk_solver *S, xidx xi, xinst inst);
 static void JE_nmap(struct fhk_solver *S, xmap idx, xinst inst);
-static void JE_nshape(struct fhk_solver *S, xgrp group);
 static void JE_nbuf(struct fhk_solver *S);
 static void JE_nchain(struct fhk_solver *S, xidx xi, xinst inst);
 
 static void J_exit(struct fhk_solver *S, fhk_status status);
 
-static void S_solve(struct fhk_solver *S);
 static void E_exit(struct fhk_solver *S, fhk_status status);
 
-static void S_select_chain_r(struct fhk_solver *S, size_t i);
-static void S_get_value_r(struct fhk_solver *S, size_t i);
+static void S_solve(struct fhk_solver *S);
 
 static void S_vexpandbe(struct fhk_solver *S, xidx xi, xinst inst);
 static void S_mexpandbe(struct fhk_solver *S, xidx mi, xinst inst);
@@ -335,36 +346,39 @@ static void S_vexpandss(struct fhk_solver *S, xidx wi);
 static void S_vexpandvp(struct fhk_solver *S, xidx xi);
 static void S_mexpandsp(struct fhk_solver *S, xidx mi);
 static void S_mexpandvp(struct fhk_solver *S, xidx mi);
-static void S_pexpand(struct fhk_solver *S, xmap map, xinst inst);
-static void S_getumap(struct fhk_solver *S, xmap map, xinst inst);
-static fhk_inst S_shape(struct fhk_solver *S, xgrp group);
-static void S_getshape(struct fhk_solver *S, xgrp group);
-
+static void S_expandmap(struct fhk_solver *S, xmap map, xinst inst);
+static fhk_subset S_expandumap(struct fhk_solver *S, xmap map, xinst inst);
+static xinst S_shape(struct fhk_solver *S, xgrp group);
 static size_t S_map_size(struct fhk_solver *S, xmap map, xinst inst);
 
 static void S_select_chain(struct fhk_solver *S, xidx xi, xinst inst);
 
-static uint64_t S_check1(struct fhk_solver *S, struct fhk_shadow *w, xinst inst);
-static void S_checkspace(struct fhk_solver *S, struct fhk_shadow *w, bitmap *state);
+static void S_checkscan(struct fhk_solver *S, bitmap *bm, struct fhk_shadow *w, xinst inst,
+		xinst end);
 
 static void S_get_given(struct fhk_solver *S, xidx xi, xmap map, xinst inst);
-static void S_get_missing_si3ne(struct fhk_solver *S, xidx xi, ssiter3p sip, xinst sinst,
-		xinst sinum);
+static bitmap *S_touch_vmstate(struct fhk_solver *S, xidx xi, xinst inst);
+static void S_get_missingi(struct fhk_solver *S, xidx xi, xinst inst, xinst end, bitmap *missing);
+static void S_get_given1(struct fhk_solver *S, xidx xi, xinst inst);
+static void S_get_given_si3(struct fhk_solver *S, xidx xi, ssiter3p ip, xinst inst, xinst num);
+static void S_get_giveni(struct fhk_solver *S, xidx xi, xinst inst, xinst end);
 
 static void S_compute_value(struct fhk_solver *S, xidx xi, xinst inst);
 static void S_get_computed_si(struct fhk_solver *S, ssiter it, xidx xi);
 
-static void S_collect_mape(struct fhk_solver *S, fhk_mcedge *e, xidx xi, xmap map,
-		xinst m_inst);
+static void S_mapE_collect(struct fhk_solver *S, fhk_mcedge *e, xidx xi, xmap map, xinst m_inst);
+
 static void *S_sbuf_alloc(struct fhk_solver *S, size_t size);
 
 static void *sbuf_alloc_init(struct fhk_solver *S, size_t size);
 
-static void p_directref(struct fhk_solver *S, fhk_mcedge *e, xidx xi, xmap map, xinst m_inst);
-static opt_ssiter p_ssiter(struct fhk_solver *S, xmap map, xinst inst);
-static void p_ssiter3(struct fhk_solver *S, xmap map, xinst inst, ssiter3p *sip,
-		xinst *sinst, xinst *sinum);
-static xinst p_packidxofe(struct fhk_solver *S, xmap map, xinst m_inst, xinst inst);
+static fhk_subset mapE_subset(struct fhk_solver *S, xmap map, xinst inst);
+static void mapE_directref(struct fhk_solver *S, fhk_mcedge *e, xidx xi, xmap map, xinst m_inst);
+static opt_ssiter mapE_ssiter(struct fhk_solver *S, xmap map, xinst inst);
+static xinst mapE_indexof(struct fhk_solver *S, xmap map, xinst m_inst, xinst inst);
+
+static xmap map_toext(struct fhk_solver *S, xmap map);
+static xmap map_fromext(struct fhk_solver *S, xmap map);
 
 static void si3_ss(fhk_subset ss, ssiter3p *sip, xinst *sinst, xinst *sinum);
 static void si3_complex(fhk_subset ss, ssiter3p *sip, xinst *sinst, xinst *sinum);
@@ -372,26 +386,29 @@ static ssiter si_cnexti(struct fhk_solver *S, ssiter it);
 static void si3_cnexti(ssiter3p *p, xinst *inst, xinst *num);
 static void si3_collect_ne(void *dest, void *src, size_t sz, ssiter3p ip, xinst inst, xinst num);
 
-static xinst ss_cpackidxof(fhk_subset ss, xinst inst);
+static xinst ss_cindexof(fhk_subset ss, xinst inst);
 static size_t ss_csize(fhk_subset ss);
 
+static xinst scanv_computed(struct fhk_solver *S, xidx xi, xgrp group, xinst inst);
+static xinst scanv_given(struct fhk_solver *S, xidx xi, xgrp group, xinst inst);
+
 static bitmap *bm_alloc(struct fhk_solver *S, xinst n, bitmap init);
-static void bm_clear(bitmap *b, xinst inst);
+static bitmap *bm_getall0(struct fhk_solver *S, xinst n);
+static void bm_cleari(bitmap *bm, xinst inst, xinst num);
 static bool bm_isset(bitmap *b, xinst inst);
-static bool bm_find1_iv(bitmap *bm, xinst *inst, xinst end);
+static bool bm_findi(bitmap *bm, xinst *inst, xinst end);
 
 static ssp *ssp_alloc(struct fhk_solver *S, size_t n, ssp init);
-static void r_copyroots(struct fhk_solver *S, size_t nv, struct fhk_req *req);
 
 static const char *dstrvalue(struct fhk_solver *S, xidx xi, xinst inst);
 
-fhk_solver *fhk_create_solver(struct fhk_graph *G, arena *arena, size_t nv, struct fhk_req *req){
+fhk_solver *fhk_create_solver(struct fhk_graph *G, arena *arena){
 	// not a hard requirement, just makes the alloc code simpler.
 	// if this is changed then aligning needs to be done more carefully.
 	static_assert(alignof(struct fhk_solver) == alignof(void *));
 
-	// lazy use of memset
-	static_assert(FHK_NINST == 0xffff);
+	// lazy use of memset. change the init code if you change the constant.
+	static_assert((uint64_t)SS_UNDEF == 0xffffffffffffffffull);
 
 #if FHK_CO_BUILTIN
 	// TODO: this should probably not allocate it on the arena, instead mmap a stack
@@ -401,10 +418,11 @@ fhk_solver *fhk_create_solver(struct fhk_graph *G, arena *arena, size_t nv, stru
 	
 	struct fhk_solver *S = arena_alloc(arena, sizeof(void *)*(G->nx+G->nm)+sizeof(*S), alignof(*S));
 	S = (void *)S + G->nm * sizeof(*S->s_mstate);
-	S->g_shape  = arena_alloc(arena, G->ng * sizeof(*S->g_shape), alignof(*S->g_shape));
-	S->s_value  = G->nm + (void **) arena_alloc(arena, (G->nv+G->nm) * sizeof(*S->s_value), alignof(*S->s_value));
-	S->u_map    = arena_alloc(arena, 2*G->nu * sizeof(*S->u_map), alignof(*S->u_map));
-	S->r_roots  = arena_alloc(arena, nv * sizeof(*S->r_roots), alignof(*S->r_roots));
+	S->s_value = G->nm + (void **) arena_alloc(arena, (G->nv+G->nm) * sizeof(*S->s_value),
+			alignof(*S->s_value));
+	S->s_mapstate = G->nimap + (anymap *) arena_alloc(arena,
+			(G->nimap+G->nkmap) * sizeof(*S->s_mapstate), alignof(*S->s_mapstate));
+	S->r_buf = arena_alloc(arena, NUM_ROOTBUF * sizeof(*S->r_buf), alignof(*S->r_buf));
 	S->b_mem[0] = arena_alloc(arena, 1 << SBUF_MIN_BITS, SBUF_ALIGN);
 
 	S->G = G;
@@ -418,112 +436,182 @@ fhk_solver *fhk_create_solver(struct fhk_graph *G, arena *arena, size_t nv, stru
 
 	memset(S->s_mstate - G->nm, 0, G->nm * sizeof(*S->s_mstate));
 	memset(S->s_vstate, 0, G->nx * sizeof(*S->s_vstate));
-	memset(S->g_shape, 0xff, G->ng * sizeof(*S->g_shape));
+	memset(S->s_mapstate - G->nimap, 0xff, (G->nimap+G->nkmap) * sizeof(*S->s_mapstate));
 	memset(S->s_value - G->nm, 0, (G->nv+G->nm) * sizeof(*S->s_value));
-	memset(S->u_map, 0, 2*G->nu * sizeof(*S->u_map));
 	memset(S->b_mem+1, 0, (NUM_SBUF-1) * sizeof(*S->b_mem));
 
-	r_copyroots(S, nv, req);
-
-	S->b_off = 0;
 	S->x_state->where = XS_DONE;
 	S->x_state->x_cands = 0;
 	S->x_state->x_ncand = 0;
+	S->b_off = 0;
+	S->r_num = 0;
+	S->r_size = NUM_ROOTBUF;
+	S->bm0_size = 0;
 
 	return S;
 }
 
-static void fhkS_setshape(struct fhk_solver *S, xgrp group, xinst shape){
-	if(UNLIKELY(shape > G_MAXINST)){
-		E_exit(S, FHK_ERROR | A_SARG(.s_ei = FHKE_INVAL | E_META(1, G, group) | E_META(2, J, shape)));
+static void fhkS_setrooti(struct fhk_solver *S, xidx xi, xinst inst, xinst num, void *buf,
+		uint32_t flags){
+
+	if(UNLIKELY(S->r_num == S->r_size)){
+		// queue full, need to allocate a new one.
+		// if the solver is currently working on roots, we wouldn't need to copy that interval.
+		// but that's probably not a helpful optimization (the queue almost never needs
+		// to grow, and even then the memcpy is cheap.)
+		// since it needed to grow, there's probably a set with a lot of intervals, so we
+		// grow it aggressively by 4x here.
+		S->r_size <<= 2;
+		struct rootv *rbuf = arena_alloc(S->arena, S->r_size*sizeof(*S->r_buf), alignof(*S->r_buf));
+		memcpy(rbuf, S->r_buf, S->r_num*sizeof(*S->r_buf));
+		S->r_buf = rbuf;
+	}
+
+	struct rootv *r = &S->r_buf[S->r_num++];
+
+	r->buf = buf;
+	r->xi = xi;
+	r->inst = inst;
+	r->end = inst + num;
+	r->flags = flags;
+
+	dv("%s:[%zu..%zu] -- (%u) solution root -> %p [%p]\n",
+			fhk_dsym(S->G, xi),
+			inst, inst+num-1,
+			S->r_num-1,
+			buf, S->s_value[xi]
+	);
+}
+
+void fhkS_setroot(struct fhk_solver *S, fhk_idx xi, fhk_subset ss, void *buf){
+	if(UNLIKELY(SS_ISEMPTY(ss)))
+		return;
+
+	struct fhk_var *x = &S->G->vars[xi];
+	uint32_t flags = V_GIVEN(x) ? ROOT_GIVEN : 0;
+
+	if(LIKELY(SS_ISIVAL(ss))){
+		// if the subset is the entire space and we haven't allocated a value buffer yet,
+		// then use buf directly as the buffer to save copies.
+		// note: this means you must not modify buf as long as the solver is active
+		if((uint32_t)S->s_mapstate[x->group].kmap == (uint32_t)ss && !S->s_value[xi])
+			S->s_value[xi] = buf;
+
+		xinst inst = PK_FIRST(ss);
+		fhkS_setrooti(S, xi, inst, PK_N1(ss), buf, flags);
 		return;
 	}
 
-	if(UNLIKELY(S->g_shape[group] != FHK_NINST)){
-		E_exit(S, FHK_ERROR | A_SARG(.s_ei = FHKE_OVERWRITE | E_META(1, G, group)));
+	size_t size = x->size;
+
+	ssiter3p ip;
+	xinst inst, num;
+	si3_complex(ss, &ip, &inst, &num);
+
+	for(;;){
+		fhkS_setrooti(S, xi, inst, num, buf + inst*size, flags);
+		SI3_NEXTI(ip, inst, num);
+	}
+}
+
+void fhkS_setshape(struct fhk_solver *S, fhk_grp group, fhk_inst shape){
+	if(UNLIKELY(group >= S->G->ng)){
+		E_exit(S, FHK_ERROR | SARG(.s_ei = FHKE_INVAL | E_META(1, G, group)));
+		return;
+	}
+
+	if(UNLIKELY(shape > G_MAXINST)){
+		E_exit(S, FHK_ERROR | SARG(.s_ei = FHKE_INVAL | E_META(1, G, group) | E_META(2, J, shape)));
+		return;
+	}
+
+	if(UNLIKELY(S->s_mapstate[group].kmap != SS_UNDEF)){
+		E_exit(S, FHK_ERROR | SARG(.s_ei = FHKE_OVERWRITE | E_META(1, G, group)));
 		return;
 	}
 
 	dv("shape[%u] -> %u\n", group, shape);
-	S->g_shape[group] = shape;
+	S->s_mapstate[group].kmap = shape ? SS_PKIVAL(0, shape) : SS_EMPTYSET;
 }
 
-void fhkS_shape(struct fhk_solver *S, fhk_grp group, fhk_inst shape){
-	if(UNLIKELY(group >= S->G->ng)){
-		E_exit(S, FHK_ERROR | A_SARG(.s_ei = FHKE_INVAL | E_META(1, G, group)));
-		return;
-	}
-
-	fhkS_setshape(S, group, shape);
-}
-
-void fhkS_shape_table(struct fhk_solver *S, fhk_inst *shape){
-	// if multiple of these fail, the last one is stored, that's ok
-	for(xinst i=0;i<S->G->ng;i++)
-		fhkS_setshape(S, i, shape[i]);
-}
-
-void fhkS_give(struct fhk_solver *S, fhk_idx xi, fhk_inst inst, void *vp){
-	if(xi > S->G->nv || UNLIKELY(!V_GIVEN(&S->G->vars[xi]))){
-		E_exit(S, FHK_ERROR | A_SARG(.s_ei = FHKE_INVAL | E_META(1, I, xi)));
-		return;
-	}
+void fhkS_setvaluei(struct fhk_solver *S, fhk_idx xi, fhk_inst inst, uint32_t n, void *vp){
+	if(UNLIKELY(!n)) return;
+	if(UNLIKELY(xi > S->G->nv)) goto fail;
 
 	struct fhk_var *x = &S->G->vars[xi];
-	xinst shape = S->g_shape[x->group];
+	fhk_subset space = S->s_mapstate[x->group].kmap;
+	xinst shape = PK_N1(space);
 
-	// TODO: you don't have to return an error here: there's a workaround but it's a bit complex:
-	//       store xi,inst,vp somewhere and jump on the solver stack to a function that will
-	//       yield FHKS_SHAPE, then copy the variable. (this is similar to how E_exit works)
-	//       (you don't have to use the solver stack, you can allocate a new one via the arena,
-	//       scratch buffers, malloc, etc...)
-	if(UNLIKELY(shape == FHK_NINST)){
-		E_exit(S, FHK_ERROR | A_SARG(.s_ei = FHKE_NYI | E_META(1, G, x->group) | E_META(2, J, inst)));
-		return;
+	if(UNLIKELY(!V_GIVEN(&S->G->vars[xi]))) goto fail;
+	if(UNLIKELY(space == SS_UNDEF)) goto fail;
+	if(UNLIKELY(inst+n > shape)) goto fail;
+
+	if((n-inst) == shape){
+		if(UNLIKELY(S->s_vmstate[xi])) goto fail;
+
+		// fast path: got all at once, don't copy, just take the pointer
+		S->s_vmstate[xi] = bm_getall0(S, shape);
+		S->s_value[xi] = vp;
+	}else{
+		if(UNLIKELY(S->s_vmstate[xi] && !bm_isset(S->s_vmstate[xi], inst))) goto fail;
+
+		// just partial, now we have to copy
+
+		if(UNLIKELY(!S->s_vmstate[xi]))
+			S->s_vmstate[xi] = bm_alloc(S, shape, ~0ULL);
+
+		if(UNLIKELY(!S->s_value[xi]))
+			S->s_value[xi] = arena_alloc(S->arena, shape*x->size, x->size);
+
+		bm_cleari(S->s_vmstate[xi], inst, n);
+		memcpy(S->s_value[xi] + inst*x->size, vp, n*x->size);
 	}
 
-	if(UNLIKELY(inst >= shape)){
-		E_exit(S, FHK_ERROR | A_SARG(.s_ei = FHKE_INVAL | E_META(1, G, x->group) | E_META(2, J, inst)));
-		return;
-	}
+	dv("%s:[%u..%u] -- given values @ %p :: [%s]\n",
+			fhk_dsym(S->G, xi),
+			inst, inst+n-1,
+			vp,
+			dstrvalue(S, xi, inst)
+	);
 
-	if(UNLIKELY(S->s_value[xi] == BM_ALL0)){
-		E_exit(S, FHK_ERROR | A_SARG(.s_ei = FHKE_INVAL | E_META(1, I, xi) | E_META(2, J, inst)));
-		return;
-	}
+	return;
 
-	if(UNLIKELY(!S->s_vmstate[xi]))
-		S->s_vmstate[xi] = bm_alloc(S, shape, ~0ULL);
-
-	if(UNLIKELY(!S->s_value[xi]))
-		S->s_value[xi] = arena_alloc(S->arena, shape*x->size, x->size);
-
-	bm_clear(S->s_vmstate[xi], inst);
-	memcpy(S->s_value[xi] + inst*x->size, vp, x->size);
-
-	dv("%s:%u -- given value @ %p -> %p [%s]\n",
-			fhk_dsym(S->G, xi), inst,
-			vp, S->s_value[xi] + inst*x->size,
-			dstrvalue(S, xi, inst));
+fail:
+	E_exit(S, FHK_ERROR | SARG(.s_ei = FHKE_INVAL | E_META(1, I, xi) | E_META(2, J, inst)));
 }
 
-void fhkS_give_all(struct fhk_solver *S, fhk_idx xi, void *vp){
-	if(UNLIKELY(!V_GIVEN(&S->G->vars[xi]))){
-		E_exit(S, FHK_ERROR | A_SARG(.s_ei = FHKE_INVAL | E_META(1, I, xi)));
+void fhkS_setmap(struct fhk_solver *S, fhk_extmap emap, fhk_inst inst, fhk_subset ss){
+	if(UNLIKELY(emap < -S->G->nimap || emap >= S->G->nkmap)) goto fail;
+
+	xmap map = map_fromext(S, emap);
+
+	if(MAP_ISCONST(map)){
+		if(UNLIKELY(S->s_mapstate[map].kmap != SS_UNDEF)) goto fail;
+		S->s_mapstate[map].kmap = ss;
 		return;
 	}
 
-	if(UNLIKELY(S->s_vmstate[xi])){
-		E_exit(S, FHK_ERROR | A_SARG(.s_ei = FHKE_OVERWRITE | E_META(1, I, xi)));
-		return;
+	xgrp group = S->G->umap_assoc[map];
+	fhk_subset space = S->s_mapstate[group].kmap;
+	xinst num = PK_N1(space);
+	if(UNLIKELY(space == SS_UNDEF)) goto fail;
+	if(UNLIKELY(inst >= num)) goto fail;
+
+	fhk_subset *imap = S->s_mapstate[map].imap;
+	if(UNLIKELY(imap == (fhk_subset*)SS_UNDEF)){
+		imap = arena_alloc(S->arena, num*sizeof(*imap), alignof(*imap));
+		S->s_mapstate[map].imap = imap;
+		for(xinst i=0;i<num;i++)
+			imap[i] = SS_UNDEF;
+	}else if(UNLIKELY(imap[inst] != SS_UNDEF)){
+		goto fail;
 	}
 
-	assert(!S->s_value[xi]);
+	imap[inst] = ss;
+	return;
 
-	S->s_vmstate[xi] = BM_ALL0;
-	S->s_value[xi] = vp;
-
-	dv("%s -- given buffer @ %p\n", fhk_dsym(S->G, xi), vp);
+fail:
+	E_exit(S, FHK_ERROR | SARG(.s_ei = FHKE_INVAL | E_META(1, P, emap) | E_META(2, J, inst)));
 }
 
 // inspection functions - use these for debugging only, they expose solver internals and are slow
@@ -544,7 +632,8 @@ float fhkI_cost(struct fhk_solver *S, fhk_idx idx, fhk_inst inst){
 }
 
 fhk_inst fhkI_shape(struct fhk_solver *S, fhk_grp group){
-	return S->g_shape[group];
+	fhk_subset ss = S->s_mapstate[group].kmap;
+	return ss != SS_UNDEF ? PK_N1(ss) : FHK_NINST;
 }
 
 fhk_eref fhkI_chain(struct fhk_solver *S, fhk_idx xi, fhk_inst inst){
@@ -567,7 +656,7 @@ void *fhkI_value(struct fhk_solver *S, fhk_idx xi, fhk_inst inst){
 			return NULL;
 	}else{
 		bitmap *missing = S->s_vmstate[xi];
-		if(!missing || (missing != BM_ALL0 && bm_isset(missing, inst)))
+		if(!missing || bm_isset(missing, inst))
 			return NULL;
 	}
 
@@ -579,58 +668,53 @@ struct fhk_graph *fhkI_G(struct fhk_solver *S){
 }
 
 AINLINE static void J_shape(struct fhk_solver *S, xgrp group){
-	dv("-> SHAPE   %u\n", group);
-	fhkJ_yield(&S->C, FHKS_SHAPE | A_SARG(.s_group=group));
+	dv("-> SHAPE   %lu\n", group);
+	fhkJ_yield(&S->C, FHKS_SHAPE | SARG(.s_group=group));
 }
 
-AINLINE static void J_mapcall(struct fhk_solver *S, uint64_t inv, fhk_mapcall *mc){
-	dv("-> MAPCALL %c%d:%u -> %p\n", inv ? '<' : '>', mc->mref.idx, mc->mref.inst, mc->ss);
-	fhkJ_yield(&S->C, FHKS_MAPCALL | inv | A_SARG(.s_mapcall=mc));
+AINLINE static void J_mapcall(struct fhk_solver *S, xmap map, xinst inst){
+	dv("-> MAPCALL %ld:%lu\n", map, inst);
+	fhkJ_yield(&S->C, FHKS_MAPCALL | SARG(.s_mapcall={.idx=map, .inst=inst}));
 }
 
 AINLINE static void J_vref(struct fhk_solver *S, xidx xi, xinst inst){
-	dv("-> VREF    %s:%u\n", fhk_dsym(S->G, xi), inst);
-	fhkJ_yield(&S->C, FHKS_VREF | A_SARG(.s_vref={.idx=xi, .inst=inst}));
+	dv("-> VREF    %s:%lu\n", fhk_dsym(S->G, xi), inst);
+	fhkJ_yield(&S->C, FHKS_VREF | SARG(.s_vref={.idx=xi, .inst=inst}));
 }
 
 AINLINE static void J_modcall(struct fhk_solver *S, fhk_modcall *mc){
 	dv("-> MODCALL %s:%u (%u->%u)\n", fhk_dsym(S->G, mc->mref.idx), mc->mref.inst, mc->np, mc->nr);
-	fhkJ_yield(&S->C, FHKS_MODCALL | A_SARG(.s_modcall=mc));
+	fhkJ_yield(&S->C, FHKS_MODCALL | SARG(.s_modcall=mc));
 }
 
 __attribute__((cold, noreturn))
 static void JE_maxdepth(struct fhk_solver *S, xidx xi, xinst inst){
-	J_exit(S, FHK_ERROR | A_SARG(.s_ei = FHKE_DEPTH | E_META(1, I, xi) | E_META(2, J, inst)));
+	J_exit(S, FHK_ERROR | SARG(.s_ei = FHKE_DEPTH | E_META(1, I, xi) | E_META(2, J, inst)));
 }
 
 __attribute__((cold, noreturn))
 static void JE_nyi(struct fhk_solver *S){
-	J_exit(S, FHK_ERROR | A_SARG(.s_ei = FHKE_NYI));
+	J_exit(S, FHK_ERROR | SARG(.s_ei = FHKE_NYI));
 }
 
 __attribute__((cold, noreturn))
 static void JE_nvalue(struct fhk_solver *S, xidx xi, xinst inst){
-	J_exit(S, FHK_ERROR | A_SARG(.s_ei = FHKE_NVALUE | E_META(1, I, xi) | E_META(2, J, inst)));
+	J_exit(S, FHK_ERROR | SARG(.s_ei = FHKE_NVALUE | E_META(1, I, xi) | E_META(2, J, inst)));
 }
 
 __attribute__((cold, noreturn))
 static void JE_nmap(struct fhk_solver *S, xmap idx, xinst inst){
-	J_exit(S, FHK_ERROR | A_SARG(.s_ei = FHKE_NVALUE | E_META(1, P, idx) | E_META(2, J, inst)));
-}
-
-__attribute__((cold, noreturn))
-static void JE_nshape(struct fhk_solver *S, xgrp group){
-	J_exit(S, FHK_ERROR | A_SARG(.s_ei = FHKE_NVALUE | E_META(1, G, group)));
+	J_exit(S, FHK_ERROR | SARG(.s_ei = FHKE_NVALUE | E_META(1, P, idx) | E_META(2, J, inst)));
 }
 
 __attribute__((cold, noreturn))
 static void JE_nbuf(struct fhk_solver *S){
-	J_exit(S, FHK_ERROR | A_SARG(.s_ei = FHKE_MEM));
+	J_exit(S, FHK_ERROR | SARG(.s_ei = FHKE_MEM));
 }
 
 __attribute__((cold, noreturn))
 static void JE_nchain(struct fhk_solver *S, xidx xi, xinst inst){
-	J_exit(S, FHK_ERROR | A_SARG(.s_ei = FHKE_CHAIN | E_META(1, I, xi) | E_META(2, J, inst)));
+	J_exit(S, FHK_ERROR | SARG(.s_ei = FHKE_CHAIN | E_META(1, I, xi) | E_META(2, J, inst)));
 }
 
 __attribute__((noreturn))
@@ -664,98 +748,73 @@ static void E_exit(struct fhk_solver *S, fhk_status status){
 }
 
 static void S_solve(struct fhk_solver *S){
-	// optimization: if we know the shapes and the requested subset is space, then
-	// collect directly to the given buffer, instead of copying.
-	for(size_t i=0;i<S->r_nv;i++){
-		struct rootv *r = &S->r_roots[i];
-		struct fhk_var *x = &S->G->vars[r->xi];
-
-		if(UNLIKELY(V_GIVEN(x)))
-			continue;
-
-		// num can't be FHK_NINST so this check is ok even if we don't have the shape.
-		// we *could* request the shape at this point if we don't have it, but currently we don't.
-		if(S->g_shape[x->group] == r->num && !S->s_value[r->xi])
-			S->s_value[r->xi] = r->buf;
-	}
-
-	// select chains for all first, to keep the solver state in cache, instead of jumping
-	// to a model caller after each root
-	for(size_t i=0;i<S->r_nv;i++)
-		S_select_chain_r(S, i);
-
-	// this actually invokes the model calls (except for those that were invoked by computed
-	// constraints in the first step)
-	for(size_t i=0;i<S->r_nv;i++)
-		S_get_value_r(S, i);
-
-	// and finally collect
-	for(size_t i=0;i<S->r_nv;i++){
-		struct rootv *r = &S->r_roots[i];
-		void *vp = S->s_value[r->xi];
-
-		assert(vp);
-
-		// fast path: request was space, we used direct buffer, nothing to do
-		if(LIKELY(vp == r->buf))
-			continue;
-
-		si3_collect_ne(r->buf, vp, r->xi, r->ip, r->inst, r->num);
-	}
-
-	J_exit(S, FHK_OK);
-}
-
-AINLINE static void S_select_chain_r(struct fhk_solver *S, size_t i){
-	struct rootv *r = &S->r_roots[i];
-	xidx xi = r->xi;
-	ssiter3p ip = r->ip;
-	xinst inst = r->inst;
-	xinst num = r->num;
-
-	assert(num > 0);
-
-	if(UNLIKELY(V_GIVEN(&S->G->vars[xi])))
-		return;
-
-	S_vexpandsp(S, xi);
-	ssp *sp = S->s_vstate[xi];
-
 	for(;;){
-		do {
-			if(!SP_DONE(sp[inst]))
-				S_select_chain(S, xi, inst);
-			inst++;
-		} while(--num > 0);
-		SI3_NEXTI(ip, inst, num);
-	}
-}
-
-AINLINE static void S_get_value_r(struct fhk_solver *S, size_t i){
-	struct rootv *r = &S->r_roots[i];
-	struct fhk_var *x = &S->G->vars[r->xi];
-	xidx xi = r->xi;
-
-	if(LIKELY(V_COMPUTED(x))){
-		ssp *sp = S->s_vstate[xi];
-		ssiter3p ip = r->ip;
-		xinst inst = r->inst;
-		xinst num = r->num;
-
-		for(;;){
-			do {
-				if(LIKELY(!(sp[inst].state & SP_VALUE)))
-					S_compute_value(S, xi, inst);
-				inst++;
-			} while(--num > 0);
-			SI3_NEXTI(ip, inst, num);
+		if(!S->r_num){
+			fhkJ_yield(&S->C, FHK_OK);
+			continue;
 		}
-	}else{
-		bitmap *missing = S->s_vmstate[xi];
-		if(LIKELY(missing == BM_ALL0))
-			return;
 
-		S_get_missing_si3ne(S, xi, r->ip, r->inst, r->num);
+		uint32_t num = S->r_num;
+		struct rootv *roots = S->r_buf;
+
+		// get given roots first, if someone asked for them.
+		for(uint32_t i=0;i<num;i++){
+			struct rootv *r = &roots[i];
+			if(UNLIKELY(r->flags & ROOT_GIVEN))
+				S_get_giveni(S, r->xi, r->inst, r->end);
+		}
+
+		// solve chains
+		for(uint32_t i=0;i<num;i++){
+			struct rootv *r = &roots[i];
+
+			if(UNLIKELY(r->flags & ROOT_GIVEN))
+				continue;
+
+			S_vexpandsp(S, r->xi);
+			xinst inst = r->inst;
+			ssp *sp = S->s_vstate[r->xi] + inst;
+
+			do {
+				if(LIKELY(!SP_DONE(*sp)))
+					S_select_chain(S, r->xi, inst);
+				sp++;
+			} while(++inst < r->end);
+		}
+
+		// compute values
+		for(uint32_t i=0;i<num;i++){
+			struct rootv *r = &roots[i];
+
+			if(UNLIKELY(r->flags & ROOT_GIVEN))
+				continue;
+
+			xinst inst = r->inst;
+			ssp *sp = S->s_vstate[r->xi] + inst;
+
+			do {
+				if(LIKELY(!(sp->state & SP_VALUE)))
+					S_compute_value(S, r->xi, inst);
+				sp++;
+			} while(++inst < r->end);
+		}
+
+		// collect values
+		for(uint32_t i=0;i<num;i++){
+			struct rootv *r = &roots[i];
+			struct fhk_var *x = &S->G->vars[r->xi];
+			void *vp = S->s_value[r->xi] + r->inst*x->size;
+
+			if(vp == r->buf)
+				continue;
+
+			memcpy(r->buf, vp, (r->end-r->inst)*x->size);
+		}
+
+		// done.
+		S->r_num -= num;
+		if(UNLIKELY(S->r_num))
+			memcpy(S->r_buf, S->r_buf+num, S->r_num*sizeof(*S->r_buf));
 	}
 }
 
@@ -764,10 +823,10 @@ static void S_vexpandbe(struct fhk_solver *S, xidx xi, xinst inst){
 	struct fhk_var *x = &S->G->vars[xi];
 	assert(V_COMPUTED(x));
 
-	size_t i = 0;
+	uint32_t i = 0;
 	do {
 		S_mexpandsp(S, x->models[i].idx);
-		S_pexpand(S, x->models[i].map, inst);
+		S_expandmap(S, x->models[i].map, inst);
 	} while(++i < x->n_mod);
 }
 
@@ -777,12 +836,12 @@ static void S_mexpandbe(struct fhk_solver *S, xidx mi, xinst inst){
 
 	for(int32_t i=m->p_shadow;i;i++){
 		S_vexpandss(S, m->shadows[i].idx);
-		S_pexpand(S, m->shadows[i].map, inst);
+		S_expandmap(S, m->shadows[i].map, inst);
 	}
 
 	for(int32_t i=0;i<m->p_cparam;i++){
 		S_vexpandsp(S, m->params[i].idx);
-		S_pexpand(S, m->params[i].map, inst);
+		S_expandmap(S, m->params[i].map, inst);
 	}
 }
 
@@ -833,77 +892,58 @@ AINLINE static void S_mexpandvp(struct fhk_solver *S, xidx mi){
 			alignof(void *));
 }
 
-// expand mapping
-static void S_pexpand(struct fhk_solver *S, xmap map, xinst inst){
-	if(UNLIKELY(P_ISSPACE(map) && (S->g_shape[map] == FHK_NINST)))
-		S_getshape(S, map);
-	else if(UNLIKELY(P_ISUSER(map)))
-		S_getumap(S, map, inst);
-}
-
-// expand user mapping
-static void S_getumap(struct fhk_solver *S, xmap map, xinst inst){
-	fhk_subset *cache = S->u_map[map & P_UREF];
-
-	if(UNLIKELY(!cache)){
-		size_t shape = S_shape(S, P_UGROUP(map));
-		cache = S->u_map[map & P_UREF] = arena_alloc(S->arena, shape * sizeof(*cache),
-				alignof(*cache));
-		for(xinst i=0;i<shape;i++)
-			cache[i] = SS_UNDEF;
-	}else if(LIKELY(cache[inst] != SS_UNDEF))
+AINLINE static void S_expandmap(struct fhk_solver *S, xmap map, xinst inst){
+	if(LIKELY(map == MAP_IDENT))
 		return;
 
-	fhk_mapcall mp = {
-		.mref = {
-			.idx = P_UIDX(map),
-			.inst = inst
-		},
-		.ss = &cache[inst]
-	};
-
-	J_mapcall(S, map & P_UINV, &mp);
-
-	if(UNLIKELY(cache[inst] == SS_UNDEF))
-		JE_nmap(S, P_UIDX(map), inst);
-
-	dv("umap %c%u:%u -> 0x%lx\n", (map & P_UINV) ? '<' : '>', P_UIDX(map), inst, cache[inst]);
+	S_expandumap(S, map, inst);
 }
 
-AINLINE static fhk_inst S_shape(struct fhk_solver *S, xgrp group){
-	assert(group < S->G->ng);
+static fhk_subset S_expandumap(struct fhk_solver *S, xmap map, xinst inst){
+	assert(map != MAP_IDENT);
 
-	if(UNLIKELY(S->g_shape[group] == FHK_NINST))
-		S_getshape(S, group);
+	anymap ms = S->s_mapstate[map];
 
-	return S->g_shape[group];
+	if(UNLIKELY(ms.kmap == SS_UNDEF)){
+		if((uint64_t)map < S->G->ng)
+			J_shape(S, map);
+		else
+			J_mapcall(S, map_toext(S, map), inst);
+
+		ms = S->s_mapstate[map];
+
+		if(UNLIKELY(ms.kmap == SS_UNDEF))
+			JE_nmap(S, map, inst);
+
+		if(LIKELY(MAP_ISCONST(map)))
+			return ms.kmap;
+	}else{
+		if(LIKELY(MAP_ISCONST(map)))
+			return ms.kmap;
+
+		if(LIKELY(ms.imap[inst] != SS_UNDEF))
+			return ms.imap[inst];
+
+		J_mapcall(S, map_toext(S, map), inst);
+	}
+
+	if(UNLIKELY(ms.imap[inst] == SS_UNDEF))
+		JE_nmap(S, map, inst);
+
+	return ms.imap[inst];
 }
 
-static void S_getshape(struct fhk_solver *S, xgrp group){
+AINLINE static xinst S_shape(struct fhk_solver *S, xgrp group){
 	assert(group < S->G->ng);
-	assert(S->g_shape[group] == FHK_NINST);
-
-	J_shape(S, group);
-
-	if(UNLIKELY(S->g_shape[group] == FHK_NINST))
-		JE_nshape(S, group);
+	return PK_N1(S_expandumap(S, group, FHK_NINST));
 }
 
 AINLINE static size_t S_map_size(struct fhk_solver *S, xmap map, xinst inst){
-	if(LIKELY(P_ISIDENT(map)))
+	if(LIKELY(map == MAP_IDENT))
 		return 1;
 
-	if(LIKELY(P_ISSPACE(map)))
-		return S_shape(S, map);
-
-	assert(P_ISUSER(map));
-	S_getumap(S, map, inst);
-	fhk_subset ss = S->u_map[map & P_UREF][inst];
-
-	if(LIKELY(SS_ISIVAL(ss)))
-		return PK_N1(SS_IIVAL(ss));
-
-	return ss_csize(ss);
+	fhk_subset ss = S_expandumap(S, map, inst);
+	return LIKELY(!SS_ISCOMPLEX(ss)) ? PK_N1(ss) : ss_csize(ss);
 }
 
 // main solver.
@@ -961,7 +1001,7 @@ static void S_select_chain(struct fhk_solver *S, xidx _x_i, xinst _x_inst){
 
 x_solve:  // -> X_i, X_inst, X_beta
 	{
-		dv("%s:%u -- enter solver (depth: %ld  beta: %g)\n",
+		dv("%s:%zu -- enter solver (depth: %ld  beta: %g)\n",
 				fhk_dsym(S->G, X_i), X_inst, X-S->x_state, X_beta);
 
 		ssp *sp = &S->s_vstate[X_i][X_inst];
@@ -998,18 +1038,18 @@ x_solve:  // -> X_i, X_inst, X_beta
 		struct fhk_var *x = &S->G->vars[X_i];
 		assert(V_COMPUTED(x));
 
-		size_t cstart = (X-1)->x_cands + (X-1)->x_ncand;
+		uint32_t cstart = (X-1)->x_cands + (X-1)->x_ncand;
 		X->x_cands = cstart;
 
 		if(UNLIKELY(cstart + x->n_mod >= MAX_CANDSTK))
 			JE_maxdepth(S, X_i, X_inst);
 
 		struct xcand *cand = &S->x_cand[cstart];
-		size_t nc = 0;
-		size_t ei = 0;
+		uint32_t nc = 0;
+		uint32_t ei = 0;
 
 		do {
-			opt_ssiter osi = p_ssiter(S, x->models[ei].map, X_inst);
+			opt_ssiter osi = mapE_ssiter(S, x->models[ei].map, X_inst);
 
 			if(UNLIKELY(!OSI_VALID(osi)))
 				continue;
@@ -1017,6 +1057,7 @@ x_solve:  // -> X_i, X_inst, X_beta
 			cand->m_ei = ei;
 			cand->m_i = x->models[ei].idx;
 			cand->m_si = OSI_SI(osi);
+			cand->m_fsp = S->s_mstate[cand->m_i] + SI_INST(cand->m_si);
 			cand++;
 			nc++;
 		} while(++ei < x->n_mod);
@@ -1105,30 +1146,41 @@ candidate:
 	{
 		float m_cost = INFINITY;
 		float m_beta = X->x_beta;
-		size_t maxcand = X->x_cands + X->x_ncand;
-		size_t x_cind = X->x_cands;
+		struct xcand *cand = &S->x_cand[X->x_cands];
+		struct xcand *m_end = &S->x_cand[X->x_cands + X->x_ncand];
 		struct xcand *m_cand = NULL;
 		xinst m_inst = 0;
 
 		do {
-			struct xcand *cand = &S->x_cand[x_cind];
+			ssp *sp = cand->m_fsp;
 			ssiter it = cand->m_si;
-			ssp *sp = S->s_mstate[cand->m_i];
 
-			assert(S->g_shape[S->G->models[cand->m_i].group] != FHK_NINST);
+			assert(S->s_mapstate[S->G->models[cand->m_i].group].kmap != SS_UNDEF);
 
 			for(;;){
-				assert(SI_INST(it) < S->g_shape[S->G->models[cand->m_i].group]);
+				assert(SI_INST(it) <= PK_N(S->s_mapstate[S->G->models[cand->m_i].group].kmap));
 
-				float cost = sp[SI_INST(it)].cost;
+				float cost = sp->cost;
 				m_cand = cost < m_cost ? cand : m_cand;
 				m_inst = cost < m_cost ? SI_INST(it) : m_inst;
 				m_beta = min(m_beta, max(m_cost, cost));
 				m_cost = min(m_cost, cost);
 
-				SI_NEXT(it);
-			}
-		} while(++x_cind < maxcand);
+				if(UNLIKELY(it & SI_NEXTMASK)){
+					sp++;
+					it += SI_INCR;
+					continue;
+				}
+
+				if(UNLIKELY(it & SI_NEXTIMASK)){
+					it = si_cnexti(S, it);
+					sp = &S->s_mstate[cand->m_i][SI_INST(it)];
+					continue;
+				}
+
+				break;
+			}	
+		} while(++cand != m_end);
 
 		// no candidate
 		if(UNLIKELY(m_cost > X->x_beta)){
@@ -1138,7 +1190,7 @@ candidate:
 
 		xidx mi = m_cand->m_i;
 
-		dv("%s:%u [%s:%u] -- candidate low bound: %g (%g)  beta: %g (%g)\n",
+		dv("%s:%u [%s:%zu] -- candidate low bound: %g (%g)  beta: %g (%g)\n",
 				fhk_dsym(S->G, X->d_xi), X->d_xinst,
 				fhk_dsym(S->G, mi), m_inst,
 				m_cost, costf_invS(&S->G->models[mi], m_cost),
@@ -1150,10 +1202,10 @@ candidate:
 #if FHK_DEBUG
 		X->d_mi = mi;
 #endif
+		X->m = *(struct xmodel_bw *) m;
 		X->m_ei = m_cand->m_ei;
 		X->m_inst = m_inst;
 		X->m_sp = sp;
-		X->m = *(struct xmodel_bw *) m;
 		M_betaS = costf_invS(m, m_beta);
 		M_costS = 0;
 
@@ -1183,16 +1235,15 @@ candidate:
 		do {
 			ssiter si;
 			bitmap *ss;
-			struct fhk_shadow *w;
 			xinst inst;
 
 			{
 				ss = S->s_sstate[s_edge->idx];
-				opt_ssiter osi = p_ssiter(S, s_edge->map, X->m_inst);
+				opt_ssiter osi = mapE_ssiter(S, s_edge->map, X->m_inst);
 				si = OSI_SI(osi);
 
 				if(UNLIKELY(!OSI_VALID(osi)))
-					continue; // empty set: cost 0
+					continue; // empty set: no penalty
 			}
 
 			for(;;){
@@ -1205,11 +1256,10 @@ candidate:
 					if(LIKELY(state & SW_EVAL))
 						goto shadow_penalty;
 
-					w = &S->G->shadows[s_edge->idx];
+					struct fhk_shadow *w = &S->G->shadows[s_edge->idx];
+					xinst scanto;
 
-					// given variables get the checkall optimization, so this is almost
-					// always going to be computed
-					if(LIKELY(s_edge->flags & W_COMPUTED)){
+					if(s_edge->flags & W_COMPUTED){
 						if(UNLIKELY(!S->s_vstate[w->xi])){
 							S_vexpandsp(S, w->xi);
 							goto shadow_compute_chain;
@@ -1250,29 +1300,16 @@ shadow_failed:
 shadow_compute:
 							S_compute_value(S, w->xi, inst);
 						}
+
+						scanto = scanv_computed(S, w->xi, w->group, inst+1);
 					}else{
-						bitmap *missing = S->s_vmstate[w->xi];
-
-						if(UNLIKELY(missing == BM_ALL0))
-							goto shadow_checkall;
-
-						if(LIKELY(!missing || bm_isset(missing, inst))){
-							J_vref(S, w->xi, inst);
-
-							missing = S->s_vmstate[w->xi];
-							if(LIKELY(missing == BM_ALL0))
-								goto shadow_checkall;
-
-							if(UNLIKELY(!missing || bm_isset(missing, inst)))
-								JE_nvalue(S, w->xi, inst);
-						}
+						S_get_given1(S, w->xi, inst);
+						scanto = scanv_given(S, w->xi, w->group, inst+1);
 					}
 
-					// this instance check only (shadow->var is implicit ident)
-					uint64_t pass = !!S_check1(S, w, inst);
-					ss[SW_BMIDX(inst)] |= (SW_EVAL | pass) << SW_BMOFF(inst);
+					S_checkscan(S, ss, w, inst, scanto);
 
-					if(!pass)
+					if(!((ss[SW_BMIDX(inst)] >> SW_BMOFF(inst)) & SW_PASS))
 						goto shadow_penalty;
 				}
 
@@ -1280,12 +1317,6 @@ shadow_compute:
 			}
 
 			continue;
-
-shadow_checkall:
-			S_checkspace(S, w, ss);
-
-			if((ss[SW_BMIDX(inst)] >> SW_BMOFF(inst)) & SW_PASS)
-				continue;
 
 shadow_penalty:
 			M_costS += s_edge->penalty;
@@ -1316,7 +1347,7 @@ shadow_penalty:
 
 			{
 				xsp = S->s_vstate[p_edge->idx];
-				opt_ssiter osi = p_ssiter(S, p_edge->map, X->m_inst);
+				opt_ssiter osi = mapE_ssiter(S, p_edge->map, X->m_inst);
 				si = OSI_SI(osi);
 
 				if(UNLIKELY(!OSI_VALID(osi)))
@@ -1395,88 +1426,119 @@ param_solved:       // solved under bound, we good
 	}
 }
 
-static uint64_t S_check1(struct fhk_solver *S, struct fhk_shadow *w, xinst inst){
-	static const void *L[] = { &&f32_ge, &&f32_le, &&f64_ge, &&f64_le, &&u8_m64 };
-	void *vp = S->s_value[w->xi];
+static void S_checkscan(struct fhk_solver *S, bitmap *bm, struct fhk_shadow *w, xinst inst,
+		xinst end){
 
-	goto *L[w->guard];
+	static const void *_label[]    = { &&f32_ge, &&f32_le, &&f64_ge, &&f64_le, &&u8_m64 };
+	static const uint8_t _stride[] = { 4,        4,        8,        8,        1 };
 
-f32_ge: return ((float *)vp)[inst] >= w->arg.f32;
-f32_le: return ((float *)vp)[inst] <= w->arg.f32;
-f64_ge: return ((double *)vp)[inst] >= w->arg.f64;
-f64_le: return ((double *)vp)[inst] <= w->arg.f64;
-u8_m64: return !!((1ULL << ((uint8_t *)vp)[inst]) & w->arg.u64);
+	const void *L = _label[w->guard];
+	size_t stride = _stride[w->guard];
+	void *vp = S->s_value[w->xi] + stride*inst;
+	bm += SW_BMIDX(inst);
+	uint64_t offset = SW_BMOFF(inst);
+	xinst num = end - inst;
+	bitmap state = *bm;
+
+	float f32 = w->arg.f32;
+	double f64 = w->arg.f64;
+	uint64_t u64 = w->arg.u64;
+	uint64_t ok = 0;
+
+	goto *L;
+
+f32_ge: ok = *(float *)vp >= f32; goto next;
+f32_le: ok = *(float *)vp <= f32; goto next;
+f64_ge: ok = *(double *)vp >= f64; goto next;
+f64_le: ok = *(double *)vp <= f64; goto next;
+u8_m64: ok = !!((1ULL << *(uint8_t *)vp) & u64); goto next;
+
+next:
+	ok |= SW_EVAL;
+	state |= ok << offset;
+
+	if(!--num){
+		*bm = state;
+		return;
+	}
+
+	vp += stride;
+	offset = (offset + 2) & 0x3f;
+
+	if(!offset){
+		*bm++ = state;
+		state = *bm;
+	}
+
+	goto *L;
 }
 
-static void S_checkspace(struct fhk_solver *S, struct fhk_shadow *w, bitmap *state){
-	int64_t n = S->g_shape[w->group];
-
-	assert(n > 0);
-	xinst inst = 0;
-
-	do {
-		uint64_t m = 2 * min((uint64_t)n, 32ull);
-		uint64_t i = 0;
-		n -= 32;
-		bitmap sv = 0xaaaaaaaaaaaaaaaaull; // 10101...1010 (SP_EVAL set for each)
-
-		do {
-			// TODO: this can be written a lot better (inline the checks),
-			// it's not very perf sensitive though, because shadows are cached
-			sv |= ((uint64_t)!!S_check1(S, w, inst++)) << i;
-			i += 2;
-		} while(i < m);
-
-		*state++ = sv;
-	} while(n > 0);
-}
-
-AINLINE static void S_get_given(struct fhk_solver *S, xidx xi, xmap map, xinst inst){
+static void S_get_given(struct fhk_solver *S, xidx xi, xmap map, xinst inst){
 	assert(V_GIVEN(&S->G->vars[xi]));
 
-	// fast path, everything is already given, no need to look at the mapping
-	if(LIKELY(S->s_vmstate[xi] == BM_ALL0))
+	if(LIKELY(map == MAP_IDENT)){
+		S_get_given1(S, xi, inst);
 		return;
+	}
 
-	S_pexpand(S, map, inst);
-
-	ssiter3p sip;
-	xinst sinst, sinum;
-	p_ssiter3(S, map, inst, &sip, &sinst, &sinum);
-
-	if(UNLIKELY(!sinum))
-		return;
-
-	S_get_missing_si3ne(S, xi, sip, sinst, sinum);
+	// this is either a given parameter or we are collecting a given result.
+	// either way, there is no guarantee that the map is expanded.
+	fhk_subset ss = S_expandumap(S, map, inst);
+	if(LIKELY(!SS_ISEMPTY(ss))){
+		ssiter3p ip;
+		xinst first, num;
+		si3_ss(ss, &ip, &first, &num);
+		S_get_given_si3(S, xi, ip, first, num);
+	}	
 }
 
-static void S_get_missing_si3ne(struct fhk_solver *S, xidx xi, ssiter3p sip, xinst sinst,
-		xinst sinum){
-
-	assert(sinum > 0);
-
+AINLINE static bitmap *S_touch_vmstate(struct fhk_solver *S, xidx xi, xinst inst){
 	bitmap *missing = S->s_vmstate[xi];
 
-	if(UNLIKELY(!missing)){
-		J_vref(S, xi, sinst);
-		missing = S->s_vmstate[xi];
-		if(LIKELY(missing == BM_ALL0))
-			return;
-		if(UNLIKELY(!missing || !bm_isset(missing, sinst)))
-			JE_nvalue(S, xi, sinst);
+	if(LIKELY(missing))
+		return missing;
+
+	J_vref(S, xi, inst);
+
+	missing = S->s_vmstate[xi];
+	if(UNLIKELY(!missing))
+		JE_nvalue(S, xi, inst);
+
+	return missing;
+}
+
+AINLINE static void S_get_missingi(struct fhk_solver *S, xidx xi, xinst inst, xinst end,
+		bitmap *missing){
+
+	while(bm_findi(missing, &inst, end)){
+		J_vref(S, xi, inst);
+		if(UNLIKELY(bm_isset(missing, inst)))
+			JE_nvalue(S, xi, inst);
 	}
+}
+
+static void S_get_given1(struct fhk_solver *S, xidx xi, xinst inst){
+	bitmap *missing = S_touch_vmstate(S, xi, inst);
+
+	if(!bm_isset(missing, inst))
+		return;
+
+	J_vref(S, xi, inst);
+	if(UNLIKELY(bm_isset(missing, inst)))
+		JE_nvalue(S, xi, inst);
+}
+
+static void S_get_given_si3(struct fhk_solver *S, xidx xi, ssiter3p ip, xinst inst, xinst num){
+	bitmap *missing = S_touch_vmstate(S, xi, inst);
 
 	for(;;){
-		xinst end = sinst + sinum;
-
-		while(bm_find1_iv(missing, &sinst, end)){
-			J_vref(S, xi, sinst);
-			if(UNLIKELY(!bm_isset(missing, sinst)))
-				JE_nvalue(S, xi, sinst);
-		}
-
-		SI3_NEXTI(sip, sinst, sinum);
+		S_get_missingi(S, xi, inst, inst+num, missing);
+		SI3_NEXTI(ip, inst, num);
 	}
+}
+
+static void S_get_giveni(struct fhk_solver *S, xidx xi, xinst inst, xinst end){
+	S_get_missingi(S, xi, inst, end, S_touch_vmstate(S, xi, inst));
 }
 
 // xi must be uncomputed with a chain, use S_get_value* if you're unsure
@@ -1508,7 +1570,7 @@ static void S_compute_value(struct fhk_solver *S, xidx xi, xinst inst){
 
 	for(int32_t i=0;i<m->p_cparam;i++){
 		fhk_edge e = m->params[i];
-		opt_ssiter osi = p_ssiter(S, e.map, m_inst);
+		opt_ssiter osi = mapE_ssiter(S, e.map, m_inst);
 		if(UNLIKELY(!OSI_VALID(osi)))
 			continue;
 		S_get_computed_si(S, OSI_SI(osi), e.idx);
@@ -1527,19 +1589,21 @@ static void S_compute_value(struct fhk_solver *S, xidx xi, xinst inst){
 
 	for(int32_t i=0;i<m->p_param;i++){
 		fhk_edge e = m->params[i];
-		S_collect_mape(S, &cm->edges[e.a], e.idx, e.map, m_inst);
+		S_mapE_collect(S, &cm->edges[e.ex], e.idx, e.map, m_inst);
 	}
 
 	fhk_mcedge *mce = cm->edges + cm->np;
 	assert(m->p_return > 0);
 
+	// TODO: you can compute noretbuf (for edges at least) easily at runtime, even for umaps
 	if(LIKELY(m->flags & M_NORETBUF)){
 		size_t r_ei = 0;
 
 		do {
 			fhk_edge e = m->returns[r_ei];
+			// expanding value buffer also expands shape/space map
 			S_vexpandvp(S, e.idx);
-			p_directref(S, mce, e.idx, e.map, m_inst);
+			mapE_directref(S, mce, e.idx, e.map, m_inst);
 			mce++;
 		} while(++r_ei < m->p_return);
 	}else{
@@ -1555,8 +1619,8 @@ static void S_compute_value(struct fhk_solver *S, xidx xi, xinst inst){
 			fhk_edge e = m->returns[r_ei];
 			S_vexpandvp(S, e.idx);
 			size_t sz = S->G->vars[e.idx].size;
+			// mce->n can be 0, no problem
 			mce->n = S_map_size(S, e.map, m_inst);
-			// 0 is so rare and arena_alloc handles it just fine, no need to special-case
 			mce->p = vbuf[r_ei] = arena_alloc(S->arena, sz*mce->n, sz);
 			mce++;
 		} while(++r_ei < m->p_return);
@@ -1570,11 +1634,11 @@ unpackvalue:
 		// S_compute_model has expanded the map.
 		size_t sz = S->G->vars[xi].size;
 		void **mp = RBUF(mi, m, m_inst);
-		void *src = mp[m_e.a] + sz*p_packidxofe(S, m->returns[m_e.a].map, m_inst, inst);
+		void *src = mp[m_e.ex] + sz*mapE_indexof(S, m->returns[m_e.ex].map, m_inst, inst);
 		memcpy(S->s_value[xi] + sz*inst, src, sz);
 	}
 
-	dv("%s:%u -- solved value [%s]\n", fhk_dsym(S->G, xi), inst, dstrvalue(S, xi, inst));
+	dv("%s:%zu -- solved value [%s]\n", fhk_dsym(S->G, xi), inst, dstrvalue(S, xi, inst));
 }
 
 AINLINE static void S_get_computed_si(struct fhk_solver *S, ssiter it, xidx xi){
@@ -1590,32 +1654,24 @@ AINLINE static void S_get_computed_si(struct fhk_solver *S, ssiter it, xidx xi){
 }
 
 // every instance of xi in the mapping must have a value!
-AINLINE static void S_collect_mape(struct fhk_solver *S, fhk_mcedge *e, xidx xi, xmap map,
+AINLINE static void S_mapE_collect(struct fhk_solver *S, fhk_mcedge *e, xidx xi, xmap map,
 		xinst m_inst){
 
 	size_t sz = S->G->vars[xi].size;
 	void *vp = S->s_value[xi];
 
-	if(LIKELY(P_ISIDENT(map))){
+	if(LIKELY(map == MAP_IDENT)){
 		e->p = vp + sz*m_inst;
 		e->n = 1;
 		return;
 	}
 
-	if(LIKELY(P_ISSPACE(map))){
-		assert(S->g_shape[map] != FHK_NINST); // must be expanded
-		e->p = vp;
-		e->n = S->g_shape[map];
-		return;
-	}
+	fhk_subset ss = mapE_subset(S, map, m_inst);
 
-	assert(P_ISUSER(map));
-	fhk_subset ss = S->u_map[map & P_UREF][m_inst];
-	assert(ss != SS_UNDEF);
-
-	if(LIKELY(SS_ISIVAL(ss))){
-		e->p = vp + sz*PK_FIRST(SS_IIVAL(ss));
-		e->n = PK_N1(SS_IIVAL(ss));
+	// this also handles the empty set (PK_N1(SS_EMPTYSET) = 0)
+	if(LIKELY(!SS_ISCOMPLEX(ss))){
+		e->p = vp + sz*PK_FIRST(ss);
+		e->n = PK_N1(ss);
 		return;
 	}
 
@@ -1664,90 +1720,74 @@ AINLINE static void *sbuf_alloc_init(struct fhk_solver *S, size_t size){
 	return S->b_mem[0];
 }
 
-AINLINE static void p_directref(struct fhk_solver *S, fhk_mcedge *e, xidx xi, xmap map,
+AINLINE static fhk_subset mapE_subset(struct fhk_solver *S, xmap map, xinst inst){
+	assert(map != MAP_IDENT);
+	anymap ms = S->s_mapstate[map];
+	assert(!(MAP_ISNONCONST(map) && !ms.imap));
+	fhk_subset ss = LIKELY(MAP_ISCONST(map)) ? ms.kmap : ms.imap[inst];
+	assert(ss != SS_UNDEF);
+	return ss;
+}
+
+AINLINE static void mapE_directref(struct fhk_solver *S, fhk_mcedge *e, xidx xi, xmap map,
 		xinst m_inst){
 
 	void *vp = S->s_value[xi];
 
-	if(LIKELY(P_ISIDENT(map))){
+	if(LIKELY(map == MAP_IDENT)){
 		e->p = vp + S->G->vars[xi].size * m_inst;
 		e->n = 1;
 	}else{
-		assert(P_ISSPACE(map)); // user maps can't have direct refs (at least currently)
+		// user maps can't have direct refs (at least currently), so this is a space map
+		// (and therefore starts from zero)
+		assert((uint64_t)map < S->G->ng);
 		e->p = vp;
-		e->n = S->g_shape[map];
+		e->n = PK_N1(S->s_mapstate[map].kmap);
 	}
 }
 
-AINLINE static opt_ssiter p_ssiter(struct fhk_solver *S, xmap map, xinst inst){
-	if(LIKELY(P_ISIDENT(map)))
+AINLINE static opt_ssiter mapE_ssiter(struct fhk_solver *S, xmap map, xinst inst){
+	if(LIKELY(map == MAP_IDENT))
 		return OSI_SIV(inst);
 
-	if(LIKELY(P_ISSPACE(map))){
-		assert(S->g_shape[map] != FHK_NINST);
-		return OSI_V(!!S->g_shape[map], SI_SPACE(S->g_shape[map]));
-	}
+	fhk_subset ss = mapE_subset(S, map, inst);
 
-	assert(P_ISUSER(map));
-
-	fhk_subset ss = S->u_map[map & P_UREF][inst];
-
-	assert(ss != SS_UNDEF);
-
-	if(LIKELY(SS_ISIVAL(ss)))
-		return OSI_V(SS_NONEMPTY(ss), SI_RANGE(SS_IIVAL(ss)));
+	if(LIKELY(!SS_ISCOMPLEX(ss)))
+		return OSI_V(!SS_ISEMPTY(ss), SS_IIVAL(ss));
 	else
-		return OSI_SIV(SI_CFIRST(inst, map & P_UREF, SS_CIVAL(ss, 0)));
-}
-
-AINLINE static void p_ssiter3(struct fhk_solver *S, xmap map, xinst inst,
-		ssiter3p *sip, xinst *sinst, xinst *sinum){
-
-	if(LIKELY(P_ISIDENT(map))){
-		*sip = 0;
-		*sinst = inst;
-		*sinum = 1;
-		return;
-	}
-
-	if(LIKELY(P_ISSPACE(map))){
-		assert(S->g_shape[map] != FHK_NINST);
-		*sip = 0;
-		*sinst = 0;
-		*sinum = S->g_shape[map];
-		return;
-	}
-
-	assert(P_ISUSER(map));
-	si3_ss(S->u_map[map & P_UREF][inst], sip, sinst, sinum);
+		return OSI_SIV(SI_CFIRST(map, inst, SS_CIVAL(ss, 0)));
 }
 
 // note: this assumes `inst` is in the mapping.
 // if eg. a usermap does something stupid, then this will return bogus values.
-AINLINE static xinst p_packidxofe(struct fhk_solver *S, xmap map, xinst m_inst, xinst inst){
-	// check this first, idents won't end up in retbufs so often
-	if(LIKELY(P_ISSPACE(map)))
-		return inst;
-
-	if(LIKELY(P_ISIDENT(map)))
+AINLINE static xinst mapE_indexof(struct fhk_solver *S, xmap map, xinst m_inst, xinst inst){
+	if(map == MAP_IDENT)
 		return 0;
 
-	assert(P_ISUSER(map));
-	fhk_subset ss = S->u_map[map & P_UREF][m_inst];
+	fhk_subset ss = mapE_subset(S, map, m_inst);
 
+	// ss can not be empty, because by assumtion it contains `inst`.
 	if(LIKELY(SS_ISIVAL(ss)))
-		return inst - PK_FIRST(SS_IIVAL(ss));
+		return inst - PK_FIRST(ss);
 
-	return ss_cpackidxof(ss, inst);
+	return ss_cindexof(ss, inst);
+}
+
+AINLINE static xmap map_toext(struct fhk_solver *S, xmap map){
+	return MAP_ISCONST(map) ? (map - S->G->ng) : map;
+}
+
+AINLINE static xmap map_fromext(struct fhk_solver *S, xmap map){
+	return MAP_ISCONST(map) ? (map + S->G->ng) : map;
 }
 
 AINLINE static void si3_ss(fhk_subset ss, ssiter3p *sip, xinst *sinst, xinst *sinum){
 	assert(ss != SS_UNDEF);
 
-	uint32_t ival = LIKELY(SS_ISIVAL(ss)) ? SS_IIVAL(ss) : SS_CIVAL(ss, 0);
-	*sip = ss;
+	uint32_t ival = UNLIKELY(SS_ISCOMPLEX(ss)) ? SS_CIVAL(ss, 0) : SS_IIVAL(ss);
+	*sip = UNLIKELY(SS_ISCOMPLEX(ss)) ? ss : 0;
 	*sinst = PK_FIRST(ival);
-	*sinum = LIKELY(ss) ? PK_N1(ival) : 0;
+	*sinum = PK_N1(ival);
 }
 
 AINLINE static void si3_complex(fhk_subset ss, ssiter3p *sip, xinst *sinst, xinst *sinum){
@@ -1762,16 +1802,16 @@ AINLINE static void si3_complex(fhk_subset ss, ssiter3p *sip, xinst *sinst, xins
 NOINLINE static ssiter si_cnexti(struct fhk_solver *S, ssiter it){
 	// we are looking for the first interval such that PK_FIRST(pk) >= SS_INST(it),
 	// and we know the low SI_HINT_BITS bits of it, so we binary search the block containing it.
-
-	fhk_subset ss = S->u_map[SI_UREF(it)][SI_UREF_INST(it)];
-	uint64_t n = SS_NUMI(ss);
-	uint64_t b = n >> SI_HINT_BITS;
-	uint64_t a = 0;
+	
+	fhk_subset ss = mapE_subset(S, SI_MAP(it), SI_MAP_INST(it));
+	uint32_t n = SS_CNUMI(ss);
+	uint32_t b = n >> SI_HINT_BITS;
+	uint32_t a = 0;
 	uint32_t *p = SS_CPTR(ss);
 	xinst prev = SI_INST(it);
 
 	while(a < b){
-		uint64_t i = a + ((b - a) >> 1);
+		uint32_t i = a + ((b - a) >> 1);
 		xinst first = PK_FIRST(p[((i+1) << SI_HINT_BITS)-1]);
 		a = first < prev ? (i+1) : a;
 		b = first < prev ? b : i;
@@ -1800,15 +1840,15 @@ AINLINE static void si3_collect_ne(void *dest, void *src, size_t sz, ssiter3p ip
 	}
 }
 
-static xinst ss_cpackidxof(fhk_subset ss, xinst inst){
+static xinst ss_cindexof(fhk_subset ss, xinst inst){
 	assert(SS_ISCOMPLEX(ss));
 
 	uint32_t *pk = SS_CPTR(ss);
-	size_t off = 0;
+	uint32_t off = 0;
 
 	for(;;){
-		size_t i = PK_FIRST(*pk);
-		size_t n = PK_N(*pk);
+		uint32_t i = PK_FIRST(*pk);
+		uint32_t n = PK_N(*pk);
 
 		if(inst - i <= n)
 			return (inst - i) + off;
@@ -1822,7 +1862,7 @@ static size_t ss_csize(fhk_subset ss){
 	assert(SS_ISCOMPLEX(ss));
 
 	uint32_t *pk = SS_CPTR(ss);
-	size_t num = SS_NUMI(ss);
+	size_t num = SS_CNUMI(ss);
 
 	// num+1 total intervals, each length is n(ival)+1
 	int64_t size = num+1;
@@ -1835,6 +1875,25 @@ static size_t ss_csize(fhk_subset ss){
 	return size;
 }
 
+AINLINE static xinst scanv_computed(struct fhk_solver *S, xidx xi, xgrp group, xinst inst){
+	ssp *sp = S->s_vstate[xi] + inst;
+	xinst end = PK_N(S->s_mapstate[group].kmap);
+
+	while(inst <= end){
+		if(!(sp->state & SP_VALUE))
+			break;
+		inst++;
+		sp++;
+	}
+
+	return inst;
+}
+
+AINLINE static xinst scanv_given(struct fhk_solver *S, xidx xi, xgrp group, xinst inst){
+	xinst end = PK_N1(S->s_mapstate[group].kmap);
+	return bm_findi(S->s_vmstate[xi], &inst, end) ? inst : end;
+}
+
 static bitmap *bm_alloc(struct fhk_solver *S, xinst num, bitmap init){
 	size_t n = ALIGN(num, 64) / 8;
 	bitmap *bm = arena_alloc(S->arena, sizeof(*bm)*n, alignof(*bm));
@@ -1843,34 +1902,92 @@ static bitmap *bm_alloc(struct fhk_solver *S, xinst num, bitmap init){
 	return bm;
 }
 
-AINLINE static void bm_clear(bitmap *b, xinst inst){
-	b[inst >> 6] &= ~(1ULL << (inst & 0x3f));
+static bitmap *bm_getall0(struct fhk_solver *S, xinst n){
+	// recycle all-0 bitmaps, they will never be written to
+	if(LIKELY(S->bm0_size >= n))
+		return S->bm0_intern;
+
+	// PK_N is faster than PK_N1, so use zero-based counting here.
+	// n must be >0, otherwise we would have returned
+	int32_t num = n--;
+
+	// make a large enough alloc to hold any currently known group size.
+	// in particular, if all shapes are provided at the beginning, this will only
+	// allocate one bitmap in the solver's lifetime.
+	// note: we don't have to special-case empty sets here:
+	//   * PK_N(SS_UNDEF) = 1
+	//   * PK_N(SS_EMPTYSET) = -1
+	for(int32_t i=0;i<S->G->ng;i++)
+		num = max(num, PK_NS(S->s_mapstate[i].kmap));
+
+	// back to one-based counting
+	num++;
+
+	S->bm0_size = ALIGN(num, 64);
+	S->bm0_intern = bm_alloc(S, num, 0);
+	return S->bm0_intern;
+}
+
+AINLINE static void bm_cleari(bitmap *bm, xinst inst, xinst num){
+	assert(num > 0);
+
+	// we can do better than the usual bit clearing method (create and apply a mask) here
+	// (not that this function is in the hot path or anything, but it's a fun trick).
+	// we know that all the bits we want to clear are ones.
+	// what zeroes a repeated run of ones? addition!
+	// there's 2 cases to consider here:
+	//     (1) 111xxxxx
+	//     (2) xx111xxx
+	// case (1) is easy: just add 1 to the start of the run. case (2) requires a bit more
+	// care: adding 1 to the start of the run is the same as zeroing the ones and adding
+	// 1 after the end of the run, so we have to cancel that add
+
+	bm = &bm[inst >> 6];
+
+	bitmap m = *bm;
+	xinst start = inst & 0x3f;
+	xinst end = start + num;
+	bitmap last = 1ULL << end;
+	m += 1ULL << start;
+	m -= end < 64 ? last : 0;
+	*bm = m;
+
+	xinst zeroed = 64 - start;
+	int32_t left = num - zeroed;
+
+	while(left > 0){
+		m = *++bm;
+		m++;
+		last = 1ULL << left;
+		m -= left < 64 ? last : 0;
+		*bm = m;
+		left -= 64;
+	}
 }
 
 AINLINE static bool bm_isset(bitmap *b, xinst inst){
 	return !!(b[inst >> 6] & (1ULL << (inst & 0x3f)));
 }
 
-AINLINE static bool bm_find1_iv(bitmap *bm, xinst *inst, xinst end){
+AINLINE static bool bm_findi(bitmap *bm, xinst *inst, xinst end){
 	xinst pos = *inst;
 
-	xinst nblocks = (end - pos) >> 6;
-	xinst block = pos & ~0x3f;
+	xinst offset = pos & ~0x3f;
+	bitmap *endbm = bm + (end >> 6);
 	bm += pos >> 6;
 	bitmap m = *bm & ((~0ull) << (pos & 0x3f));
 
 	for(;;){
 		if(m){
-			xinst i = block + __builtin_ctz(m);
+			xinst i = offset + __builtin_ctzl(m);
 			*inst = i;
 			return i < end;
 		}
 
-		if(!nblocks)
+		if(bm == endbm)
 			return false;
 
-		nblocks--;
-		block += 64;
+		offset += 64;
 		m = *++bm;
 	}
 }
@@ -1884,29 +2001,6 @@ static ssp *ssp_alloc(struct fhk_solver *S, size_t n, ssp init){
 	return sp;
 }
 
-static void r_copyroots(struct fhk_solver *S, size_t nv, struct fhk_req *req){
-	S->r_nv = 0;
-
-	for(size_t i=0;i<nv;i++){
-		struct fhk_req r = req[i];
-
-		if(UNLIKELY(!r.ss))
-			continue;
-
-		if(r.flags & FHKF_NPACK)
-			S->s_value[r.idx] = r.buf;
-
-		struct rootv *root = &S->r_roots[S->r_nv++];
-		xinst inst, num;
-		si3_ss(r.ss, &root->ip, &inst, &num);
-
-		root->xi = r.idx;
-		root->inst = inst;
-		root->num = num;
-		root->buf = r.buf;
-	}
-}
-
 // for debugging use only -- same caveats as fhk_dsym, not suitable for multithreading,
 // can overrun buffers, etc.
 __attribute__((unused))
@@ -1918,8 +2012,7 @@ static const char *dstrvalue(struct fhk_solver *S, xidx xi, xinst inst){
 
 	if(ISVI(xi)){
 		struct fhk_var *x = &S->G->vars[xi];
-		if(V_GIVEN(x) && S->s_vmstate[xi] != BM_ALL0
-				&& (!S->s_vmstate[xi] || (bm_isset(S->s_vmstate[xi], inst))))
+		if(V_GIVEN(x) && (!S->s_vmstate[xi] || (bm_isset(S->s_vmstate[xi], inst))))
 			return "(no value given)";
 		else if(V_COMPUTED(x) && (!S->s_vstate[xi] || !(S->s_vstate[xi][inst].state & SP_VALUE)))
 			return "(no value computed)";
