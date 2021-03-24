@@ -8,7 +8,6 @@ local plan = require "fhk.plan"
 local view = require "fhk.view"
 local graph = require "fhk.graph"
 local compile = require "fhk.compile"
-local conv = require "model.conv"
 local ffi = require "ffi"
 local C = ffi.C
 
@@ -34,41 +33,41 @@ local inspect = ffi.metatype([[
 	}
 })
 
----- tracer ----------------------------------------
+---- tracing ----------------------------------------
 
-local function tracer(ctx)
-	local tracer = setmetatable({
-		symbols = ctx.symbols,
-		ctypes  = {}
-	}, tracer_mt)
+-- XXX: this method has multiple caveats:
+--     (1) since debug.getinfo doesn't give us the actual cdata/function pointer, we have to
+--         match the name, which means that calling fhkD_continue with a different name
+--         will not trigger the hook.
+--     (2) for the same reason, calling another C function as fhkD_continue will
+--         incorrectly trigger the hook.
+--     (3) continuing the solver without calling fhkD_continue directly will not trigger the hook.
+-- 
+-- an alternative implementation could check a trace flag in fhkD_continue, but that's not
+-- a great solution either, because it complicates fhkD_continue just to get some debug
+-- output...
+local hook_continue = (function()
+	local callback
 
-	for _,node in pairs(ctx.nodeset.vars) do
-		tracer.ctypes[ctx.mapping.nodes[node]] = ffi.typeof("$*", node.ctype)
-		
-		if node.create then
-			ctx.M.vars[ctx.mapping.nodes[node]].trace = true
+	local hook = function()
+		local info = debug.getinfo(2)
+		if info.name == "fhkD_continue" and info.what == "C" then
+			callback()
+			callback = nil
+			debug.sethook(hook, "c", 0)
 		end
 	end
 
-	for _,node in pairs(ctx.nodeset.models) do
-		ctx.M.models[ctx.mapping.nodes[node]].trace = true
+	return function(f)
+		if not callback then
+			debug.sethook(hook, "c")
+		end
+		callback = f
 	end
+end)()
 
-	return tracer
-end
-
-function tracer_mt:__call(driver, status, arg)
-	if status == C.FHKS_VREF then
-		self:trace_vref(driver, arg.s_vref)
-	elseif status == C.FHKS_MODCALL then
-		self:trace_modcall(driver, arg.s_modcall)
-	end
-end
-
-function tracer_mt.__index:trace_vref(driver, vref)
-	local S = driver.S
+local function trace_vref(S, vref, ctype, name)
 	local x = inspect(ctypes.inspect.G(S), vref.idx):ref()
-	local ctype = self.ctypes[vref.idx]
 	local value = {}
 
 	for i=0, ctypes.inspect.shape(S, x.group)-1 do
@@ -76,19 +75,17 @@ function tracer_mt.__index:trace_vref(driver, vref)
 		local s
 		if vp then
 			s = string.format("%6s", tostring(ffi.cast(ctype, vp)[0]):sub(1,6))
-			if i == vref.inst then
-				s = cli.bold(s)
-			end
+			if i == vref.inst then s = cli.bold(s) end
 		else
 			s = i == vref.inst and cli.red "(none)" or "      "
 		end
 		table.insert(value, s)
 	end
 
-	io.stdout:write(
+	io.stderr:write(
 		"< ",
 		string.format("%3d:%-3d", vref.idx, vref.inst),
-		cli.green(self.symbols[vref.idx]),
+		cli.green(name),
 		cli.yellow(" -> "),
 		"[ ",
 		table.concat(value, " "),
@@ -96,8 +93,7 @@ function tracer_mt.__index:trace_vref(driver, vref)
 	)
 end
 
-function tracer_mt.__index:trace_modcall(driver, modcall)
-	local S = driver.S
+local function trace_modcall(S, modcall, signature, name)
 	local G = ctypes.inspect.G(S)
 	local mref = modcall.mref
 	local m = inspect(G, mref.idx):ref()
@@ -105,25 +101,97 @@ function tracer_mt.__index:trace_modcall(driver, modcall)
 
 	for i=modcall.np, modcall.np+modcall.nr-1 do
 		local xi = m.returns[i-modcall.np].idx
-		local ctype = self.ctypes[xi]
-		local vp = ffi.cast(ctype, modcall.edges[i].p)
+		local vp = ffi.cast(signature[i].ctype, modcall.edges[i].p)
 
-		table.insert(output, string.format("%s: [", cli.green(self.symbols[xi])))
+		table.insert(output, string.format("%s: [", cli.green(signature[i].name)))
 		for j=0, tonumber(modcall.edges[i].n)-1 do
 			table.insert(output, string.format("%6s", tostring(vp[j]):sub(1, 6)))
 		end
 		table.insert(output, "]")
 	end
 
-	io.stdout:write(
-		"m ",
+	io.stderr:write(
+		"@ ",
 		string.format("%3d:%-3d", mref.idx, mref.inst),
-		cli.blue(self.symbols[mref.idx]),
+		cli.blue(name),
 		cli.red(string.format(" (%f)", ctypes.inspect.cost(S, mref.idx, mref.inst))),
 		cli.yellow(" -> "),
 		table.concat(output, " "),
 		"\n"
 	)
+end
+
+local function trace_mapcall(S, mref)
+	io.stderr:write(
+		"~ ",
+		"TODO MAPCALL",
+		"\n"
+	)
+end
+
+local function hook_vref(jump, D, node)
+	local ctype, name = ffi.typeof("$*", node.ctype), node.name
+
+	return function(S, ...)
+		hook_continue(function()
+			trace_vref(S, D.arg_ref, ctype, name)
+		end)
+		return jump(S, ...)
+	end
+end
+
+local function hook_modcall(jump, D, node, nodeset)
+	local signature = {}
+	for i,r in ipairs(node.returns) do
+		local x = nodeset.vars[r.target]
+		signature[#node.params+i-1] = {
+			name  = x.name,
+			ctype = ffi.typeof("$*", x.ctype)
+		}
+	end
+	local name = node.name
+
+	return function(S, ...)
+		hook_continue(function()
+			trace_modcall(S, ffi.cast(ctypes.modcall_p, D.arg_ptr), signature, name)
+		end)
+		return jump(S, ...)
+	end
+end
+
+local function hook_mapcall(jump, D)
+	return function(S, ...)
+		hook_continue(function()
+			trace_mapcall(S, D.arg_ref)
+		end)
+		return jump(S, ...)
+	end
+end
+
+local function trace(info)
+	local disp, jump, mapping = info.dispatch, info.jumptable, info.mapping
+
+	for _,node in pairs(info.nodeset.vars) do
+		if node.create then
+			local idx = disp.vref[mapping.nodes[node]]
+			jump[idx] = hook_vref(jump[idx], disp, node)
+			jit.off(jump[idx])
+		end
+	end
+
+	for _,node in pairs(info.nodeset.models) do
+		local idx = disp.modcall[mapping.nodes[node]]
+		jump[idx] = hook_modcall(jump[idx], disp, node, info.nodeset)
+		jit.off(jump[idx])
+	end
+
+	for i,_ in pairs(info.mapping.umaps) do
+		if type(i) == "number" then
+			local idx = disp.mapcall[i]
+			jump[idx] = hook_mapcall(jump[idx], disp)
+			jit.off(jump[idx])
+		end
+	end
 end
 
 ---- test runner ----------------------------------------
@@ -172,7 +240,7 @@ end
 
 function testbuilder_mt.__index:automap_edges(edges)
 	for _,rule in ipairs(edges) do
-		table.insert(self.auto_edges, { rule[1], view.builtin_maps[rule[2]] })
+		table.insert(self.auto_edges, rule)
 	end
 end
 
@@ -199,8 +267,8 @@ end
 function testbuilder_mt.__index:runner(P, V)
 	local V = view.composite(V)
 
-	if #self.auto_edges > 0 then
-		V:add(view.match_edges(self.auto_edges))
+	for _,e in ipairs(self.auto_edges) do
+		V:add(view.edge_view(unpack(e)))
 	end
 
 	local updaters = {}
@@ -258,7 +326,11 @@ function testgroup_mt.__index:view()
 		translate[var.name:match("^.-#(.+)$")] = var.field
 	end
 
-	local ctype = soa.ctfrombands(bands)
+	-- TODO: soa_view shouldn't require a metatype, just make it cast to struct vec * instead.
+	local ctype = ffi.metatype(
+		soa.ctfrombands(bands),
+		{ __len = function(self) return ffi.cast("struct vec *", self).n_used end }
+	)
 	local instance = ctype()
 
 	local V = view.translate_view(translate, view.soa_view(ctype, instance))
@@ -331,7 +403,7 @@ function testsolver_mt.__index:runner(P, V, check)
 		table.insert(roots, {var.name, alias=var.alias, subset=var.subset})
 	end
 
-	local solver = compile.solver_template()
+	local solver = compile.solver_trampoline(string.format("tester@%p", roots))
 	plan.add_solver(P, V, solver, plan.decl_solver(roots))
 
 	return function(data, params)
@@ -403,10 +475,10 @@ local session_g_mt = { __index=setmetatable({}, {__index=session_f}) }
 local function session(debugger)
 	local nodeset, impls = graph.nodeset(), {}
 
-	local plan = plan.create {
+	local plan = {
 		runtime_alloc = debugger.runtime_alloc,
 		static_alloc  = debugger.static_alloc,
-		trace         = cli.verbosity <= -2 and tracer
+		trace         = cli.verbosity <= -2 and trace
 	}
 
 	local ses = setmetatable({
@@ -550,7 +622,7 @@ local flags, help = cli.def(function(opt)
 end)
 
 return {
-	tracer = tracer,
+	trace = trace,
 	cli = {
 		main = main,
 		help = "[options]...\n\n"..help,

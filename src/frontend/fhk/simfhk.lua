@@ -2,7 +2,6 @@ local cli = require "cli"
 local plan = require "fhk.plan"
 local ctypes = require "fhk.ctypes"
 local compile = require "fhk.compile"
-local debugger = require "fhk.debugger"
 local edgemaps = require "fhk.edgemaps"
 local graph = require "fhk.graph"
 local view = require "fhk.view"
@@ -13,7 +12,7 @@ local function inject(env, def)
 	local p = {
 		static_alloc  = env.m2.sim:allocator("static"),
 		runtime_alloc = env.m2.sim:allocator("frame"),
-		trace         = cli.verbosity <= -2 and debugger.tracer,
+		trace         = cli.verbosity <= -2 and require("fhk.debug").trace,
 	}
 
 	local modview = view.modelset_view(def.impls, p.static_alloc)

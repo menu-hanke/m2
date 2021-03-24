@@ -1,6 +1,6 @@
 local ctypes = require "fhk.ctypes"
 local simfhk = require "fhk.simfhk"
-local fhkdbg = require "fhk.debugger"
+local fhkdbg = require "fhk.debug"
 local def = require "fhk.def"
 
 return {

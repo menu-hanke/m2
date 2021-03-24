@@ -638,55 +638,56 @@ end, function()
 	end
 end)
 
--- TODO
---test_tracing = _(function()
---	model "g#model" {
---		params "g#y",
---		returns "g#x" *as "double",
---		impl.Lua("models", "id")
---	}
---end, function()
---
---	local num = 0
---
---	m2.fhk.tracer(function(ctx)
---		for _,node in pairs(ctx.nodeset.models) do
---			ctx.M.models[ctx.mapping.nodes[node]].trace = true
---		end
---		for _,node in pairs(ctx.nodeset.vars) do
---			if node.create then
---				ctx.M.vars[ctx.mapping.nodes[node]].trace = true
---			end
---		end
---
---		return function(D, status, arg)
---			if num == 0 then assert(status == ffi.C.FHKS_VREF and arg.s_vref.idx == 0) end
---			if num == 1 then assert(status == ffi.C.FHKS_MODCALL and arg.s_modcall.mref.idx == -1) end
---			if num > 1 then assert(false) end
---			num = num+1
---		end
---	end)
---
---	local g_ct = ffi.typeof [[
---		struct {
---			double y;
---		}
---	]]
---
---	local g = g_ct(0)
---
---	local solver = m2.fhk.solver(
---		m2.fhk.view()
---			:add(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
---			:add(m2.fhk.group("g", m2.fhk.struct_view(g_ct, g))),
---		"g#x"
---	)
---
---	function m2.export.test()
---		solver()
---		assert(num == 2)
---	end
---end)
+test_tracing = _(function()
+	model "g#model" {
+		params "g#y",
+		returns "g#x" *as "double",
+		impl.LuaJIT("models", "id")
+	}
+end, function()
+
+	local state = "vref y"
+
+	m2.fhk.tracer(function(info)
+		local y_disp = info.dispatch.vref[info.mapping.nodes[info.nodeset.vars["g#y"]]]
+		local mod_disp = info.dispatch.modcall[info.mapping.nodes[info.nodeset.models["g#model"]]]
+
+		local y_old = info.jumptable[y_disp]
+		local mod_old = info.jumptable[mod_disp]
+
+		info.jumptable[y_disp] = function(...)
+			assert(state == "vref y")
+			state = "call mod"
+			return y_old(...)
+		end
+
+		info.jumptable[mod_disp] = function(...)
+			assert(state == "call mod")
+			state = "done"
+			return mod_old(...)
+		end
+	end)
+
+	local g_ct = ffi.typeof [[
+		struct {
+			double y;
+		}
+	]]
+
+	local g = g_ct(0)
+
+	local solver = m2.fhk.solver(
+		m2.fhk.view()
+			:add(m2.fhk.edge_view("=>$", "ident"))
+			:add(m2.fhk.group("g", m2.fhk.struct_view(g_ct, g))),
+		"g#x"
+	)
+
+	function m2.export.test()
+		solver()
+		assert(state == "done")
+	end
+end)
 
 test_hierarchy_map = _(function()
 	derive ("container#sum" *as "double") {

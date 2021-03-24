@@ -68,7 +68,7 @@ function composite_mt.__index:edge(mod, var, edge, ...)
 			local m, s = view:edge(mod, var, edge, ...)
 			if m then
 				map, scalar = map
-					and error(string.format("view not unique: edge %s - >%s", mod.name, var.name))
+					and error(string.format("view not unique: edge %s -> %s", mod.name, var.name))
 					or m, s
 			end
 		end

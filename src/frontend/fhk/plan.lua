@@ -97,19 +97,18 @@ local function materialize(plan, nodeset)
 	for view, vs in pairs(views) do
 		local ns = prune_nodeset(transform.materialize(nodeset, view), vs)
 		local ginfo, dispinfo = driver.build(ns, plan.static_alloc)
+		if plan.trace then
+			plan.trace({
+				G = ginfo.G, mapping = ginfo.mapping, symbols = ginfo.syms,
+				dispatch = dispinfo.dispatch, jumptable = dispinfo.jumptable,
+				nodeset = ns
+			})
+		end
 		local pushstate = compile.pushstate_uncached(
 			ginfo.G,
 			transform.shape(ginfo.mapping, view),
 			obtain
 		)
-		--local tracer = plan.trace and plan.trace {
-		--	view    = view,
-		--	nodeset = ns,
-		--	G       = G,
-		--	mapping = mapping,
-		--	M       = M,
-		--	symbols = syms,
-		--}
 		for _,vsdef in ipairs(vs) do
 			compile.bind_trampoline(
 				vsdef.trampoline,
