@@ -1,31 +1,37 @@
 local code = require "code"
 local cfg = require "control.cfg"
+local run = require "control.run"
 
--- protocol:
+----- protocol ------
 -- every function takes 3 parameters:
---   stack: the call stack
---   idx: call stack top
---   continue: entry at the top of call stack (ie. stack[idx+1])
--- to continue, adjust call stack and call continue.
--- you can continue multiple times.
+--   stack:   the call stack
+--   bottom:  active call stack start
+--   top:     active call stack top (next jump)
+-- the interval stack[bottom..top] (inclusive) is the active call stack.
+-- the active call stack must be copied if it is reused (ie. branching).
+-- you are allowed to mutate the active call stack, but not stack[0..bottom-1].
+-- the active call stack is always non-empty (iow. top >= bottom).
 -- branch functions do not return a value.
+-- always tail-call the next jump, unless branching. (don't expect a jump to ever return,
+-- it's perfectly valid to eg. coroutine.yield() out after the call stack becomes empty).
 --
 -- some patterns:
 --
 -- * call f and then return to g:
---   stack[idx+1] = continue
---   return f(stack, idx+1, g)
+--   stack[top+1] = g
+--   return f(stack, bottom, top+1)
 --
 -- * tail call f:
---   return f(stack, idx, continue)
+--   return f(stack, bottom, top)
 --
 -- * return:
---   return continue(stack, idx-1, stack[idx])
-
+--   return stack[top](stack, bottom, top-1)
+--
 -- note: the reason sim is an upvalue but stack is a parameter is to make it easier to
 -- let simulator code define user functions (they already have a sim reference in the env).
 -- stack could be made an upvalue as well but it probably doesn't have a performance impact.
 -- (in fact, parameter might be faster because then it's kept in a register?)
+
 local function compile_node(sim, node, emit, emitted, emitting)
 	if type(node) == "function" then
 		return node
@@ -45,8 +51,8 @@ local function compile_node(sim, node, emit, emitted, emitting)
 		if type(emitting[node]) ~= "function" then
 			emitting[node] = load([[
 				local _target
-				return function(stack, idx, continue)
-					return _target(stack, idx, continue)
+				return function(stack, bottom, top)
+					return _target(stack, bottom, top)
 				end
 			]], string.format("=(trampoline@%s)", node))()
 		end
@@ -78,17 +84,16 @@ end
 -- note: usually you don't want to emit this directly but special case it instead
 local function emit_nothing()
 	return load([[
-		return function(stack, idx, continue)
-			return continue(stack, idx-1, stack[idx])
+		return function(stack, bottom, top)
+			return stack[top](stack, bottom, top-1)
 		end
 	]], "nothing")()
 end
 
 -- equivalent to throwing an exception/longjmping out of the instruction
 -- (to the previous branchpoint)
-local exit_insn = function(stack, idx, continue) end
 local function emit_exit()
-	return exit_insn
+	return run.exit
 end
 
 ---- `primitive` ----------------------------------------
@@ -108,13 +113,13 @@ local function emit_primitive(node)
 	src:emitf([[
 		local _f = f
 
-		return function(stack, idx, continue)
+		return function(stack, bottom, top)
 			local rv = _f(%s)
 			if rv == false then return end
 			if rv ~= nil then
-				return rv(stack, idx, continue)
+				return rv(stack, bottom, top)
 			end
-			return continue(stack, idx-1, stack[idx])
+			return stack[top](stack, bottom, top-1)
 		end
 	]], table.concat(argt, ","))
 
@@ -138,14 +143,14 @@ local function emit_chain_primitive(f, narg, args, chain)
 	src:emitf([[
 		local _next, _f = chain, f
 
-		return function(stack, idx, continue)
+		return function(stack, bottom, top)
 			local rv = _f(%s)
 			if rv == false then return end
 			if rv ~= nil then
-				stack[idx+1] = continue
-				return rv(stack, idx+1, _next)
+				stack[top+1] = _next
+				return rv(stack, bottom, top+1)
 			end
-			return _next(stack, idx, continue)
+			return _next(stack, bottom, top)
 		end
 	]], table.concat(argt, ","))
 
@@ -162,9 +167,9 @@ local function emit_chain_call(call, chain)
 	src:emitf([[
 		local _next, _call = chain, call
 		
-		return function(stack, idx, continue)
-			stack[idx+1] = continue
-			return _call(stack, idx+1, _next)
+		return function(stack, bottom, top)
+			stack[top+1] = _next
+			return _call(stack, bottom, top+1)
 		end
 	]])
 
@@ -217,13 +222,30 @@ end
 -- make swap the `all` tag to `guarded-branch`)
 
 local function emit_branch_nothing(src, istail)
-	src:emitf("%s continue(stack, idx-1, stack[idx])", istail and "return" or "")
+	if istail then
+		src:emit("return stack[top](stack, bottom, top-1)")
+	else
+		-- preserve stack top since we are not in tailcall position.
+		-- this copies an extra element, that's ok, in optimized graphs `nothing` calls
+		-- are always in tail position.
+		src:emit([[
+			do
+				local stack, bottom, top = copystack(stack, bottom, top)
+				stack[top](stack, bottom, top-1)
+			end
+		]])
+	end
 end
 
 local function emit_branch_call(src, upvalues, call, istail, id)
 	id = string.format("_branch_%s", id)
 	upvalues[id] = call
-	src:emitf("%s %s(stack, idx, continue)", istail and "return" or "", id)
+
+	if istail then
+		src:emitf("return %s(stack, bottom, top)", id)
+	else
+		src:emitf("%s(copystack(stack, bottom, top))", id)
+	end
 end
 
 local function emit_branch(src, upvalues, node, emit, istail, id)
@@ -240,7 +262,7 @@ end
 
 local function emit_any(node, emit, sim)
 	if #node.edges == 0 then
-		return exit_insn
+		return run.exit
 	end
 
 	if #node.edges == 1 then
@@ -248,9 +270,9 @@ local function emit_any(node, emit, sim)
 	end
 
 	local src = code.new()
-	local upvalues = { _sim = sim }
+	local upvalues = { _sim = sim, copystack = run.copystack }
 	src:emit([[
-		return function(stack, idx, continue)
+		return function(stack, bottom, top)
 			_sim:branch()
 			local fp = _sim:fp()
 	]])
@@ -274,7 +296,6 @@ end
 return {
 	nothing   = emit_nothing,
 	exit      = emit_exit,
-	exit_insn = exit_insn,
 	primitive = emit_primitive,
 	all       = emit_all,
 	any       = emit_any,

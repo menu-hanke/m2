@@ -119,6 +119,63 @@ test_optional = function()
 	end
 end
 
+test_callstack_overwrite = function()
+	local num = 0
+
+	local branch = cfg.all {
+		cfg.any {
+			cfg.all{},
+			cfg.all{}
+		},
+		cfg.all{}
+	}
+
+	exec(cfg.all {
+		branch,
+		branch,
+		cfg.primitive(function() num = num + 1 end)
+	})
+
+	assert(num == 2^2)
+end
+
+test_deep_callstack = function()
+	local num = 0
+
+	local branch = cfg.all {
+		cfg.any {
+			cfg.all{},
+			cfg.all{}
+		},
+		cfg.all{}
+	}
+
+	exec(cfg.all {
+		cfg.all {
+			cfg.all {
+				cfg.all {
+					cfg.all {
+						cfg.all {
+							branch,
+							branch,
+							branch,
+							branch,
+							cfg.primitive(function() num = num + 1 end)
+						},
+						cfg.all{}
+					},
+					cfg.all{}
+				},
+				cfg.all{}
+			},
+			cfg.all{}
+		},
+		cfg.all{}
+	})
+
+	assert(num == 2^4)
+end
+
 test_guard = function()
 	local a, b = false, false
 
@@ -156,9 +213,10 @@ test_custom_func = function()
 	local n = 0
 
 	exec(cfg.all {
-		function(stack, idx, continue)
+		function(stack, bottom, top)
+			local continue, top = stack[top], top-1
 			for i=1, 10 do
-				continue(stack, idx-1, stack[idx])
+				continue(control.copystack(stack, bottom, top))
 			end
 		end,
 		cfg.primitive(function() n = n+1 end)

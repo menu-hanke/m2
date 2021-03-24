@@ -144,14 +144,15 @@ local function io_input_insn(env, input)
 		local num, desc = file:num(), file:desc()
 		local slot = fi.slot
 		local sim = env.m2.sim
-		table.insert(insn, function(stack, idx, continue)
+		table.insert(insn, function(stack, bottom, top)
+			local continue, top = stack[top], top-1
 			sim:savepoint()
 			local fp = sim:fp()
 			for i=1, num do
 				sim:enter()
 				ioinfo(slot, desc, i, num)
 				io(file:read(i))
-				continue(stack, idx-1, stack[idx])
+				continue(control.copystack(stack, bottom, top))
 				sim:load(fp)
 			end
 		end)
