@@ -126,7 +126,7 @@ static_assert(8*sizeof(fhk_map) >= G_UMAPBITS);
 #define MAP_UMAP(map,ng)    ((map) + (((map) >= 0) ? (ng) : 0)) /* usermap: const maps are offsetted by space maps */
 #define MAP_ISCONST(map)    ((map) >= 0) /* mapped set doesn't depend on instance in source group */
 #define MAP_ISNONCONST(map) ((map) < 0)  /* mapped set depends on instance */
-#define MAP_ISUSER(map,ng)  ((map) != MAP_IDENT && ((uint8_t)(map)) < (ng)) /* is it a user map? */
+#define MAP_ISUSER(map,ng)  ((map) != MAP_IDENT && ((uint8_t)(map)) >= (ng)) /* is it a user map? */
 
 // error handling
 #define E_META(n,f,x)       ((FHKEI_##f << (4*((n)+1))) | ((uint64_t)(x) << (16*(n))))

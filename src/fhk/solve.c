@@ -509,7 +509,8 @@ void fhkS_setroot(struct fhk_solver *S, fhk_idx xi, fhk_subset ss, void *buf){
 	si3_complex(ss, &ip, &inst, &num);
 
 	for(;;){
-		fhkS_setrooti(S, xi, inst, num, buf + inst*size, flags);
+		fhkS_setrooti(S, xi, inst, num, buf, flags);
+		buf += num*size;
 		SI3_NEXTI(ip, inst, num);
 	}
 }

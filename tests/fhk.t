@@ -259,16 +259,6 @@ test_solver_no_chain_check = _(function()
 	solution { x = {2} }
 end)
 
-test_edge_reordering = _(function()
-	graph {
-		m { "->x", 1 },
-		m { "y,x->z", function(y,x) return {y[1]+x[1]} end }
-	}
-
-	given { y = {2} }
-	solution { z = {3} }
-end)
-
 test_solver_stress_candidates = _(function()
 	local ms = {}
 
@@ -378,6 +368,29 @@ test_solver_umap_association = _(function()
 	graph(G)
 	given(xs)
 	solution { x = data }
+end)
+
+test_edge_reordering = _(function()
+	graph {
+		m { "->x", 1 },
+		m { "y,x->z", function(y,x) return {y[1]+x[1]} end }
+	}
+
+	given { y = {2} }
+	solution { z = {3} }
+end)
+
+test_usermap_complex_retbuf = _(function()
+	graph {
+		u { "complex",
+			ufunc(cf{0, 2}, "k"),
+			ufunc(function(inst) return (inst == 0 or inst == 2) and {0} or {} end, "i")
+		},
+		m { "g# ->x:complex", cf{123,456} }
+	}
+
+	n.g = 1
+	solution { x = {123, na, 456} }
 end)
 
 test_prune_omit_model = _(function()
