@@ -243,9 +243,8 @@ local edge_view_mt = {
 	__index = {
 		edge = function(self, model, var, edge)
 			if self.mapname ~= edge.map then return end
-			if self.from and graph.groupof(model.name) ~= self.from then return end
-			if self.to == "$" then if graph.groupof(model.name) ~= graph.groupof(var.name) then return end
-			elseif self.to then if graph.groupof(var.name) ~= self.to then return end end
+			if not self.from(graph.groupof(model.name), graph.groupof(var.name)) then return end
+			if not self.to(graph.groupof(var.name), graph.groupof(model.name)) then return end
 			return self.map, self.scalar
 		end
 	}
@@ -257,6 +256,45 @@ local builtin_maps = {
 	ident = { map=C.FHKMAP_IDENT, scalar=true }
 }
 
+local function parserule(src)
+	if src:sub(1, 1) == "!" then
+		local rule = parserule(src:sub(2))
+		return function(...) return not rule(...) end
+	end
+
+	if src:match("|") then
+		local rules = {}
+		for x in src:gmatch("([^|])+") do
+			table.insert(rules, parserule(x))
+		end
+		return function(a, b)
+			for _,r in ipairs(rules) do
+				if r(a, b) then
+					return true
+				end
+				return false
+			end
+		end
+	end
+
+	if src == "$" then
+		return function(a, b) return a == b end
+	end
+
+	return function(name)
+		return name == src
+	end
+end
+
+local function true_()
+	return true
+end
+
+-- rule syntax:
+--     [!]from1|from2|...|fromN=>[!]to1|to2|...|toM
+-- the bang (!) is optional and inverts the entire selection.
+-- the pipe (|) is an OR operator.
+-- fromX and toX are literal group names, or $ for the group on the other side of the edge.
 local function edge_view(rule, map, scalar)
 	if type(map) == "string" then
 		local builtin = builtin_maps[map] or error(string.format("invalid builtin map: '%s'", map))
@@ -267,8 +305,8 @@ local function edge_view(rule, map, scalar)
 	local from, to, name = rule:gsub("%s", ""):match("^([^=]*)=>([^:]*):?(.*)$")
 
 	return setmetatable({
-		from    = from ~= "" and from or nil,
-		to      = to ~= "" and to or nil,
+		from    = from ~= "" and parserule(from) or true_,
+		to      = to ~= "" and parserule(to) or true_,
 		mapname = name ~= "" and name or nil,
 		map     = map,
 		scalar  = scalar

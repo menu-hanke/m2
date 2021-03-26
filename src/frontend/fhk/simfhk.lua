@@ -38,16 +38,16 @@ local function inject(env, def)
 		end,
 
 		solver         = function(view, ...)
+			if not view then error("missing view") end
 			local solver = plan.decl_solver({...})
 			local trampoline = compile.solver_trampoline(plan.desc_solver(solver))
 			plan.add_solver(p, view, trampoline, solver)
 			return trampoline
 		end,
 
-		subset         = function(idx)
-			return ctypes.ssfromidx(idx, allocf)
-		end,
-
+		subset         = function(idx) return ctypes.ssfromidx(idx, allocf) end,
+		range          = ctypes.range,
+		unit           = ctypes.unit,
 		composite      = view.composite,
 		group          = view.group,
 		struct_view    = view.struct_view,

@@ -174,12 +174,26 @@ local function ss1(from, to)
 	return ss1ns(from, from-to)
 end
 
+local function unit(inst)
+	return 0xfffffffe00000000ull + inst
+end
+
 local function space(n)
+	-- TODO: this can be made branchless by defining SS_EMPTYSET as [any] [any] 0001 0000
+	-- this is not a valid complex set (interval no is zero and pointer is not aligned)
+	-- and it preserves all the good characteristics (PK_N1(SS_EMPTYSET)=0)
+	-- then testing for emptyset can either be (uint32_t)ss == 0x00010000 or just
+	-- ((uint32_t) >> 16 == 1)
+
 	if n > 0 then
 		return lshift(bnot(ffi.cast("uint64_t", n)), 16) + 0xfffffffc00020000ull
 	else
 		return emptyset
 	end
+end
+
+local function range(from, n)
+	return from + space(n)
 end
 
 local function complex(ip, n)
@@ -275,7 +289,9 @@ return {
 	status        = status,
 	inspect       = inspect,
 	ss1           = ss1,
+	unit          = unit,
 	space         = space,
+	range         = range,
 	complex       = complex,
 	ssfromidx     = ssfromidx,
 	ssfromidx_ffi = ssfromidx_ffi,
