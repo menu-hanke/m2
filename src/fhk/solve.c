@@ -1111,8 +1111,11 @@ x_failed: // -> X_cost
 		uint8_t where = X->where;
 
 		if(LIKELY(where == XS_PARAM)){
-			X->x_sp->cost = costf((struct fhk_model *)&X->m, X->m_costS + X_cost);
-			X->m_sp->cost = X->x_sp->cost;
+			// we get a lower bound for the model whose parameter we tried to solve.
+			// however we *don't* get a useful low bound for the lower variable,
+			// but that's ok, we will try another candidate and any exit will update
+			// X->x_sp->cost.
+			X->m_sp->cost = costf((struct fhk_model *)&X->m, X->m_costS + X_cost);
 			goto candidate;
 		}
 

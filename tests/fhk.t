@@ -259,6 +259,26 @@ test_solver_no_chain_check = _(function()
 	solution { x = {2} }
 end)
 
+test_solver_lowbound_update = _(function()
+	graph {
+		m { "->z [a>=0+100]", 1},
+		m { "z->y", 1 },
+		m { "y->x", 1 },
+		m { "->x", 2, k=50 }
+	}
+
+	-- solve x
+	--     try y->x
+	--         solve y
+	--             try z->y
+	--             fail, update z
+	--         fail, update y
+	--         (this asserts if y lowbound is too high)
+	
+	given { a={-1} }
+	solution { x={2} }
+end)
+
 test_solver_stress_candidates = _(function()
 	local ms = {}
 
