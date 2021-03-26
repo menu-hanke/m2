@@ -171,6 +171,7 @@ local function injectlibs(env, opt)
 	require("control").inject(env)
 	require("soa").inject(env)
 	require("vmath").inject(env)
+	require("memoize").inject(env)
 	injectio(env)
 	if opt and opt.fhkdef then
 		fhk.inject(env, opt.fhkdef)
