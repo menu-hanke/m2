@@ -21,5 +21,11 @@ return {
 
 	prod_scalar   = function(a, b)
 		return a*b
+	end,
+
+	seqv          = function(w, v)
+		for i=0, #v-1 do
+			v[i] = w*i
+		end
 	end
 }

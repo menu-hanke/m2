@@ -742,3 +742,43 @@ end, function()
 		assert(sum.container_sum[1] == -2*(6+0+8))
 	end
 end)
+
+test_hierarchy_inverse = _(function()
+	derive "container#y" {
+		params "container#w",
+		returns "element#y" *as "double",
+		impl.LuaJIT("models", "seqv")
+	}
+end, function()
+	local container_ct = ffi.typeof "struct { double w; }"
+	local containers = ffi.new(ffi.typeof("$[3]", container_ct), { {w=1}, {w=2}, {w=3} })
+
+	local c2e = { [0]={}, {3,4}, {0,1,2,5,6} }
+	local e2c = { [0]=2,2,2,1,1,2,2 }
+
+	local f_c2e = m2.fhk.ufunc(function(inst) return m2.fhk.subset(c2e[inst]) end)
+	local f_e2c = m2.fhk.ufunc(function(inst) return m2.fhk.subset{e2c[inst]} end)
+	local map_c2e = m2.fhk.umap(f_c2e, f_e2c)
+
+	local solver = m2.fhk.solver(
+		m2.fhk.view()
+			:add(m2.fhk.group("container",
+				m2.fhk.edge_view("=>container", "ident"),
+				m2.fhk.edge_view("=>element", map_c2e),
+				m2.fhk.struct_view(container_ct, function(inst) return containers[inst] end),
+				m2.fhk.fixed_size(3)
+			))
+			:add(m2.fhk.group("element", m2.fhk.fixed_size(7))),
+		"element#y"
+	)
+
+	function m2.export.test()
+		local y = solver().element_y
+		assert(
+			y[3] == 0*2 and y[4] == 1*2
+		)
+		assert(
+			y[0] == 0*3 and y[1] == 1*3 and y[2] == 2*3 and y[5] == 3*3 and y[6] == 4*3
+		)
+	end
+end)
