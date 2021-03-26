@@ -1,8 +1,6 @@
-grid.o: grid.c grid.h sim.h def.h conf.h
 mem.o: mem.c mem.h def.h conf.h
 sim.o: sim.c def.h mem.h sim.h conf.h
 vec.o: vec.c vec.h sim.h def.h conf.h
-vgrid.o: vgrid.c vgrid.h vec.h sim.h grid.h def.h
 vmath.o: vmath.c vmath.h
 fhk/build.o: fhk/build.c fhk/fhk.h fhk/../mem.h fhk/../def.h fhk/def.h
 fhk/co_libco.o: fhk/co_libco.c fhk/fhk.h fhk/../mem.h fhk/../def.h fhk/def.h \
@@ -26,9 +24,8 @@ frontend/fhk/driver.o: frontend/fhk/driver.c frontend/fhk/../../fhk/fhk.h \
  frontend/fhk/../../fhk/../mem.h frontend/fhk/../../fhk/../def.h \
  frontend/fhk/driver.h
 frontend/m2_cdef.lua: frontend/m2_cdef.lua.h frontend/../sim.h \
- frontend/../vec.h frontend/../grid.h frontend/../vgrid.h \
- frontend/../mem.h frontend/../def.h frontend/../vmath.h \
- frontend/../model/model.h frontend/../model/conv.h \
+ frontend/../vec.h frontend/../mem.h frontend/../def.h \
+ frontend/../vmath.h frontend/../model/model.h frontend/../model/conv.h \
  frontend/../model/model_Const.h frontend/../model/model_Lua.h \
  frontend/../model/model_R.h frontend/../fhk/fhk.h frontend/../fhk/def.h \
  frontend/fhk/driver.h

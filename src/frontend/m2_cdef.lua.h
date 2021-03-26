@@ -4,8 +4,6 @@ require("ffi").cdef [[
 
 #include "../sim.h"
 #include "../vec.h"
-#include "../grid.h"
-#include "../vgrid.h"
 #include "../mem.h"
 #include "../vmath.h"
 

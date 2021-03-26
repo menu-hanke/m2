@@ -45,7 +45,7 @@ LIBCO_LIB         ?= $(shell pkg-config --libs libco)
 M2_EXECUTABLE = m2
 M2_LIBS       = $(LUAJIT_LIB)
 
-M2_O = sim.o mem.o grid.o vec.o vmath.o vgrid.o\
+M2_O = sim.o mem.o vec.o vmath.o \
 	   fhk/solve.o fhk/build.o fhk/prune.o fhk/debug.o\
 	   frontend/main.o frontend/fhk/driver.o
 M2_C = $(M2_O:.o=.c)
