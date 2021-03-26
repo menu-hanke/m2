@@ -219,33 +219,9 @@ local function color(escape)
 	return setmetatable({escape=escape}, color_mt)
 end
 
----- output ----------------------------------------
-
-local levels = {
-	error   = 2,
-	warn    = 1,
-	print   = 0,
-	verbose = -1,
-	debug   = -2
-}
-
-local function install_logger(mod)
-	local ignore = function() end
-
-	mod.install_logger = function(verbosity, print_)
-		print_ = print_ or function(...) print(string.format(...)) end
-		mod.verbosity = verbosity
-		for name,v in pairs(levels) do
-			mod[name] = v >= verbosity and print_ or ignore
-		end
-	end
-
-	return mod
-end
-
 --------------------------------------------------------------------------------
 
-return install_logger({
+return {
 	parse            = parse,
 	combine          = combine,
 	once             = once,
@@ -265,4 +241,4 @@ return install_logger({
 	blue             = color "\x1b[34m",
 	magenta          = color "\x1b[35m",
 	cyan             = color "\x1b[36m"
-})
+}

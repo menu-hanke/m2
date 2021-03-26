@@ -11,8 +11,7 @@ local C = ffi.C
 local function inject(env, def)
 	local p = {
 		static_alloc  = env.m2.sim:allocator("static"),
-		runtime_alloc = env.m2.sim:allocator("frame"),
-		trace         = cli.verbosity <= -2 and require("fhk.debug").trace,
+		runtime_alloc = env.m2.sim:allocator("frame")
 	}
 
 	local modview = view.modelset_view(def.impls, p.static_alloc)

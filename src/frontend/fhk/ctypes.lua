@@ -2,7 +2,7 @@ local ffi = require "ffi"
 local ctfromid = require("fhk.infer").ctfromid
 local reflect = require "lib.reflect"
 local C = ffi.C
-local bor, band, lshift, rshift, bnot = bit.bor, bit.band, bit.lshift, bit.rshift, bit.bnot
+local bor, band, lshift, rshift, arshift, bnot = bit.bor, bit.band, bit.lshift, bit.rshift, bit.arshift, bit.bnot
 
 ---- error handling ----------------------------------------
 
@@ -122,6 +122,7 @@ ffi.metatype("fhk_solver", {
 local inspect = {
 	cost  = C.fhkI_cost,
 	G     = C.fhkI_G,
+	umap  = C.fhkI_umap,
 	shape = function(...)
 		local shape = C.fhkI_shape(...)
 		return shape ~= C.FHK_NINST and shape or nil
@@ -251,28 +252,55 @@ local function ssfromidx(idx, alloc)
 	return ss1(start, pos)
 end
 
-local function ss_cnumi(ss)
-	return tonumber(band(ss, 0xffff))
+local function isival(ss)
+	return ss < 0
 end
 
-local function ss_cptr(ss)
-	return ffi.cast("int32_t *", rshift(ss, 16))
+local function iscomplex(ss)
+	return ss > emptyset
+end
+
+local function unpackcomplex(ss)
+	return ffi.cast("int32_t *", rshift(ss, 16)), tonumber(band(ss, 0xffff))
 end
 
 local function ss_size(ss)
-	local n = ss_cnumi(ss)
-	if n == 0 then
+	if not iscomplex(ss) then
 		return 1 + band(-rshift(ss, 32), 0xffff)
 	else
-		local pp = ss_cptr(ss)
+		local pp, n = unpackcomplex(ss)
 		local size = n+1
 		while n >= 0 do
-			size = size - rshift(pp[0], 16)
+			size = size - arshift(pp[0], 16)
 			pp = pp+1
 			n = n-1
 		end
 		return size
 	end
+end
+
+local function unpackrange(pk)
+	return tonumber(band(pk, 0xffff)), tonumber(band(-rshift(pk, 16), 0xffff))
+end
+
+local function rangestr(pk)
+	local first, num = unpackrange(pk)
+	if num == 0 then return tostring(first) end
+	return string.format("%d..%d", first, first+num)
+end
+
+local function ss_string(ss)
+	if ss == -1ull then return "(undef)" end
+	if ss == emptyset then return "" end
+	if isival(ss) then return rangestr(ss) end
+	local ranges = {}
+	local pp, n = unpackcomplex(ss)
+	while n >= 0 do
+		table.insert(ranges, rangestr(pp[0]))
+		pp = pp+1
+		n = n-1
+	end
+	return table.concat(ranges, ", ")
 end
 
 ---- mapping ----------------------------------------
@@ -296,6 +324,7 @@ return {
 	ssfromidx     = ssfromidx,
 	ssfromidx_ffi = ssfromidx_ffi,
 	ss_size       = ss_size,
+	ss_string     = ss_string,
 	map_user      = map_user,
 	shvalue       = ffi.typeof "fhk_shvalue",
 	modcall       = modcall_ct,

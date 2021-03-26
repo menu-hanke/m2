@@ -664,6 +664,14 @@ void *fhkI_value(struct fhk_solver *S, fhk_idx xi, fhk_inst inst){
 	return S->s_value[xi] + x->size*inst;
 }
 
+fhk_subset fhkI_umap(struct fhk_solver *S, fhk_extmap emap, fhk_inst inst){
+	xmap map = map_fromext(S, emap);
+	anymap ms = S->s_mapstate[map];
+	if(ms.kmap == SS_UNDEF)
+		return SS_UNDEF;
+	return MAP_ISCONST(map) ? ms.kmap : ms.imap[inst];
+}
+
 struct fhk_graph *fhkI_G(struct fhk_solver *S){
 	return S->G;
 }

@@ -6,6 +6,7 @@ local fio = require "fio"
 local misc = require "misc"
 local sim = require "sim"
 local scripting = require "scripting"
+local trace = require "trace"
 
 local DEFAULT_FRAMES = 16
 local DEFAULT_RSIZE  = 24
@@ -93,20 +94,11 @@ local function optargs(opt, args)
 	end
 end
 
-local function ioinfo(slot, desc, i, num)
-	if cli.verbosity <= -1 then
-		cli.verbose("%s%s%s: %s%s%s%s",
-			cli.green, slot, cli.reset,
-			cli.cyan, desc, cli.reset,
-			i and num and string.format(" [%d/%d]", i, num) or ""
-		)
-	end
-end
-
 local function io_output(env, output)
 	for slot,fp in pairs(output) do
 		local io = env.m2.output[slot]
 		if io then
+			trace("ioinfo", "output", slot, fp)
 			ioinfo(slot, fp:desc())
 			io(fp:writer())
 		end
@@ -127,7 +119,7 @@ local function io_input_insn(env, input)
 			if fp:num() > 1 then
 				table.insert(fpin, {slot=slot, fp=fp, io=io})
 			elseif fp:num() == 1 then
-				ioinfo(slot, fp:desc())
+				trace("ioinfo", "input", slot, fp, 1)
 				io(fp:read(1))
 			end
 		end
@@ -140,17 +132,15 @@ local function io_input_insn(env, input)
 	local insn = {}
 	for _,fi in ipairs(fpin) do
 		-- XXX: replace this with some kind of loop primitive in the control library
-		local file, io = fi.fp, fi.io
-		local num, desc = file:num(), file:desc()
-		local slot = fi.slot
+		local file, io, slot = fi.fp, fi.io, fi.slot 
 		local sim = env.m2.sim
 		table.insert(insn, function(stack, bottom, top)
 			local continue, top = stack[top], top-1
 			sim:savepoint()
 			local fp = sim:fp()
-			for i=1, num do
+			for i=1, file:num() do
 				sim:enter()
-				ioinfo(slot, desc, i, num)
+				trace("ioinfo", "input", slot, file, i)
 				io(file:read(i))
 				continue(control.copystack(stack, bottom, top))
 				sim:load(fp)

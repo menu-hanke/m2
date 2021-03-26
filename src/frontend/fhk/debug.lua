@@ -121,10 +121,17 @@ local function trace_modcall(S, modcall, signature, name)
 	)
 end
 
-local function trace_mapcall(S, mref)
+local function trace_mapcall(S, mref, info)
+	local ss = ctypes.inspect.umap(S, mref.idx, mref.inst)
+
 	io.stderr:write(
 		"~ ",
-		"TODO MAPCALL",
+		string.format("%3d:%-3d", mref.idx, mref.inst),
+		cli.cyan(info),
+		cli.yellow " -> ",
+		"[ ",
+		ctypes.ss_string(ss),
+		" ]",
 		"\n"
 	)
 end
@@ -159,10 +166,10 @@ local function hook_modcall(jump, D, node, nodeset)
 	end
 end
 
-local function hook_mapcall(jump, D)
+local function hook_mapcall(jump, D, info)
 	return function(S, ...)
 		hook_continue(function()
-			trace_mapcall(S, D.arg_ref)
+			trace_mapcall(S, D.arg_ref, info)
 		end)
 		return jump(S, ...)
 	end
@@ -185,10 +192,10 @@ local function trace(info)
 		jit.off(jump[idx])
 	end
 
-	for i,_ in pairs(info.mapping.umaps) do
+	for i,ufunc in pairs(info.mapping.umaps) do
 		if type(i) == "number" then
 			local idx = disp.mapcall[i]
-			jump[idx] = hook_mapcall(jump[idx], disp)
+			jump[idx] = hook_mapcall(jump[idx], disp, ufunc.name)
 			jit.off(jump[idx])
 		end
 	end
@@ -478,7 +485,6 @@ local function session(debugger)
 	local plan = {
 		runtime_alloc = debugger.runtime_alloc,
 		static_alloc  = debugger.static_alloc,
-		trace         = cli.verbosity <= -2 and trace
 	}
 
 	local ses = setmetatable({
@@ -603,10 +609,10 @@ local function main(args)
 				debugger.runtime_arena:reset()
 				local errors = test.runner(case)
 				if errors then
-					cli.print("%s %s :: %s\n%s", cli.red "[FAIL]", test.name, i,
+					print("%s %s :: %s\n%s", cli.red "[FAIL]", test.name, i,
 						stringify_errors(errors))
 				else
-					cli.verbose("%s %s :: %d", cli.green "[OK]", test.name, i)
+					verbose("%s %s :: %d", cli.green "[OK]", test.name, i)
 				end
 			end
 		end

@@ -200,6 +200,7 @@ float fhkI_cost(fhk_solver *S, fhk_idx idx, fhk_inst inst);
 fhk_inst fhkI_shape(fhk_solver *S, fhk_grp group);
 fhk_eref fhkI_chain(fhk_solver *S, fhk_idx xi, fhk_inst inst);
 void *fhkI_value(fhk_solver *S, fhk_idx xi, fhk_inst inst);
+fhk_subset fhkI_umap(fhk_solver *S, fhk_extmap map, fhk_inst inst);
 fhk_graph *fhkI_G(fhk_solver *S);
 
 fhk_prune *fhk_create_prune(fhk_graph *G);

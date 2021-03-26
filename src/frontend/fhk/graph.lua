@@ -53,10 +53,11 @@ local function umap(map, inverse, flags)
 	}
 end
 
-local function ufunc(create, flags)
+local function ufunc(create, flags, name)
 	return {
 		create = create,
-		flags  = flags
+		flags  = flags,
+		name   = name
 	}
 end
 

@@ -46,16 +46,51 @@ local function jit_cmd(stream)
 	require("jit."..module).start(unpack(argv))
 end
 
+local function verbose_cmd(stream)
+	-- -v<flags>
+	if not stream.token:match("^%-v") then
+		return
+	end
+
+	local trace = require "trace"
+	local tracemsg = require "tracemsg"
+
+	for flag in stream():sub(3):gmatch(".") do
+		local msg = tracemsg[flag] or error(string.format("invalid trace option: '%s'", flag))
+		for event,func in pairs(msg.attach) do
+			trace[event] = func
+		end
+	end
+end
+
+local function help()
+	print("usage: m2 <subcommand> [options]...")
+
+	print("\nglobal options:")
+	print("\t-h          show this help. use `m2 subcommand -h` to see help on subcommand")
+	print("\t-v<flags>   verbose output (see below for flags)")
+	print("\t-j<cmd>     perform luajit control command (see luajit docs)")
+	print("")
+
+	print("verbose output:")
+	local tracemsg = require "tracemsg"
+	local traceflags = {}
+	for flag,msg in pairs(tracemsg) do table.insert(traceflags, {flag=flag, help=msg.help}) end
+	table.sort(traceflags, function(a, b) return a.flag < b.flag end)
+	for _,t in ipairs(traceflags) do
+		print(string.format("\t%s           %s", t.flag, t.help))
+	end
+end
+
 local function main(args)
 	local misc = require "misc"
 	local cli = require "cli"
 
 	local cmd_name, cmd
 	local flags = cli.combine {
-		cli.flag("-v", "verbose"),
-		cli.flag("-q", "quiet"),
 		cli.flag("-h", "help"),
 		jit_cmd,
+		verbose_cmd,
 
 		function(stream, result) -- subcommand, this must be last
 			if not cmd then
@@ -81,14 +116,10 @@ local function main(args)
 	end
 
 	if (not cmd) or args.help then
-		print("usage: m2 <subcommand> [options]...")
-		print("\nglobal options:")
-		print("  -v/-q   verbose/quiet")
-		print("  -jcmd   pass <cmd> to luajit")
+		help()
 		return 0
 	end
 
-	cli.install_logger((args.quiet or 0) - (args.verbose or 0))
 	cmd.main(args)
 
 	return 0

@@ -4,6 +4,7 @@ local transform = require "fhk.transform"
 local graph = require "fhk.graph"
 local mem = require "fhk.mem"
 local alloc = require "alloc"
+local trace = require "trace"
 
 local function decl_root(solver, name, opt)
 	opt = opt or {}
@@ -97,13 +98,11 @@ local function materialize(plan, nodeset)
 	for view, vs in pairs(views) do
 		local ns = prune_nodeset(transform.materialize(nodeset, view), vs)
 		local ginfo, dispinfo = driver.build(ns, plan.static_alloc)
-		if plan.trace then
-			plan.trace({
-				G = ginfo.G, mapping = ginfo.mapping, symbols = ginfo.syms,
-				dispatch = dispinfo.dispatch, jumptable = dispinfo.jumptable,
-				nodeset = ns
-			})
-		end
+		trace("subgraph", {
+			G = ginfo.G, mapping = ginfo.mapping, symbols = ginfo.syms,
+			dispatch = dispinfo.dispatch, jumptable = dispinfo.jumptable,
+			nodeset = ns, full_nodeset = nodeset
+		})
 		local pushstate = compile.pushstate_uncached(
 			ginfo.G,
 			transform.shape(ginfo.mapping, view),
