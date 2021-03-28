@@ -19,7 +19,7 @@ typedef struct fhkD_dispatch {
 	union {
 		fhk_sarg arg;
 		fhk_eref arg_ref;
-		uintptr_t arg_ptr;
+		void *arg_ptr;
 	};
 } fhkD_dispatch;
 

@@ -354,8 +354,8 @@ function modelset_view_mt.__index:model(mod, name)
 	if not impl then return end
 
 	local nodename = mod.name
-	return impl.sigset, function(dispatch, _, nodeset)
-		return impl.compile(dispatch, signature(nodename, nodeset))
+	return impl.sigset, function(dispatch, _, nodeset, udata)
+		return impl.compile(dispatch, signature(nodename, nodeset), udata)
 	end
 end
 

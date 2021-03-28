@@ -9,23 +9,20 @@ fhk/debug.o: fhk/debug.c fhk/fhk.h fhk/../mem.h fhk/../def.h fhk/def.h
 fhk/prune.o: fhk/prune.c fhk/fhk.h fhk/../mem.h fhk/../def.h fhk/def.h
 fhk/solve.o: fhk/solve.c fhk/fhk.h fhk/../mem.h fhk/../def.h fhk/def.h \
  fhk/co.h
-model/conv.o: model/conv.c model/../def.h model/../mem.h model/model.h \
- model/conv.h
-model/mlib.o: model/mlib.c model/model.h model/../mem.h model/../def.h
-model/model_Const.o: model/model_Const.c model/model_Const.h model/model.h \
- model/../mem.h model/../def.h
-model/model_Lua.o: model/model_Lua.c model/model.h model/../mem.h \
- model/../def.h model/conv.h model/model_Lua.h model/loader.lua.in
-model/model_R.o: model/model_R.c model/model.h model/../mem.h model/../def.h \
- model/conv.h model/model_R.h model/loader.r.in
-model/model_SimoC.o: model/model_SimoC.c model/model_SimoC.h model/mlib.h \
- model/../def.h
+fff/err.o: fff/err.c fff/fff.h fff/../fhk/fhk.h fff/../fhk/../mem.h \
+ fff/../fhk/../def.h fff/def.h fff/lang.h fff/ff_R.h
+fff/ff_R.o: fff/ff_R.c fff/fff.h fff/../fhk/fhk.h fff/../fhk/../mem.h \
+ fff/../fhk/../def.h fff/def.h fff/lang.h fff/ff_R.h fff/signature.h \
+ fff/../fhk/def.h fff/err.h fff/loader.r.in
+fff/signature.o: fff/signature.c fff/signature.h fff/../fhk/def.h \
+ fff/../fhk/fhk.h fff/../fhk/../mem.h fff/../fhk/../def.h
+fff/state.o: fff/state.c fff/def.h fff/lang.h fff/ff_R.h fff/fff.h \
+ fff/../fhk/fhk.h fff/../fhk/../mem.h fff/../fhk/../def.h
 frontend/fhk/driver.o: frontend/fhk/driver.c frontend/fhk/../../fhk/fhk.h \
  frontend/fhk/../../fhk/../mem.h frontend/fhk/../../fhk/../def.h \
  frontend/fhk/driver.h
 frontend/m2_cdef.lua: frontend/m2_cdef.lua.h frontend/../sim.h \
  frontend/../vec.h frontend/../mem.h frontend/../def.h \
- frontend/../vmath.h frontend/../model/model.h frontend/../model/conv.h \
- frontend/../model/model_Const.h frontend/../model/model_Lua.h \
- frontend/../model/model_R.h frontend/../fhk/fhk.h frontend/../fhk/def.h \
- frontend/fhk/driver.h
+ frontend/../vmath.h frontend/../fhk/fhk.h frontend/../fhk/def.h \
+ frontend/fhk/driver.h frontend/../fff/fff.h frontend/../fff/lang.h \
+ frontend/../fff/ff_R.h

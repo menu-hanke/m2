@@ -7,14 +7,14 @@ require("ffi").cdef [[
 #include "../mem.h"
 #include "../vmath.h"
 
-#include "../model/model.h"
-#include "../model/conv.h"
-#include "../model/model_Const.h"
-#include "../model/model_Lua.h"
-#include "../model/model_R.h"
-
 #include "../fhk/fhk.h"
 #include "../fhk/def.h"
 
 #include "fhk/driver.h"
+
+// not a clean solution, but luajit can't parse the definition..
+#undef fhk_modcall
+#define fhk_modcall void
+#include "../fff/fff.h"
+#include "../fff/lang.h"
 ]]

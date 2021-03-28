@@ -200,6 +200,27 @@ local function modcall_lua_ffi(dispinfo, signature, f, name)
 	)
 end
 
+-- TODO: autoconversion:
+-- * either use ffi.new for allocation, or have a temporary conversion buffer in D
+--   (ff models can't call back into Lua, so it's ok to share the conversion buffer,
+--   and having it in D means its auto-gc'd with D)
+-- * have ff models return a broader sigset, then generate autoconversion code for
+--   each non-matching param/return
+-- * the autoconversion should be implemented separate of ff, it might be useful in other
+--   models as well
+local function modcall_fff(dispinfo, F, lang, handle, name)
+	return dispatch_template(
+		dispinfo,
+		{ F = F },
+		string.format([[
+			if C.fff%s_call(F, %s, D.arg_ptr) ~= 0 then
+				F:raise(true)
+			end
+		]], lang, tostring(ffi.cast("uint64_t", handle))),
+		string.format("modcall-fff-%s@%s", lang, name or handle)
+	)
+end
+
 local function modcall_const(dispinfo, signature, returns)
 	assert(#returns == #signature.returns)
 
@@ -495,6 +516,7 @@ return {
 	setvalue_soa_userfunc    = setvalue_soa_userfunc,
 	modcall_lua              = modcall_lua,
 	modcall_lua_ffi          = modcall_lua_ffi,
+	modcall_fff              = modcall_fff,
 	modcall_const            = modcall_const,
 	mapcall_i                = mapcall_i,
 	mapcall_k                = mapcall_k,

@@ -51,19 +51,20 @@ local function build(nodeset, alloc)
 
 	local jumptable = { [0]=dispatch_ok, [1]=dispatch_err(dispatch, syms) }
 	local dispinfo = { dispatch = dispatch, jumptable = jumptable }
+	local udata = {}
 
 	for i=0, givnum-1 do
-		table.insert(jumptable, mapping.nodes[i].create(dispinfo, i, nodeset))
+		table.insert(jumptable, mapping.nodes[i].create(dispinfo, i, nodeset, udata))
 		dispatch.vref[i] = #jumptable
 	end
 
 	for i=-G.nm, -1 do
-		table.insert(jumptable, mapping.nodes[i].create(dispinfo, i, nodeset))
+		table.insert(jumptable, mapping.nodes[i].create(dispinfo, i, nodeset, udata))
 		dispatch.modcall[i] = #jumptable
 	end
 
 	for i=-inum, knum-1 do
-		table.insert(jumptable, mapping.umaps[i].create(dispinfo, i, nodeset))
+		table.insert(jumptable, mapping.umaps[i].create(dispinfo, i, nodeset, udata))
 		dispatch.mapcall[i] = #jumptable
 	end
 

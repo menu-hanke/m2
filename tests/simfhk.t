@@ -3,6 +3,7 @@ local sim = require "sim"
 local scripting = require "scripting"
 local fhk = require "fhk"
 local ffi = require "ffi"
+local fff = require "fff"
 local fails = fails
 
 local function _(f1, f2)
@@ -569,24 +570,25 @@ end, function()
 	end
 end)
 
--- TODO
---test_R_impl = _(function()
---	derive ("g#x" *as "double") {
---		impl.R("models.r", "ret1")
---	}
---end, function()
---	local solver = m2.fhk.solver(
---		m2.fhk.view()
---			:add(m2.fhk.match_edges {{ "=>%1", m2.fhk.ident }})
---			:add(m2.fhk.group("g", m2.fhk.fixed_size(1))),
---		"g#x"
---	)
---	
---	function m2.export.test()
---		local solution = solver()
---		assert(solution.g_x[0] == 1)
---	end
---end)
+if fff.has("R") then
+	test_R_impl = _(function()
+		derive ("g#x" *as "double") {
+			impl.R("models.r", "ret1")
+		}
+	end, function()
+		local solver = m2.fhk.solver(
+			m2.fhk.view()
+				:add(m2.fhk.edge_view("=>$", "ident"))
+				:add(m2.fhk.group("g", m2.fhk.fixed_size(1))),
+			"g#x"
+		)
+		
+		function m2.export.test()
+			local solution = solver()
+			assert(solution.g_x[0] == 1)
+		end
+	end)
+end
 
 test_alias = _(gmodel_gx_Const(), function()
 	local solver = m2.fhk.solver(

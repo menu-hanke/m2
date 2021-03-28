@@ -57,7 +57,6 @@ local function inject(env, def)
 		edge_view      = view.edge_view,
 		ufunc          = edgemaps.ufunc,
 		umap           = edgemaps.umap,
-		tracer         = function(trace) p.trace = trace end
 	}
 end
 

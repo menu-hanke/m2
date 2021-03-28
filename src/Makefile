@@ -14,11 +14,9 @@ FHK_CCOPT = $(CCOPT) -fno-stack-protector
 FHK_CCWARN =
 FHK_CCDEF =
 
-# What model languages do you want to build in? You can choose any from the following:
+# What foreign model languages do you want to build in?
 # * R      Call R models (requires libR)
-# * SimoC  Call SIMO C-models (requires libffi)
-# * Lua    Call Lua models (LuaJIT). Note: these run in a different lua state than the simulator.
-MODEL_LANG        ?= R SimoC Lua
+FFF_LANG        ?= R
 
 # What implementation to use for fhk coroutines? options:
 # * builtin   fhk-builtin assembly routine (only on x86_64 sysv abi)
@@ -33,8 +31,6 @@ LUAJIT_CFLAGS     ?= $(shell pkg-config --cflags luajit)
 LUAJIT_LIB        ?= $(shell pkg-config --libs luajit)
 R_CFLAGS          ?= $(shell pkg-config --cflags libR)
 R_LIB             ?= $(shell pkg-config --libs-only-l --libs-only-L libR)
-LIBFFI_CFLAGS     ?= $(shell pkg-config --cflags libffi)
-LIBFFI_LIB        ?= $(shell pkg-config --libs libffi)
 LIBCO_CFLAGS      ?= $(shell pkg-config --cflags libco)
 LIBCO_LIB         ?= $(shell pkg-config --libs libco)
 
@@ -67,22 +63,18 @@ else ifeq (libco,$(FHK_CO))
 	FHK_CCDEF += -DFHK_CO_LIBCO $(LIBCO_CFLAGS)
 endif
 
-MODEL_O = model/mlib.o model/conv.o model/model_Const.o
-MODEL_C = $(MODEL_O:.o=.c)
+FFF_O = 
+FFF_C = $(FFFL_O:.o=.c)
 
-ifneq (,$(findstring Lua,$(MODEL_LANG)))
-	MODEL_O += model/model_Lua.o
+ifneq (,$(FFF_LANG))
+	FFF_O = fff/state.o fff/err.o fff/signature.o
 endif
 
-ifneq (,$(findstring R,$(MODEL_LANG)))
-	MODEL_O += model/model_R.o
+ifneq (,$(findstring R,$(FFF_LANG)))
+	FFF_O += fff/ff_R.o
+	CCDEF += -DFFF_R
 	M2_LIBS += $(R_LIB)
 endif
- 
-# ifneq (,$(findstring SimoC,$(MODEL_LANG)))
-# 	MODEL_O += model/model_SimoC.o
-# 	M2_LIBS += $(LIBFFI_LIB) -ldl
-# endif
 
 ################################################################################
 
@@ -103,7 +95,7 @@ valgrind: CCOPT = -g3 -O3 -march=x86-64 -fopenmp -flto -ffast-math
 valgrind: default
 
 debug: CCOPT = -g3 -fopenmp
-debug: CCDEBUG = -DDEBUG -DFHK_DEBUG
+debug: CCDEBUG = -DDEBUG -DFHK_DEBUG -DFFF_DEBUG
 debug: default
 
 ubsan: CC = clang
@@ -113,7 +105,7 @@ ubsan: CCDEBUG = -DDEBUG -DFHK_DEBUG
 ubsan: default
 
 dep:
-	$(CC) $(CCOPT) $(CCDEBUG) $(CCDEF) $(XCFLAGS) -MM *.c fhk/*.c model/*.c frontend/*/**.c \
+	$(CC) $(CCOPT) $(CCDEBUG) $(CCDEF) $(XCFLAGS) -MM *.c fhk/*.c fff/*.c frontend/*/**.c \
 		| sed -r 's|^(.*\.o:) (.*?)\.c|\2.o: \2.c|'\
 		> Makefile.dep
 	$(CC) $(CCOPT) $(CCDEBUG) $(CCDEF) $(XCFLAGS) -MM -MT frontend/m2_cdef.lua frontend/m2_cdef.lua.h\
@@ -136,7 +128,7 @@ frontend/m2_cdef.lua: frontend/m2_cdef.lua.h
 	echo ",0x00" >> $@
 
 clean:
-	bash -O globstar -c 'rm -f $(M2_EXECUTABLE) frontend/m2_cdef.lua model/*.in *.o **/*.o'
+	bash -O globstar -c 'rm -f $(M2_EXECUTABLE) frontend/m2_cdef.lua fff/*.in *.o **/*.o'
 
 .PHONY: default valgrind debug ubsan dep clean
 
@@ -144,7 +136,7 @@ clean:
 
 include Makefile.dep
 
-$(M2_EXECUTABLE): $(M2_O) $(MODEL_O)
+$(M2_EXECUTABLE): $(M2_O) $(FFF_O)
 	$(CC) $(LDFLAGS) $^ -o $@
 
 %.o: %.c
@@ -159,11 +151,5 @@ fhk/%.o: fhk/%.c
 fhk/co_libco.o: fhk/co_libco.c
 	$(CC) $(FHK_CFLAGS) -c $< -o $@
 
-model/model_R.o: model/model_R.c
+fff/ff_R.o: fff/ff_R.c
 	$(CC) $(CFLAGS) $(R_CFLAGS) -c $< -o $@
-
-model/model_SimoC.o: model/model_SimoC.c
-	$(CC) $(CFLAGS) $(LIBFFI_CFLAGS) -c $< -o $@
-
-model/model_Lua.o: model/model_Lua.c
-	$(CC) $(CFLAGS) -c $< -o $@
