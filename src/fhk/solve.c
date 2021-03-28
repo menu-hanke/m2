@@ -183,10 +183,10 @@ typedef union {
 #define SP_CHAIN              (1ULL << 31)
 #define SP_VALUE              (1ULL << 30)
 #define SP_EXPANDED           (1ULL << 29)
-#define SP_CHAIN_V(e,i)       (SP_CHAIN|((e)<<16)|(i))
+#define SP_CHAIN_V(e,i)       (SP_EXPANDED|SP_CHAIN|((e)<<16)|(i)) /* chain always implies expanded */
 #define SP_CHAIN_EI(sp)       (((sp).state >> 16) & 0xff)
 #define SP_CHAIN_INSTANCE(sp) ((sp).state & 0xffff)
-#define SP_DONEMASK           (SP_CHAIN | 0x7fffffffull)
+#define SP_DONEMASK           ((SP_CHAIN << 32) | 0x7fffffffull)
 #define SP_UMAXCOST           ((union { uint32_t u32; float f; }){.f=MAX_COST}).u32
 #define SP_DONE(sp)           (((sp).u64 & SP_DONEMASK) >= SP_UMAXCOST)
 #define SP_MARK               ((union { uint32_t u32; float f; }){.u32=0x80800000}).f

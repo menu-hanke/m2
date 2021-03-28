@@ -279,6 +279,26 @@ test_solver_lowbound_update = _(function()
 	solution { x={2} }
 end)
 
+test_solver_check_donemask = _(function()
+	-- this test depends on the order (x must be solved as root before y),
+	-- so instead of doing it properly we just spray x's and hope that one of
+	-- them is solved before y
+	local solt = { y = {1} }
+
+	local gs = {
+		s { "y>=0", name="s" },
+		m { "->y", 1 }
+	}
+
+	for i=1, 100 do
+		table.insert(gs, m { string.format("->x%d [s+100]", i), i })
+		solt[string.format("x%d", i)] = {i}
+	end
+
+	graph(gs)
+	solution(solt)
+end)
+
 test_solver_stress_candidates = _(function()
 	local ms = {}
 
