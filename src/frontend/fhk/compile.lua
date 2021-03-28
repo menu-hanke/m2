@@ -294,8 +294,8 @@ local function solver_trampoline(name)
 		:emit([[
 			local _solve, _pushstate, _popstate
 			local xpcall, traceback, error = xpcall, traceback, error
-			return function(A)
-				local ok, x = xpcall(_solve, traceback, A, _pushstate(A))
+			return function(A, B)
+				local ok, x = xpcall(_solve, traceback, A, B, _pushstate(A))
 				_popstate()
 				if not ok then error(x) end
 				return x
@@ -353,7 +353,7 @@ local function solver(dispinfo, alloc, roots, name)
 		local res_ct = res_ct
 		local _alloc = alloc
 
-		return function(A, S, arena, shape)
+		return function(A, B, S, arena, shape)
 			local result = cast(res_ct, _alloc(%d, %d))
 	]], ffi.sizeof(res_ct), ffi.alignof(res_ct))
 
@@ -371,7 +371,7 @@ local function solver(dispinfo, alloc, roots, name)
 			v.idx, v.subset)
 		elseif v.subset then -- keyed subset
 			src:emitf([[
-				local ss = A[__subset_%d]
+				local ss = B[__subset_%d]
 				local num
 				if type(ss) == "table" then
 					num = #ss

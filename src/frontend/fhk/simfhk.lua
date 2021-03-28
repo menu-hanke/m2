@@ -1,5 +1,6 @@
 local cli = require "cli"
 local plan = require "fhk.plan"
+local state = require "fhk.state"
 local ctypes = require "fhk.ctypes"
 local compile = require "fhk.compile"
 local edgemaps = require "fhk.edgemaps"
@@ -9,9 +10,11 @@ local ffi = require "ffi"
 local C = ffi.C
 
 local function inject(env, def)
+	local sim = env.m2.sim
+
 	local p = {
-		static_alloc  = env.m2.sim:allocator("static"),
-		runtime_alloc = env.m2.sim:allocator("frame")
+		static_alloc  = sim:allocator("static"),
+		runtime_alloc = sim:allocator("frame")
 	}
 
 	local modview = view.modelset_view(def.impls, p.static_alloc)
@@ -26,7 +29,7 @@ local function inject(env, def)
 		end
 	}
 
-	local allocf = env.m2.sim:allocator("frame")
+	local allocf = sim:allocator("frame")
 
 	-- don't use misc.delegate here so `p` and `def` won't be kept alive
 	env.m2.fhk = {
@@ -42,6 +45,16 @@ local function inject(env, def)
 			local trampoline = compile.solver_trampoline(plan.desc_solver(solver))
 			plan.add_solver(p, view, trampoline, solver)
 			return trampoline
+		end,
+
+		-- note: this doesn't cascade like other view functions.
+		-- you have to set it on the root view
+		incremental    = function(view, key)
+			if view.state then
+				error(string.format("view already has a specialized state: %s", view.state))
+			end
+			view.state = function(G, shapef) return state.incremental(sim, G, shapef, key) end
+			return view
 		end,
 
 		subset         = function(idx) return ctypes.ssfromidx(idx, allocf) end,

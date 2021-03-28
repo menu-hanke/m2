@@ -2,7 +2,7 @@ local compile = require "fhk.compile"
 local driver = require "fhk.driver"
 local transform = require "fhk.transform"
 local graph = require "fhk.graph"
-local mem = require "fhk.mem"
+local state = require "fhk.state"
 local alloc = require "alloc"
 local trace = require "trace"
 
@@ -84,8 +84,19 @@ local function get_roots(vsdef, nodeset, mapping)
 	return roots
 end
 
+local function compile_state(plan, view, G, shapef)
+	if view.state then
+		return view.state(G, shapef)
+	end
+
+	if not plan.shared_state then
+		plan.shared_obtain, plan.shared_release = state.shared_arena()
+	end
+
+	return compile.pushstate_uncached(G, shapef, plan.shared_obtain), plan.shared_release
+end
+
 local function materialize(plan, nodeset)
-	local obtain, release = mem.shared_arena()
 	local views = {}
 
 	for _,vsdef in ipairs(plan) do
@@ -103,10 +114,11 @@ local function materialize(plan, nodeset)
 			dispatch = dispinfo.dispatch, jumptable = dispinfo.jumptable,
 			nodeset = ns, full_nodeset = nodeset
 		})
-		local pushstate = compile.pushstate_uncached(
+		local pushstate, popstate = compile_state(
+			plan,
+			view,
 			ginfo.G,
-			transform.shape(ginfo.mapping, view),
-			obtain
+			transform.shape(ginfo.mapping, view)
 		)
 		for _,vsdef in ipairs(vs) do
 			compile.bind_trampoline(
@@ -118,7 +130,7 @@ local function materialize(plan, nodeset)
 					desc_solver(vsdef.solver)
 				),
 				pushstate,
-				release
+				popstate
 			)
 		end
 	end

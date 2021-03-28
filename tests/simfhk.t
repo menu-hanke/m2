@@ -504,7 +504,7 @@ end, function()
 	local sub = m2.fhk.subset { 0, 1, 4 }
 	
 	function m2.export.test()
-		solver({sub=sub})
+		solver(nil, {sub=sub})
 	end
 end)
 
@@ -731,5 +731,62 @@ end, function()
 		assert(
 			y[0] == 0*3 and y[1] == 1*3 and y[2] == 2*3 and y[5] == 3*3 and y[6] == 4*3
 		)
+	end
+end)
+
+test_incremental = _(function()
+	derive ("g#x" *as "double") {
+		params "g#y",
+		impl.LuaJIT("models", "id")
+	}
+end, function()
+	local g_ct = ffi.typeof "struct { double y; }"
+	local g = m2.sim:new(g_ct, "vstack")
+
+	local view = m2.fhk.view()
+		:add(m2.fhk.edge_view("=>$", "ident"))
+		:add(m2.fhk.group("g", m2.fhk.struct_view(g_ct, g)))
+	
+	local key = 0
+	
+	m2.fhk.incremental(view, function() return key end)
+
+	local solver = m2.fhk.solver(view, "g#x")
+
+	function m2.export.test()
+		g.y = 1
+		local s1 = solver()
+		assert(s1.g_x[0] == 1)
+
+		-- don't do this in real code.
+		-- this is just to show that it won't re-execute the solver.
+		g.y = 2
+		local s2 = solver()
+		assert(s2.g_x[0] == 1)
+
+		-- this should re-solve
+		key = 1
+		local s3 = solver()
+		assert(s3.g_x[0] == 2)
+
+		-- branching should also trigger a re-solve, even without changing the key
+		local fp = m2.sim:fp()
+		m2.sim:savepoint()
+		m2.sim:enter()
+		g.y = 3
+		local s4 = solver()
+		assert(s4.g_x[0] == 3)
+
+		-- but the old state should be preserved in the previous frame.
+		-- again, don't do this in real code.
+		m2.sim:load(fp)
+		g.y = 4
+		local s5 = solver()
+		assert(s5.g_x[0] == 2)
+
+		-- branching again should clear the old state
+		m2.sim:enter()
+		local s6 = solver()
+		assert(s6.g_x[0] == 4)
 	end
 end)
