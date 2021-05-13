@@ -1218,6 +1218,7 @@ candidate:
 		X->m_ei = m_cand->m_ei;
 		X->m_inst = m_inst;
 		X->m_sp = sp;
+		X->m_beta = m_beta;
 		M_betaS = costf_invS(m, m_beta);
 		M_costS = 0;
 
